@@ -437,6 +437,13 @@ name = "defect-acp"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "defect-agent",
+ "futures",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -458,6 +465,14 @@ dependencies = [
 [[package]]
 name = "defect-cli"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "defect-acp",
+ "defect-agent",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "defect-config"
