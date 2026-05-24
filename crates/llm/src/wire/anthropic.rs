@@ -15,9 +15,13 @@
 
 /// # Anthropic Messages API
 ///
-/// 本地裁剪版的 Anthropic Messages API OAS。仅保留 defect-llm 实际用到
-/// 的端点（v0：/v1/models；后续会加 /v1/messages）。每次 Anthropic
-/// 上游加字段时，手动同步对应 schema 段。
+/// 本地版的 Anthropic API OAS。**只裁端点不裁字段**：当前仅
+/// 挂 `/v1/models` 与 `/v1/messages` 两条 defect-llm 实际要走的
+/// 路；这两条端点的 schema 全字段保留（含 citations、cache_control、
+/// image base64+url、document 全 4 种 source、thinking 3 种、
+/// tool_choice 4 种、所有 server tool 与 result 变体、Usage 全
+/// breakdown、SSE 8 类事件）。Anthropic 上游加字段时手动
+/// diff 同步对应 schema。
 ///
 /// - **Version:** `2023-06-01`
 pub mod spec {}
@@ -27,7 +31,6 @@ pub mod components {
     #![allow(non_camel_case_types)]
     #![allow(non_snake_case)]
     #![allow(clippy::all, clippy::pedantic)]
-    /// 固定字面量 "model"。
     #[derive(
         Debug,
         Clone,
@@ -50,19 +53,15 @@ pub mod components {
     }
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
     pub struct ModelInfo {
-        /// 固定字面量 "model"。
         pub r#type: ModelInfoType,
         /// 模型 id，例如 "claude-3-5-sonnet-20241022"。
         pub id: String,
-        /// 人类可读名称。
         pub display_name: String,
-        /// ISO-8601 时间戳。
         pub created_at: String,
     }
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
     pub struct ListModelsResponse {
         pub data: Vec<ModelInfo>,
-        /// 后面还有页时为 true。
         pub has_more: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub first_id: Option<String>,
@@ -102,6 +101,8370 @@ pub mod components {
     pub struct ErrorResponse {
         pub r#type: ErrorResponseType,
         pub error: ErrorResponseError,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CacheControlEphemeralType {
+        #[serde(rename = "ephemeral")]
+        Ephemeral,
+    }
+    impl ::std::fmt::Display for CacheControlEphemeralType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Ephemeral => ::std::write!(__f, "ephemeral"),
+            }
+        }
+    }
+    /// 缓存断点 TTL，默认 5m。
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CacheControlEphemeralTtl {
+        #[serde(rename = "5m")]
+        _5m,
+        #[serde(rename = "1h")]
+        _1h,
+    }
+    impl ::std::fmt::Display for CacheControlEphemeralTtl {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::_5m => ::std::write!(__f, "5m"),
+                Self::_1h => ::std::write!(__f, "1h"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 在该 content block 上插入缓存断点。
+    pub struct CacheControlEphemeral {
+        pub r#type: CacheControlEphemeralType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// 缓存断点 TTL，默认 5m。
+        pub ttl: Option<CacheControlEphemeralTtl>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ModelVariant0 {
+        #[serde(rename = "claude-opus-4-7")]
+        ClaudeOpus4Minus7,
+        #[serde(rename = "claude-mythos-preview")]
+        ClaudeMythosPreview,
+        #[serde(rename = "claude-opus-4-6")]
+        ClaudeOpus4Minus6,
+        #[serde(rename = "claude-sonnet-4-6")]
+        ClaudeSonnet4Minus6,
+        #[serde(rename = "claude-haiku-4-5")]
+        ClaudeHaiku4Minus5,
+        #[serde(rename = "claude-haiku-4-5-20251001")]
+        ClaudeHaiku4Minus5Minus20251001,
+        #[serde(rename = "claude-opus-4-5")]
+        ClaudeOpus4Minus5,
+        #[serde(rename = "claude-opus-4-5-20251101")]
+        ClaudeOpus4Minus5Minus20251101,
+        #[serde(rename = "claude-sonnet-4-5")]
+        ClaudeSonnet4Minus5,
+        #[serde(rename = "claude-sonnet-4-5-20250929")]
+        ClaudeSonnet4Minus5Minus20250929,
+        #[serde(rename = "claude-opus-4-1")]
+        ClaudeOpus4Minus1,
+        #[serde(rename = "claude-opus-4-1-20250805")]
+        ClaudeOpus4Minus1Minus20250805,
+        #[serde(rename = "claude-opus-4-0")]
+        ClaudeOpus4Minus0,
+        #[serde(rename = "claude-opus-4-20250514")]
+        ClaudeOpus4Minus20250514,
+        #[serde(rename = "claude-sonnet-4-0")]
+        ClaudeSonnet4Minus0,
+        #[serde(rename = "claude-sonnet-4-20250514")]
+        ClaudeSonnet4Minus20250514,
+        #[serde(rename = "claude-3-haiku-20240307")]
+        Claude3Haiku20240307,
+    }
+    impl ::std::fmt::Display for ModelVariant0 {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ClaudeOpus4Minus7 => ::std::write!(__f, "claude-opus-4-7"),
+                Self::ClaudeMythosPreview => ::std::write!(__f, "claude-mythos-preview"),
+                Self::ClaudeOpus4Minus6 => ::std::write!(__f, "claude-opus-4-6"),
+                Self::ClaudeSonnet4Minus6 => ::std::write!(__f, "claude-sonnet-4-6"),
+                Self::ClaudeHaiku4Minus5 => ::std::write!(__f, "claude-haiku-4-5"),
+                Self::ClaudeHaiku4Minus5Minus20251001 => {
+                    ::std::write!(__f, "claude-haiku-4-5-20251001")
+                }
+                Self::ClaudeOpus4Minus5 => ::std::write!(__f, "claude-opus-4-5"),
+                Self::ClaudeOpus4Minus5Minus20251101 => {
+                    ::std::write!(__f, "claude-opus-4-5-20251101")
+                }
+                Self::ClaudeSonnet4Minus5 => ::std::write!(__f, "claude-sonnet-4-5"),
+                Self::ClaudeSonnet4Minus5Minus20250929 => {
+                    ::std::write!(__f, "claude-sonnet-4-5-20250929")
+                }
+                Self::ClaudeOpus4Minus1 => ::std::write!(__f, "claude-opus-4-1"),
+                Self::ClaudeOpus4Minus1Minus20250805 => {
+                    ::std::write!(__f, "claude-opus-4-1-20250805")
+                }
+                Self::ClaudeOpus4Minus0 => ::std::write!(__f, "claude-opus-4-0"),
+                Self::ClaudeOpus4Minus20250514 => {
+                    ::std::write!(__f, "claude-opus-4-20250514")
+                }
+                Self::ClaudeSonnet4Minus0 => ::std::write!(__f, "claude-sonnet-4-0"),
+                Self::ClaudeSonnet4Minus20250514 => {
+                    ::std::write!(__f, "claude-sonnet-4-20250514")
+                }
+                Self::Claude3Haiku20240307 => {
+                    ::std::write!(__f, "claude-3-haiku-20240307")
+                }
+            }
+        }
+    }
+    impl ::std::convert::From<ModelVariant0> for Model {
+        fn from(value: ModelVariant0) -> Self {
+            Model::ModelVariant0(value)
+        }
+    }
+    impl ::std::convert::TryFrom<Model> for ModelVariant0 {
+        type Error = Model;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: Model) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                Model::ModelVariant0(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<String> for Model {
+        fn from(value: String) -> Self {
+            Model::ModelVariant1(value)
+        }
+    }
+    impl ::std::convert::TryFrom<Model> for String {
+        type Error = Model;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: Model) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                Model::ModelVariant1(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    /// 要使用的模型 id。允许任意字符串以容纳新发布版本，但同时
+    /// 枚举出当前已知的模型名作为 IDE 提示。
+    pub enum Model {
+        ModelVariant0(ModelVariant0),
+        ModelVariant1(String),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationCharLocationParamType {
+        #[serde(rename = "char_location")]
+        CharLocation,
+    }
+    impl ::std::fmt::Display for CitationCharLocationParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CharLocation => ::std::write!(__f, "char_location"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationCharLocationParam {
+        pub cited_text: String,
+        pub document_index: i64,
+        pub document_title: String,
+        pub end_char_index: i64,
+        pub start_char_index: i64,
+        pub r#type: CitationCharLocationParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationPageLocationParamType {
+        #[serde(rename = "page_location")]
+        PageLocation,
+    }
+    impl ::std::fmt::Display for CitationPageLocationParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::PageLocation => ::std::write!(__f, "page_location"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationPageLocationParam {
+        pub cited_text: String,
+        pub document_index: i64,
+        pub document_title: String,
+        pub end_page_number: i64,
+        pub start_page_number: i64,
+        pub r#type: CitationPageLocationParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationContentBlockLocationParamType {
+        #[serde(rename = "content_block_location")]
+        ContentBlockLocation,
+    }
+    impl ::std::fmt::Display for CitationContentBlockLocationParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ContentBlockLocation => {
+                    ::std::write!(__f, "content_block_location")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationContentBlockLocationParam {
+        pub cited_text: String,
+        pub document_index: i64,
+        pub document_title: String,
+        pub end_block_index: i64,
+        pub start_block_index: i64,
+        pub r#type: CitationContentBlockLocationParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationWebSearchResultLocationParamType {
+        #[serde(rename = "web_search_result_location")]
+        WebSearchResultLocation,
+    }
+    impl ::std::fmt::Display for CitationWebSearchResultLocationParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchResultLocation => {
+                    ::std::write!(__f, "web_search_result_location")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationWebSearchResultLocationParam {
+        pub cited_text: String,
+        pub encrypted_index: String,
+        pub title: String,
+        pub r#type: CitationWebSearchResultLocationParamType,
+        pub url: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationSearchResultLocationParamType {
+        #[serde(rename = "search_result_location")]
+        SearchResultLocation,
+    }
+    impl ::std::fmt::Display for CitationSearchResultLocationParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::SearchResultLocation => {
+                    ::std::write!(__f, "search_result_location")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationSearchResultLocationParam {
+        pub cited_text: String,
+        pub end_block_index: i64,
+        pub search_result_index: i64,
+        pub source: String,
+        pub start_block_index: i64,
+        pub title: String,
+        pub r#type: CitationSearchResultLocationParamType,
+    }
+    impl ::std::convert::From<CitationCharLocationParam> for TextCitationParam {
+        fn from(value: CitationCharLocationParam) -> Self {
+            TextCitationParam::CitationCharLocationParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitationParam> for CitationCharLocationParam {
+        type Error = TextCitationParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextCitationParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitationParam::CitationCharLocationParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationPageLocationParam> for TextCitationParam {
+        fn from(value: CitationPageLocationParam) -> Self {
+            TextCitationParam::CitationPageLocationParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitationParam> for CitationPageLocationParam {
+        type Error = TextCitationParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextCitationParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitationParam::CitationPageLocationParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationContentBlockLocationParam> for TextCitationParam {
+        fn from(value: CitationContentBlockLocationParam) -> Self {
+            TextCitationParam::CitationContentBlockLocationParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitationParam>
+    for CitationContentBlockLocationParam {
+        type Error = TextCitationParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextCitationParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitationParam::CitationContentBlockLocationParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationWebSearchResultLocationParam>
+    for TextCitationParam {
+        fn from(value: CitationWebSearchResultLocationParam) -> Self {
+            TextCitationParam::CitationWebSearchResultLocationParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitationParam>
+    for CitationWebSearchResultLocationParam {
+        type Error = TextCitationParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextCitationParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitationParam::CitationWebSearchResultLocationParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationSearchResultLocationParam> for TextCitationParam {
+        fn from(value: CitationSearchResultLocationParam) -> Self {
+            TextCitationParam::CitationSearchResultLocationParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitationParam>
+    for CitationSearchResultLocationParam {
+        type Error = TextCitationParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextCitationParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitationParam::CitationSearchResultLocationParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum TextCitationParam {
+        CitationCharLocationParam(CitationCharLocationParam),
+        CitationPageLocationParam(CitationPageLocationParam),
+        CitationContentBlockLocationParam(CitationContentBlockLocationParam),
+        CitationWebSearchResultLocationParam(CitationWebSearchResultLocationParam),
+        CitationSearchResultLocationParam(CitationSearchResultLocationParam),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationCharLocationType {
+        #[serde(rename = "char_location")]
+        CharLocation,
+    }
+    impl ::std::fmt::Display for CitationCharLocationType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CharLocation => ::std::write!(__f, "char_location"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationCharLocation {
+        pub cited_text: String,
+        pub document_index: i64,
+        pub document_title: String,
+        pub end_char_index: i64,
+        pub start_char_index: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub file_id: Option<String>,
+        pub r#type: CitationCharLocationType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationPageLocationType {
+        #[serde(rename = "page_location")]
+        PageLocation,
+    }
+    impl ::std::fmt::Display for CitationPageLocationType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::PageLocation => ::std::write!(__f, "page_location"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationPageLocation {
+        pub cited_text: String,
+        pub document_index: i64,
+        pub document_title: String,
+        pub end_page_number: i64,
+        pub start_page_number: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub file_id: Option<String>,
+        pub r#type: CitationPageLocationType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationContentBlockLocationType {
+        #[serde(rename = "content_block_location")]
+        ContentBlockLocation,
+    }
+    impl ::std::fmt::Display for CitationContentBlockLocationType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ContentBlockLocation => {
+                    ::std::write!(__f, "content_block_location")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationContentBlockLocation {
+        pub cited_text: String,
+        pub document_index: i64,
+        pub document_title: String,
+        pub end_block_index: i64,
+        pub start_block_index: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub file_id: Option<String>,
+        pub r#type: CitationContentBlockLocationType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationsWebSearchResultLocationType {
+        #[serde(rename = "web_search_result_location")]
+        WebSearchResultLocation,
+    }
+    impl ::std::fmt::Display for CitationsWebSearchResultLocationType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchResultLocation => {
+                    ::std::write!(__f, "web_search_result_location")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationsWebSearchResultLocation {
+        pub cited_text: String,
+        pub encrypted_index: String,
+        pub title: String,
+        pub r#type: CitationsWebSearchResultLocationType,
+        pub url: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationsSearchResultLocationType {
+        #[serde(rename = "search_result_location")]
+        SearchResultLocation,
+    }
+    impl ::std::fmt::Display for CitationsSearchResultLocationType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::SearchResultLocation => {
+                    ::std::write!(__f, "search_result_location")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationsSearchResultLocation {
+        pub cited_text: String,
+        pub end_block_index: i64,
+        pub search_result_index: i64,
+        pub source: String,
+        pub start_block_index: i64,
+        pub title: String,
+        pub r#type: CitationsSearchResultLocationType,
+    }
+    impl ::std::convert::From<CitationCharLocation> for TextCitation {
+        fn from(value: CitationCharLocation) -> Self {
+            TextCitation::CitationCharLocation(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitation> for CitationCharLocation {
+        type Error = TextCitation;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: TextCitation) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitation::CitationCharLocation(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationPageLocation> for TextCitation {
+        fn from(value: CitationPageLocation) -> Self {
+            TextCitation::CitationPageLocation(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitation> for CitationPageLocation {
+        type Error = TextCitation;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: TextCitation) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitation::CitationPageLocation(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationContentBlockLocation> for TextCitation {
+        fn from(value: CitationContentBlockLocation) -> Self {
+            TextCitation::CitationContentBlockLocation(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitation> for CitationContentBlockLocation {
+        type Error = TextCitation;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: TextCitation) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitation::CitationContentBlockLocation(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationsWebSearchResultLocation> for TextCitation {
+        fn from(value: CitationsWebSearchResultLocation) -> Self {
+            TextCitation::CitationsWebSearchResultLocation(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitation> for CitationsWebSearchResultLocation {
+        type Error = TextCitation;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: TextCitation) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitation::CitationsWebSearchResultLocation(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationsSearchResultLocation> for TextCitation {
+        fn from(value: CitationsSearchResultLocation) -> Self {
+            TextCitation::CitationsSearchResultLocation(value)
+        }
+    }
+    impl ::std::convert::TryFrom<TextCitation> for CitationsSearchResultLocation {
+        type Error = TextCitation;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: TextCitation) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextCitation::CitationsSearchResultLocation(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum TextCitation {
+        CitationCharLocation(CitationCharLocation),
+        CitationPageLocation(CitationPageLocation),
+        CitationContentBlockLocation(CitationContentBlockLocation),
+        CitationsWebSearchResultLocation(CitationsWebSearchResultLocation),
+        CitationsSearchResultLocation(CitationsSearchResultLocation),
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationsConfigParam {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub enabled: Option<bool>,
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CitationsConfig {
+        pub enabled: bool,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum DirectCallerType {
+        #[serde(rename = "direct")]
+        Direct,
+    }
+    impl ::std::fmt::Display for DirectCallerType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Direct => ::std::write!(__f, "direct"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 模型直接调起的工具调用。
+    pub struct DirectCaller {
+        pub r#type: DirectCallerType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ServerToolCallerType {
+        #[serde(rename = "code_execution_20250825")]
+        CodeExecution20250825,
+    }
+    impl ::std::fmt::Display for ServerToolCallerType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution20250825 => {
+                    ::std::write!(__f, "code_execution_20250825")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 由 server-side tool 触发的子调用。
+    pub struct ServerToolCaller {
+        pub tool_id: String,
+        pub r#type: ServerToolCallerType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ServerToolCaller20260120Type {
+        #[serde(rename = "code_execution_20260120")]
+        CodeExecution20260120,
+    }
+    impl ::std::fmt::Display for ServerToolCaller20260120Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution20260120 => {
+                    ::std::write!(__f, "code_execution_20260120")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ServerToolCaller20260120 {
+        pub tool_id: String,
+        pub r#type: ServerToolCaller20260120Type,
+    }
+    impl ::std::convert::From<DirectCaller> for Caller {
+        fn from(value: DirectCaller) -> Self {
+            Caller::DirectCaller(value)
+        }
+    }
+    impl ::std::convert::TryFrom<Caller> for DirectCaller {
+        type Error = Caller;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: Caller) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                Caller::DirectCaller(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ServerToolCaller> for Caller {
+        fn from(value: ServerToolCaller) -> Self {
+            Caller::ServerToolCaller(value)
+        }
+    }
+    impl ::std::convert::TryFrom<Caller> for ServerToolCaller {
+        type Error = Caller;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: Caller) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                Caller::ServerToolCaller(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ServerToolCaller20260120> for Caller {
+        fn from(value: ServerToolCaller20260120) -> Self {
+            Caller::ServerToolCaller20260120(value)
+        }
+    }
+    impl ::std::convert::TryFrom<Caller> for ServerToolCaller20260120 {
+        type Error = Caller;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: Caller) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                Caller::ServerToolCaller20260120(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum Caller {
+        DirectCaller(DirectCaller),
+        ServerToolCaller(ServerToolCaller),
+        ServerToolCaller20260120(ServerToolCaller20260120),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum Base64ImageSourceMediaType {
+        #[serde(rename = "image/jpeg")]
+        ImageJpeg,
+        #[serde(rename = "image/png")]
+        ImagePng,
+        #[serde(rename = "image/gif")]
+        ImageGif,
+        #[serde(rename = "image/webp")]
+        ImageWebp,
+    }
+    impl ::std::fmt::Display for Base64ImageSourceMediaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ImageJpeg => ::std::write!(__f, "image/jpeg"),
+                Self::ImagePng => ::std::write!(__f, "image/png"),
+                Self::ImageGif => ::std::write!(__f, "image/gif"),
+                Self::ImageWebp => ::std::write!(__f, "image/webp"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum Base64ImageSourceType {
+        #[serde(rename = "base64")]
+        Base64,
+    }
+    impl ::std::fmt::Display for Base64ImageSourceType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Base64 => ::std::write!(__f, "base64"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct Base64ImageSource {
+        pub data: String,
+        pub media_type: Base64ImageSourceMediaType,
+        pub r#type: Base64ImageSourceType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum UrlImageSourceType {
+        #[serde(rename = "url")]
+        Url,
+    }
+    impl ::std::fmt::Display for UrlImageSourceType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Url => ::std::write!(__f, "url"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct UrlImageSource {
+        pub r#type: UrlImageSourceType,
+        pub url: String,
+    }
+    impl ::std::convert::From<Base64ImageSource> for ImageSource {
+        fn from(value: Base64ImageSource) -> Self {
+            ImageSource::Base64ImageSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ImageSource> for Base64ImageSource {
+        type Error = ImageSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ImageSource) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ImageSource::Base64ImageSource(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<UrlImageSource> for ImageSource {
+        fn from(value: UrlImageSource) -> Self {
+            ImageSource::UrlImageSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ImageSource> for UrlImageSource {
+        type Error = ImageSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ImageSource) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ImageSource::UrlImageSource(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ImageSource {
+        Base64ImageSource(Base64ImageSource),
+        #[serde(rename = "URLImageSource")]
+        UrlImageSource(UrlImageSource),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum Base64PdfSourceMediaType {
+        #[serde(rename = "application/pdf")]
+        ApplicationPdf,
+    }
+    impl ::std::fmt::Display for Base64PdfSourceMediaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ApplicationPdf => ::std::write!(__f, "application/pdf"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum Base64PdfSourceType {
+        #[serde(rename = "base64")]
+        Base64,
+    }
+    impl ::std::fmt::Display for Base64PdfSourceType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Base64 => ::std::write!(__f, "base64"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct Base64PdfSource {
+        pub data: String,
+        pub media_type: Base64PdfSourceMediaType,
+        pub r#type: Base64PdfSourceType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum PlainTextSourceMediaType {
+        #[serde(rename = "text/plain")]
+        TextPlain,
+    }
+    impl ::std::fmt::Display for PlainTextSourceMediaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextPlain => ::std::write!(__f, "text/plain"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum PlainTextSourceType {
+        #[serde(rename = "text")]
+        Text,
+    }
+    impl ::std::fmt::Display for PlainTextSourceType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Text => ::std::write!(__f, "text"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct PlainTextSource {
+        pub data: String,
+        pub media_type: PlainTextSourceMediaType,
+        pub r#type: PlainTextSourceType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextBlockParamType {
+        #[serde(rename = "text")]
+        Text,
+    }
+    impl ::std::fmt::Display for TextBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Text => ::std::write!(__f, "text"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextBlockParam {
+        pub text: String,
+        pub r#type: TextBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub citations: Option<Vec<TextCitationParam>>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ImageBlockParamType {
+        #[serde(rename = "image")]
+        Image,
+    }
+    impl ::std::fmt::Display for ImageBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Image => ::std::write!(__f, "image"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ImageBlockParam {
+        pub source: ImageSource,
+        pub r#type: ImageBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+    }
+    impl ::std::convert::From<TextBlockParam> for ContentBlockSourceContent {
+        fn from(value: TextBlockParam) -> Self {
+            ContentBlockSourceContent::TextBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockSourceContent> for TextBlockParam {
+        type Error = ContentBlockSourceContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockSourceContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockSourceContent::TextBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ImageBlockParam> for ContentBlockSourceContent {
+        fn from(value: ImageBlockParam) -> Self {
+            ContentBlockSourceContent::ImageBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockSourceContent> for ImageBlockParam {
+        type Error = ContentBlockSourceContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockSourceContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockSourceContent::ImageBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ContentBlockSourceContent {
+        TextBlockParam(TextBlockParam),
+        ImageBlockParam(ImageBlockParam),
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ContentBlockSourceContent66 {
+        ContentBlockSourceContent66Variant0(String),
+        ContentBlockSourceContent66Variant1(Vec<ContentBlockSourceContent>),
+    }
+    impl ::std::convert::From<String> for ContentBlockSourceContent66 {
+        fn from(value: String) -> Self {
+            ContentBlockSourceContent66::ContentBlockSourceContent66Variant0(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockSourceContent66> for String {
+        type Error = ContentBlockSourceContent66;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockSourceContent66,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockSourceContent66::ContentBlockSourceContent66Variant0(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<Vec<ContentBlockSourceContent>>
+    for ContentBlockSourceContent66 {
+        fn from(value: Vec<ContentBlockSourceContent>) -> Self {
+            ContentBlockSourceContent66::ContentBlockSourceContent66Variant1(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockSourceContent66>
+    for Vec<ContentBlockSourceContent> {
+        type Error = ContentBlockSourceContent66;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockSourceContent66,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockSourceContent66::ContentBlockSourceContent66Variant1(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ContentBlockSourceType {
+        #[serde(rename = "content")]
+        Content,
+    }
+    impl ::std::fmt::Display for ContentBlockSourceType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Content => ::std::write!(__f, "content"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ContentBlockSource {
+        pub content: ContentBlockSourceContent66,
+        pub r#type: ContentBlockSourceType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum UrlpdfSourceType {
+        #[serde(rename = "url")]
+        Url,
+    }
+    impl ::std::fmt::Display for UrlpdfSourceType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Url => ::std::write!(__f, "url"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct UrlpdfSource {
+        pub r#type: UrlpdfSourceType,
+        pub url: String,
+    }
+    impl ::std::convert::From<Base64PdfSource> for DocumentSource {
+        fn from(value: Base64PdfSource) -> Self {
+            DocumentSource::Base64PdfSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<DocumentSource> for Base64PdfSource {
+        type Error = DocumentSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: DocumentSource) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                DocumentSource::Base64PdfSource(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<PlainTextSource> for DocumentSource {
+        fn from(value: PlainTextSource) -> Self {
+            DocumentSource::PlainTextSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<DocumentSource> for PlainTextSource {
+        type Error = DocumentSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: DocumentSource) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                DocumentSource::PlainTextSource(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ContentBlockSource> for DocumentSource {
+        fn from(value: ContentBlockSource) -> Self {
+            DocumentSource::ContentBlockSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<DocumentSource> for ContentBlockSource {
+        type Error = DocumentSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: DocumentSource) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                DocumentSource::ContentBlockSource(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<UrlpdfSource> for DocumentSource {
+        fn from(value: UrlpdfSource) -> Self {
+            DocumentSource::UrlpdfSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<DocumentSource> for UrlpdfSource {
+        type Error = DocumentSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: DocumentSource) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                DocumentSource::UrlpdfSource(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum DocumentSource {
+        #[serde(rename = "Base64PDFSource")]
+        Base64PdfSource(Base64PdfSource),
+        PlainTextSource(PlainTextSource),
+        ContentBlockSource(ContentBlockSource),
+        #[serde(rename = "URLPDFSource")]
+        UrlpdfSource(UrlpdfSource),
+    }
+    impl ::std::convert::From<Base64PdfSource> for WebFetchDocumentSource {
+        fn from(value: Base64PdfSource) -> Self {
+            WebFetchDocumentSource::Base64PdfSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebFetchDocumentSource> for Base64PdfSource {
+        type Error = WebFetchDocumentSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebFetchDocumentSource,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebFetchDocumentSource::Base64PdfSource(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<PlainTextSource> for WebFetchDocumentSource {
+        fn from(value: PlainTextSource) -> Self {
+            WebFetchDocumentSource::PlainTextSource(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebFetchDocumentSource> for PlainTextSource {
+        type Error = WebFetchDocumentSource;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebFetchDocumentSource,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebFetchDocumentSource::PlainTextSource(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum WebFetchDocumentSource {
+        #[serde(rename = "Base64PDFSource")]
+        Base64PdfSource(Base64PdfSource),
+        PlainTextSource(PlainTextSource),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum DocumentBlockParamType {
+        #[serde(rename = "document")]
+        Document,
+    }
+    impl ::std::fmt::Display for DocumentBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Document => ::std::write!(__f, "document"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct DocumentBlockParam {
+        pub source: DocumentSource,
+        pub r#type: DocumentBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub citations: Option<CitationsConfigParam>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub context: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub title: Option<String>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum SearchResultBlockParamType {
+        #[serde(rename = "search_result")]
+        SearchResult,
+    }
+    impl ::std::fmt::Display for SearchResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::SearchResult => ::std::write!(__f, "search_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct SearchResultBlockParam {
+        pub content: Vec<TextBlockParam>,
+        pub source: String,
+        pub title: String,
+        pub r#type: SearchResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub citations: Option<CitationsConfigParam>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingBlockParamType {
+        #[serde(rename = "thinking")]
+        Thinking,
+    }
+    impl ::std::fmt::Display for ThinkingBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Thinking => ::std::write!(__f, "thinking"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ThinkingBlockParam {
+        pub signature: String,
+        pub thinking: String,
+        pub r#type: ThinkingBlockParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum RedactedThinkingBlockParamType {
+        #[serde(rename = "redacted_thinking")]
+        RedactedThinking,
+    }
+    impl ::std::fmt::Display for RedactedThinkingBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::RedactedThinking => ::std::write!(__f, "redacted_thinking"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct RedactedThinkingBlockParam {
+        pub data: String,
+        pub r#type: RedactedThinkingBlockParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolUseBlockParamType {
+        #[serde(rename = "tool_use")]
+        ToolUse,
+    }
+    impl ::std::fmt::Display for ToolUseBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolUse => ::std::write!(__f, "tool_use"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolUseBlockParam {
+        pub id: String,
+        pub input: ::std::collections::HashMap<String, ::serde_json::Value>,
+        pub name: String,
+        pub r#type: ToolUseBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolReferenceBlockParamType {
+        #[serde(rename = "tool_reference")]
+        ToolReference,
+    }
+    impl ::std::fmt::Display for ToolReferenceBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolReference => ::std::write!(__f, "tool_reference"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 可在 tool_result 内容里出现的 tool 引用 block。
+    pub struct ToolReferenceBlockParam {
+        pub tool_name: String,
+        pub r#type: ToolReferenceBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+    }
+    impl ::std::convert::From<TextBlockParam> for ToolResultBlockParamContent {
+        fn from(value: TextBlockParam) -> Self {
+            ToolResultBlockParamContent::TextBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent> for TextBlockParam {
+        type Error = ToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolResultBlockParamContent::TextBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ImageBlockParam> for ToolResultBlockParamContent {
+        fn from(value: ImageBlockParam) -> Self {
+            ToolResultBlockParamContent::ImageBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent> for ImageBlockParam {
+        type Error = ToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolResultBlockParamContent::ImageBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<SearchResultBlockParam> for ToolResultBlockParamContent {
+        fn from(value: SearchResultBlockParam) -> Self {
+            ToolResultBlockParamContent::SearchResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent>
+    for SearchResultBlockParam {
+        type Error = ToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolResultBlockParamContent::SearchResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<DocumentBlockParam> for ToolResultBlockParamContent {
+        fn from(value: DocumentBlockParam) -> Self {
+            ToolResultBlockParamContent::DocumentBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent> for DocumentBlockParam {
+        type Error = ToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolResultBlockParamContent::DocumentBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolReferenceBlockParam> for ToolResultBlockParamContent {
+        fn from(value: ToolReferenceBlockParam) -> Self {
+            ToolResultBlockParamContent::ToolReferenceBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent>
+    for ToolReferenceBlockParam {
+        type Error = ToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolResultBlockParamContent::ToolReferenceBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ToolResultBlockParamContent {
+        TextBlockParam(TextBlockParam),
+        ImageBlockParam(ImageBlockParam),
+        SearchResultBlockParam(SearchResultBlockParam),
+        DocumentBlockParam(DocumentBlockParam),
+        ToolReferenceBlockParam(ToolReferenceBlockParam),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolResultBlockParamType {
+        #[serde(rename = "tool_result")]
+        ToolResult,
+    }
+    impl ::std::fmt::Display for ToolResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolResult => ::std::write!(__f, "tool_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ToolResultBlockParamContent102 {
+        ToolResultBlockParamContent102Variant0(String),
+        ToolResultBlockParamContent102Variant1(Vec<ToolResultBlockParamContent>),
+    }
+    impl ::std::convert::From<String> for ToolResultBlockParamContent102 {
+        fn from(value: String) -> Self {
+            ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant0(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent102> for String {
+        type Error = ToolResultBlockParamContent102;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolResultBlockParamContent102,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant0(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<Vec<ToolResultBlockParamContent>>
+    for ToolResultBlockParamContent102 {
+        fn from(value: Vec<ToolResultBlockParamContent>) -> Self {
+            ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant1(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent102>
+    for Vec<ToolResultBlockParamContent> {
+        type Error = ToolResultBlockParamContent102;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolResultBlockParamContent102,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant1(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolResultBlockParam {
+        pub tool_use_id: String,
+        pub r#type: ToolResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub content: Option<ToolResultBlockParamContent102>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub is_error: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ServerToolUseBlockParamName {
+        #[serde(rename = "web_search")]
+        WebSearch,
+        #[serde(rename = "web_fetch")]
+        WebFetch,
+        #[serde(rename = "code_execution")]
+        CodeExecution,
+        #[serde(rename = "bash_code_execution")]
+        BashCodeExecution,
+        #[serde(rename = "text_editor_code_execution")]
+        TextEditorCodeExecution,
+        #[serde(rename = "tool_search_tool_regex")]
+        ToolSearchToolRegex,
+        #[serde(rename = "tool_search_tool_bm25")]
+        ToolSearchToolBm25,
+    }
+    impl ::std::fmt::Display for ServerToolUseBlockParamName {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearch => ::std::write!(__f, "web_search"),
+                Self::WebFetch => ::std::write!(__f, "web_fetch"),
+                Self::CodeExecution => ::std::write!(__f, "code_execution"),
+                Self::BashCodeExecution => ::std::write!(__f, "bash_code_execution"),
+                Self::TextEditorCodeExecution => {
+                    ::std::write!(__f, "text_editor_code_execution")
+                }
+                Self::ToolSearchToolRegex => ::std::write!(__f, "tool_search_tool_regex"),
+                Self::ToolSearchToolBm25 => ::std::write!(__f, "tool_search_tool_bm25"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ServerToolUseBlockParamType {
+        #[serde(rename = "server_tool_use")]
+        ServerToolUse,
+    }
+    impl ::std::fmt::Display for ServerToolUseBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ServerToolUse => ::std::write!(__f, "server_tool_use"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ServerToolUseBlockParam {
+        pub id: String,
+        pub input: ::std::collections::HashMap<String, ::serde_json::Value>,
+        pub name: ServerToolUseBlockParamName,
+        pub r#type: ServerToolUseBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchResultBlockParamType {
+        #[serde(rename = "web_search_result")]
+        WebSearchResult,
+    }
+    impl ::std::fmt::Display for WebSearchResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchResult => ::std::write!(__f, "web_search_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchResultBlockParam {
+        pub encrypted_content: String,
+        pub title: String,
+        pub r#type: WebSearchResultBlockParamType,
+        pub url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub page_age: Option<String>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchToolRequestErrorErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "max_uses_exceeded")]
+        MaxUsesExceeded,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "query_too_long")]
+        QueryTooLong,
+        #[serde(rename = "request_too_large")]
+        RequestTooLarge,
+    }
+    impl ::std::fmt::Display for WebSearchToolRequestErrorErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::MaxUsesExceeded => ::std::write!(__f, "max_uses_exceeded"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::QueryTooLong => ::std::write!(__f, "query_too_long"),
+                Self::RequestTooLarge => ::std::write!(__f, "request_too_large"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchToolRequestErrorType {
+        #[serde(rename = "web_search_tool_result_error")]
+        WebSearchToolResultError,
+    }
+    impl ::std::fmt::Display for WebSearchToolRequestErrorType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchToolResultError => {
+                    ::std::write!(__f, "web_search_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchToolRequestError {
+        pub error_code: WebSearchToolRequestErrorErrorCode,
+        pub r#type: WebSearchToolRequestErrorType,
+    }
+    impl ::std::convert::From<Vec<WebSearchResultBlockParam>>
+    for WebSearchToolResultBlockParamContent {
+        fn from(value: Vec<WebSearchResultBlockParam>) -> Self {
+            WebSearchToolResultBlockParamContent::WebSearchToolResultBlockParamContentVariant0(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<WebSearchToolResultBlockParamContent>
+    for Vec<WebSearchResultBlockParam> {
+        type Error = WebSearchToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebSearchToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebSearchToolResultBlockParamContent::WebSearchToolResultBlockParamContentVariant0(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebSearchToolRequestError>
+    for WebSearchToolResultBlockParamContent {
+        fn from(value: WebSearchToolRequestError) -> Self {
+            WebSearchToolResultBlockParamContent::WebSearchToolRequestError(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebSearchToolResultBlockParamContent>
+    for WebSearchToolRequestError {
+        type Error = WebSearchToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebSearchToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebSearchToolResultBlockParamContent::WebSearchToolRequestError(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum WebSearchToolResultBlockParamContent {
+        WebSearchToolResultBlockParamContentVariant0(Vec<WebSearchResultBlockParam>),
+        WebSearchToolRequestError(WebSearchToolRequestError),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchToolResultBlockParamType {
+        #[serde(rename = "web_search_tool_result")]
+        WebSearchToolResult,
+    }
+    impl ::std::fmt::Display for WebSearchToolResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchToolResult => ::std::write!(__f, "web_search_tool_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchToolResultBlockParam {
+        pub content: WebSearchToolResultBlockParamContent,
+        pub tool_use_id: String,
+        pub r#type: WebSearchToolResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchToolResultErrorBlockParamErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "url_too_long")]
+        UrlTooLong,
+        #[serde(rename = "url_not_allowed")]
+        UrlNotAllowed,
+        #[serde(rename = "url_not_accessible")]
+        UrlNotAccessible,
+        #[serde(rename = "unsupported_content_type")]
+        UnsupportedContentType,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "max_uses_exceeded")]
+        MaxUsesExceeded,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+    }
+    impl ::std::fmt::Display for WebFetchToolResultErrorBlockParamErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::UrlTooLong => ::std::write!(__f, "url_too_long"),
+                Self::UrlNotAllowed => ::std::write!(__f, "url_not_allowed"),
+                Self::UrlNotAccessible => ::std::write!(__f, "url_not_accessible"),
+                Self::UnsupportedContentType => {
+                    ::std::write!(__f, "unsupported_content_type")
+                }
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::MaxUsesExceeded => ::std::write!(__f, "max_uses_exceeded"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchToolResultErrorBlockParamType {
+        #[serde(rename = "web_fetch_tool_result_error")]
+        WebFetchToolResultError,
+    }
+    impl ::std::fmt::Display for WebFetchToolResultErrorBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetchToolResultError => {
+                    ::std::write!(__f, "web_fetch_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchToolResultErrorBlockParam {
+        pub error_code: WebFetchToolResultErrorBlockParamErrorCode,
+        pub r#type: WebFetchToolResultErrorBlockParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchBlockParamType {
+        #[serde(rename = "web_fetch_result")]
+        WebFetchResult,
+    }
+    impl ::std::fmt::Display for WebFetchBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetchResult => ::std::write!(__f, "web_fetch_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchBlockParam {
+        pub content: DocumentBlockParam,
+        pub r#type: WebFetchBlockParamType,
+        /// Fetched content URL
+        pub url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// ISO 8601 时间戳
+        pub retrieved_at: Option<String>,
+    }
+    impl ::std::convert::From<WebFetchToolResultErrorBlockParam>
+    for WebFetchToolResultBlockParamContent {
+        fn from(value: WebFetchToolResultErrorBlockParam) -> Self {
+            WebFetchToolResultBlockParamContent::WebFetchToolResultErrorBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebFetchToolResultBlockParamContent>
+    for WebFetchToolResultErrorBlockParam {
+        type Error = WebFetchToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebFetchToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebFetchToolResultBlockParamContent::WebFetchToolResultErrorBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebFetchBlockParam>
+    for WebFetchToolResultBlockParamContent {
+        fn from(value: WebFetchBlockParam) -> Self {
+            WebFetchToolResultBlockParamContent::WebFetchBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebFetchToolResultBlockParamContent>
+    for WebFetchBlockParam {
+        type Error = WebFetchToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebFetchToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebFetchToolResultBlockParamContent::WebFetchBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum WebFetchToolResultBlockParamContent {
+        WebFetchToolResultErrorBlockParam(WebFetchToolResultErrorBlockParam),
+        WebFetchBlockParam(WebFetchBlockParam),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchToolResultBlockParamType {
+        #[serde(rename = "web_fetch_tool_result")]
+        WebFetchToolResult,
+    }
+    impl ::std::fmt::Display for WebFetchToolResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetchToolResult => ::std::write!(__f, "web_fetch_tool_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchToolResultBlockParam {
+        pub content: WebFetchToolResultBlockParamContent,
+        pub tool_use_id: String,
+        pub r#type: WebFetchToolResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionOutputBlockParamType {
+        #[serde(rename = "code_execution_output")]
+        CodeExecutionOutput,
+    }
+    impl ::std::fmt::Display for CodeExecutionOutputBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionOutput => ::std::write!(__f, "code_execution_output"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionOutputBlockParam {
+        pub file_id: String,
+        pub r#type: CodeExecutionOutputBlockParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionToolResultErrorParamErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+    }
+    impl ::std::fmt::Display for CodeExecutionToolResultErrorParamErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionToolResultErrorParamType {
+        #[serde(rename = "code_execution_tool_result_error")]
+        CodeExecutionToolResultError,
+    }
+    impl ::std::fmt::Display for CodeExecutionToolResultErrorParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionToolResultError => {
+                    ::std::write!(__f, "code_execution_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionToolResultErrorParam {
+        pub error_code: CodeExecutionToolResultErrorParamErrorCode,
+        pub r#type: CodeExecutionToolResultErrorParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionResultBlockParamType {
+        #[serde(rename = "code_execution_result")]
+        CodeExecutionResult,
+    }
+    impl ::std::fmt::Display for CodeExecutionResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionResult => ::std::write!(__f, "code_execution_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionResultBlockParam {
+        pub content: Vec<CodeExecutionOutputBlockParam>,
+        pub return_code: i64,
+        pub stderr: String,
+        pub stdout: String,
+        pub r#type: CodeExecutionResultBlockParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum EncryptedCodeExecutionResultBlockParamType {
+        #[serde(rename = "encrypted_code_execution_result")]
+        EncryptedCodeExecutionResult,
+    }
+    impl ::std::fmt::Display for EncryptedCodeExecutionResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::EncryptedCodeExecutionResult => {
+                    ::std::write!(__f, "encrypted_code_execution_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// PFC + web_search 加密 stdout 的代码执行结果。
+    pub struct EncryptedCodeExecutionResultBlockParam {
+        pub content: Vec<CodeExecutionOutputBlockParam>,
+        pub encrypted_stdout: String,
+        pub return_code: i64,
+        pub stderr: String,
+        pub r#type: EncryptedCodeExecutionResultBlockParamType,
+    }
+    impl ::std::convert::From<CodeExecutionToolResultErrorParam>
+    for CodeExecutionToolResultBlockParamContent {
+        fn from(value: CodeExecutionToolResultErrorParam) -> Self {
+            CodeExecutionToolResultBlockParamContent::CodeExecutionToolResultErrorParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockParamContent>
+    for CodeExecutionToolResultErrorParam {
+        type Error = CodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: CodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                CodeExecutionToolResultBlockParamContent::CodeExecutionToolResultErrorParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CodeExecutionResultBlockParam>
+    for CodeExecutionToolResultBlockParamContent {
+        fn from(value: CodeExecutionResultBlockParam) -> Self {
+            CodeExecutionToolResultBlockParamContent::CodeExecutionResultBlockParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockParamContent>
+    for CodeExecutionResultBlockParam {
+        type Error = CodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: CodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                CodeExecutionToolResultBlockParamContent::CodeExecutionResultBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<EncryptedCodeExecutionResultBlockParam>
+    for CodeExecutionToolResultBlockParamContent {
+        fn from(value: EncryptedCodeExecutionResultBlockParam) -> Self {
+            CodeExecutionToolResultBlockParamContent::EncryptedCodeExecutionResultBlockParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockParamContent>
+    for EncryptedCodeExecutionResultBlockParam {
+        type Error = CodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: CodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                CodeExecutionToolResultBlockParamContent::EncryptedCodeExecutionResultBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum CodeExecutionToolResultBlockParamContent {
+        CodeExecutionToolResultErrorParam(CodeExecutionToolResultErrorParam),
+        CodeExecutionResultBlockParam(CodeExecutionResultBlockParam),
+        EncryptedCodeExecutionResultBlockParam(EncryptedCodeExecutionResultBlockParam),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionToolResultBlockParamType {
+        #[serde(rename = "code_execution_tool_result")]
+        CodeExecutionToolResult,
+    }
+    impl ::std::fmt::Display for CodeExecutionToolResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionToolResult => {
+                    ::std::write!(__f, "code_execution_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionToolResultBlockParam {
+        pub content: CodeExecutionToolResultBlockParamContent,
+        pub tool_use_id: String,
+        pub r#type: CodeExecutionToolResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionOutputBlockParamType {
+        #[serde(rename = "bash_code_execution_output")]
+        BashCodeExecutionOutput,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionOutputBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionOutput => {
+                    ::std::write!(__f, "bash_code_execution_output")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionOutputBlockParam {
+        pub file_id: String,
+        pub r#type: BashCodeExecutionOutputBlockParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionToolResultErrorParamErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+        #[serde(rename = "output_file_too_large")]
+        OutputFileTooLarge,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionToolResultErrorParamErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+                Self::OutputFileTooLarge => ::std::write!(__f, "output_file_too_large"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionToolResultErrorParamType {
+        #[serde(rename = "bash_code_execution_tool_result_error")]
+        BashCodeExecutionToolResultError,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionToolResultErrorParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionToolResultError => {
+                    ::std::write!(__f, "bash_code_execution_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionToolResultErrorParam {
+        pub error_code: BashCodeExecutionToolResultErrorParamErrorCode,
+        pub r#type: BashCodeExecutionToolResultErrorParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionResultBlockParamType {
+        #[serde(rename = "bash_code_execution_result")]
+        BashCodeExecutionResult,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionResult => {
+                    ::std::write!(__f, "bash_code_execution_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionResultBlockParam {
+        pub content: Vec<BashCodeExecutionOutputBlockParam>,
+        pub return_code: i64,
+        pub stderr: String,
+        pub stdout: String,
+        pub r#type: BashCodeExecutionResultBlockParamType,
+    }
+    impl ::std::convert::From<BashCodeExecutionToolResultErrorParam>
+    for BashCodeExecutionToolResultBlockParamContent {
+        fn from(value: BashCodeExecutionToolResultErrorParam) -> Self {
+            BashCodeExecutionToolResultBlockParamContent::BashCodeExecutionToolResultErrorParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockParamContent>
+    for BashCodeExecutionToolResultErrorParam {
+        type Error = BashCodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: BashCodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                BashCodeExecutionToolResultBlockParamContent::BashCodeExecutionToolResultErrorParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<BashCodeExecutionResultBlockParam>
+    for BashCodeExecutionToolResultBlockParamContent {
+        fn from(value: BashCodeExecutionResultBlockParam) -> Self {
+            BashCodeExecutionToolResultBlockParamContent::BashCodeExecutionResultBlockParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockParamContent>
+    for BashCodeExecutionResultBlockParam {
+        type Error = BashCodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: BashCodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                BashCodeExecutionToolResultBlockParamContent::BashCodeExecutionResultBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum BashCodeExecutionToolResultBlockParamContent {
+        BashCodeExecutionToolResultErrorParam(BashCodeExecutionToolResultErrorParam),
+        BashCodeExecutionResultBlockParam(BashCodeExecutionResultBlockParam),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionToolResultBlockParamType {
+        #[serde(rename = "bash_code_execution_tool_result")]
+        BashCodeExecutionToolResult,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionToolResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionToolResult => {
+                    ::std::write!(__f, "bash_code_execution_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionToolResultBlockParam {
+        pub content: BashCodeExecutionToolResultBlockParamContent,
+        pub tool_use_id: String,
+        pub r#type: BashCodeExecutionToolResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionToolResultErrorParamErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+        #[serde(rename = "file_not_found")]
+        FileNotFound,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionToolResultErrorParamErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+                Self::FileNotFound => ::std::write!(__f, "file_not_found"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionToolResultErrorParamType {
+        #[serde(rename = "text_editor_code_execution_tool_result_error")]
+        TextEditorCodeExecutionToolResultError,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionToolResultErrorParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionToolResultError => {
+                    ::std::write!(__f, "text_editor_code_execution_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionToolResultErrorParam {
+        pub error_code: TextEditorCodeExecutionToolResultErrorParamErrorCode,
+        pub r#type: TextEditorCodeExecutionToolResultErrorParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub error_message: Option<String>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionViewResultBlockParamFileType {
+        #[serde(rename = "text")]
+        Text,
+        #[serde(rename = "image")]
+        Image,
+        #[serde(rename = "pdf")]
+        Pdf,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionViewResultBlockParamFileType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Text => ::std::write!(__f, "text"),
+                Self::Image => ::std::write!(__f, "image"),
+                Self::Pdf => ::std::write!(__f, "pdf"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionViewResultBlockParamType {
+        #[serde(rename = "text_editor_code_execution_view_result")]
+        TextEditorCodeExecutionViewResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionViewResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionViewResult => {
+                    ::std::write!(__f, "text_editor_code_execution_view_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionViewResultBlockParam {
+        pub content: String,
+        pub file_type: TextEditorCodeExecutionViewResultBlockParamFileType,
+        pub r#type: TextEditorCodeExecutionViewResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub num_lines: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub start_line: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub total_lines: Option<i64>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionCreateResultBlockParamType {
+        #[serde(rename = "text_editor_code_execution_create_result")]
+        TextEditorCodeExecutionCreateResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionCreateResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionCreateResult => {
+                    ::std::write!(__f, "text_editor_code_execution_create_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionCreateResultBlockParam {
+        pub is_file_update: bool,
+        pub r#type: TextEditorCodeExecutionCreateResultBlockParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionStrReplaceResultBlockParamType {
+        #[serde(rename = "text_editor_code_execution_str_replace_result")]
+        TextEditorCodeExecutionStrReplaceResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionStrReplaceResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionStrReplaceResult => {
+                    ::std::write!(__f, "text_editor_code_execution_str_replace_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionStrReplaceResultBlockParam {
+        pub r#type: TextEditorCodeExecutionStrReplaceResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub lines: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub new_lines: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub new_start: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub old_lines: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub old_start: Option<i64>,
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionToolResultErrorParam>
+    for TextEditorCodeExecutionToolResultBlockParamContent {
+        fn from(value: TextEditorCodeExecutionToolResultErrorParam) -> Self {
+            TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionToolResultErrorParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
+    for TextEditorCodeExecutionToolResultErrorParam {
+        type Error = TextEditorCodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionToolResultErrorParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionViewResultBlockParam>
+    for TextEditorCodeExecutionToolResultBlockParamContent {
+        fn from(value: TextEditorCodeExecutionViewResultBlockParam) -> Self {
+            TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionViewResultBlockParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
+    for TextEditorCodeExecutionViewResultBlockParam {
+        type Error = TextEditorCodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionViewResultBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionCreateResultBlockParam>
+    for TextEditorCodeExecutionToolResultBlockParamContent {
+        fn from(value: TextEditorCodeExecutionCreateResultBlockParam) -> Self {
+            TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionCreateResultBlockParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
+    for TextEditorCodeExecutionCreateResultBlockParam {
+        type Error = TextEditorCodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionCreateResultBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionStrReplaceResultBlockParam>
+    for TextEditorCodeExecutionToolResultBlockParamContent {
+        fn from(value: TextEditorCodeExecutionStrReplaceResultBlockParam) -> Self {
+            TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionStrReplaceResultBlockParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
+    for TextEditorCodeExecutionStrReplaceResultBlockParam {
+        type Error = TextEditorCodeExecutionToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionStrReplaceResultBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum TextEditorCodeExecutionToolResultBlockParamContent {
+        TextEditorCodeExecutionToolResultErrorParam(
+            TextEditorCodeExecutionToolResultErrorParam,
+        ),
+        TextEditorCodeExecutionViewResultBlockParam(
+            TextEditorCodeExecutionViewResultBlockParam,
+        ),
+        TextEditorCodeExecutionCreateResultBlockParam(
+            TextEditorCodeExecutionCreateResultBlockParam,
+        ),
+        TextEditorCodeExecutionStrReplaceResultBlockParam(
+            TextEditorCodeExecutionStrReplaceResultBlockParam,
+        ),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionToolResultBlockParamType {
+        #[serde(rename = "text_editor_code_execution_tool_result")]
+        TextEditorCodeExecutionToolResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionToolResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionToolResult => {
+                    ::std::write!(__f, "text_editor_code_execution_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionToolResultBlockParam {
+        pub content: TextEditorCodeExecutionToolResultBlockParamContent,
+        pub tool_use_id: String,
+        pub r#type: TextEditorCodeExecutionToolResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolResultErrorParamErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+    }
+    impl ::std::fmt::Display for ToolSearchToolResultErrorParamErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolResultErrorParamType {
+        #[serde(rename = "tool_search_tool_result_error")]
+        ToolSearchToolResultError,
+    }
+    impl ::std::fmt::Display for ToolSearchToolResultErrorParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolResultError => {
+                    ::std::write!(__f, "tool_search_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolResultErrorParam {
+        pub error_code: ToolSearchToolResultErrorParamErrorCode,
+        pub r#type: ToolSearchToolResultErrorParamType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolSearchResultBlockParamType {
+        #[serde(rename = "tool_search_tool_search_result")]
+        ToolSearchToolSearchResult,
+    }
+    impl ::std::fmt::Display for ToolSearchToolSearchResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolSearchResult => {
+                    ::std::write!(__f, "tool_search_tool_search_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolSearchResultBlockParam {
+        pub tool_references: Vec<ToolReferenceBlockParam>,
+        pub r#type: ToolSearchToolSearchResultBlockParamType,
+    }
+    impl ::std::convert::From<ToolSearchToolResultErrorParam>
+    for ToolSearchToolResultBlockParamContent {
+        fn from(value: ToolSearchToolResultErrorParam) -> Self {
+            ToolSearchToolResultBlockParamContent::ToolSearchToolResultErrorParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolSearchToolResultBlockParamContent>
+    for ToolSearchToolResultErrorParam {
+        type Error = ToolSearchToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolSearchToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolSearchToolResultBlockParamContent::ToolSearchToolResultErrorParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolSearchToolSearchResultBlockParam>
+    for ToolSearchToolResultBlockParamContent {
+        fn from(value: ToolSearchToolSearchResultBlockParam) -> Self {
+            ToolSearchToolResultBlockParamContent::ToolSearchToolSearchResultBlockParam(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<ToolSearchToolResultBlockParamContent>
+    for ToolSearchToolSearchResultBlockParam {
+        type Error = ToolSearchToolResultBlockParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolSearchToolResultBlockParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolSearchToolResultBlockParamContent::ToolSearchToolSearchResultBlockParam(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ToolSearchToolResultBlockParamContent {
+        ToolSearchToolResultErrorParam(ToolSearchToolResultErrorParam),
+        ToolSearchToolSearchResultBlockParam(ToolSearchToolSearchResultBlockParam),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolResultBlockParamType {
+        #[serde(rename = "tool_search_tool_result")]
+        ToolSearchToolResult,
+    }
+    impl ::std::fmt::Display for ToolSearchToolResultBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolResult => {
+                    ::std::write!(__f, "tool_search_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolResultBlockParam {
+        pub content: ToolSearchToolResultBlockParamContent,
+        pub tool_use_id: String,
+        pub r#type: ToolSearchToolResultBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ContainerUploadBlockParamType {
+        #[serde(rename = "container_upload")]
+        ContainerUpload,
+    }
+    impl ::std::fmt::Display for ContainerUploadBlockParamType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ContainerUpload => ::std::write!(__f, "container_upload"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 上传到容器的文件占位 block。
+    pub struct ContainerUploadBlockParam {
+        pub file_id: String,
+        pub r#type: ContainerUploadBlockParamType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+    }
+    impl ::std::convert::From<TextBlockParam> for ContentBlockParam {
+        fn from(value: TextBlockParam) -> Self {
+            ContentBlockParam::TextBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for TextBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::TextBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ImageBlockParam> for ContentBlockParam {
+        fn from(value: ImageBlockParam) -> Self {
+            ContentBlockParam::ImageBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for ImageBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::ImageBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<DocumentBlockParam> for ContentBlockParam {
+        fn from(value: DocumentBlockParam) -> Self {
+            ContentBlockParam::DocumentBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for DocumentBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::DocumentBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<SearchResultBlockParam> for ContentBlockParam {
+        fn from(value: SearchResultBlockParam) -> Self {
+            ContentBlockParam::SearchResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for SearchResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::SearchResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ThinkingBlockParam> for ContentBlockParam {
+        fn from(value: ThinkingBlockParam) -> Self {
+            ContentBlockParam::ThinkingBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for ThinkingBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::ThinkingBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<RedactedThinkingBlockParam> for ContentBlockParam {
+        fn from(value: RedactedThinkingBlockParam) -> Self {
+            ContentBlockParam::RedactedThinkingBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for RedactedThinkingBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::RedactedThinkingBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolUseBlockParam> for ContentBlockParam {
+        fn from(value: ToolUseBlockParam) -> Self {
+            ContentBlockParam::ToolUseBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for ToolUseBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::ToolUseBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolResultBlockParam> for ContentBlockParam {
+        fn from(value: ToolResultBlockParam) -> Self {
+            ContentBlockParam::ToolResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for ToolResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::ToolResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ServerToolUseBlockParam> for ContentBlockParam {
+        fn from(value: ServerToolUseBlockParam) -> Self {
+            ContentBlockParam::ServerToolUseBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for ServerToolUseBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::ServerToolUseBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebSearchToolResultBlockParam> for ContentBlockParam {
+        fn from(value: WebSearchToolResultBlockParam) -> Self {
+            ContentBlockParam::WebSearchToolResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for WebSearchToolResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::WebSearchToolResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebFetchToolResultBlockParam> for ContentBlockParam {
+        fn from(value: WebFetchToolResultBlockParam) -> Self {
+            ContentBlockParam::WebFetchToolResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for WebFetchToolResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::WebFetchToolResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CodeExecutionToolResultBlockParam> for ContentBlockParam {
+        fn from(value: CodeExecutionToolResultBlockParam) -> Self {
+            ContentBlockParam::CodeExecutionToolResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam>
+    for CodeExecutionToolResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::CodeExecutionToolResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<BashCodeExecutionToolResultBlockParam>
+    for ContentBlockParam {
+        fn from(value: BashCodeExecutionToolResultBlockParam) -> Self {
+            ContentBlockParam::BashCodeExecutionToolResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam>
+    for BashCodeExecutionToolResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::BashCodeExecutionToolResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionToolResultBlockParam>
+    for ContentBlockParam {
+        fn from(value: TextEditorCodeExecutionToolResultBlockParam) -> Self {
+            ContentBlockParam::TextEditorCodeExecutionToolResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam>
+    for TextEditorCodeExecutionToolResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::TextEditorCodeExecutionToolResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolSearchToolResultBlockParam> for ContentBlockParam {
+        fn from(value: ToolSearchToolResultBlockParam) -> Self {
+            ContentBlockParam::ToolSearchToolResultBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for ToolSearchToolResultBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::ToolSearchToolResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ContainerUploadBlockParam> for ContentBlockParam {
+        fn from(value: ContainerUploadBlockParam) -> Self {
+            ContentBlockParam::ContainerUploadBlockParam(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockParam> for ContainerUploadBlockParam {
+        type Error = ContentBlockParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockParam::ContainerUploadBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ContentBlockParam {
+        TextBlockParam(TextBlockParam),
+        ImageBlockParam(ImageBlockParam),
+        DocumentBlockParam(DocumentBlockParam),
+        SearchResultBlockParam(SearchResultBlockParam),
+        ThinkingBlockParam(ThinkingBlockParam),
+        RedactedThinkingBlockParam(RedactedThinkingBlockParam),
+        ToolUseBlockParam(ToolUseBlockParam),
+        ToolResultBlockParam(ToolResultBlockParam),
+        ServerToolUseBlockParam(ServerToolUseBlockParam),
+        WebSearchToolResultBlockParam(WebSearchToolResultBlockParam),
+        WebFetchToolResultBlockParam(WebFetchToolResultBlockParam),
+        CodeExecutionToolResultBlockParam(CodeExecutionToolResultBlockParam),
+        BashCodeExecutionToolResultBlockParam(BashCodeExecutionToolResultBlockParam),
+        TextEditorCodeExecutionToolResultBlockParam(
+            TextEditorCodeExecutionToolResultBlockParam,
+        ),
+        ToolSearchToolResultBlockParam(ToolSearchToolResultBlockParam),
+        ContainerUploadBlockParam(ContainerUploadBlockParam),
+    }
+    impl ::std::convert::From<String> for MessageParamContent {
+        fn from(value: String) -> Self {
+            MessageParamContent::MessageParamContentVariant0(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageParamContent> for String {
+        type Error = MessageParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageParamContent::MessageParamContentVariant0(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<Vec<ContentBlockParam>> for MessageParamContent {
+        fn from(value: Vec<ContentBlockParam>) -> Self {
+            MessageParamContent::MessageParamContentVariant1(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageParamContent> for Vec<ContentBlockParam> {
+        type Error = MessageParamContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageParamContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageParamContent::MessageParamContentVariant1(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum MessageParamContent {
+        MessageParamContentVariant0(String),
+        MessageParamContentVariant1(Vec<ContentBlockParam>),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageParamRole {
+        #[serde(rename = "user")]
+        User,
+        #[serde(rename = "assistant")]
+        Assistant,
+    }
+    impl ::std::fmt::Display for MessageParamRole {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::User => ::std::write!(__f, "user"),
+                Self::Assistant => ::std::write!(__f, "assistant"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct MessageParam {
+        pub role: MessageParamRole,
+        pub content: MessageParamContent,
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct Metadata {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// 用户外部标识（uuid / hash），不要塞 PII。
+        pub user_id: Option<String>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum JsonOutputFormatType {
+        #[serde(rename = "json_schema")]
+        JsonSchema,
+    }
+    impl ::std::fmt::Display for JsonOutputFormatType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::JsonSchema => ::std::write!(__f, "json_schema"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct JsonOutputFormat {
+        /// 输出格式的 JSON schema。
+        pub schema: ::std::collections::HashMap<String, ::serde_json::Value>,
+        pub r#type: JsonOutputFormatType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum OutputConfigEffort {
+        #[serde(rename = "low")]
+        Low,
+        #[serde(rename = "medium")]
+        Medium,
+        #[serde(rename = "high")]
+        High,
+        #[serde(rename = "xhigh")]
+        Xhigh,
+        #[serde(rename = "max")]
+        Max,
+    }
+    impl ::std::fmt::Display for OutputConfigEffort {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Low => ::std::write!(__f, "low"),
+                Self::Medium => ::std::write!(__f, "medium"),
+                Self::High => ::std::write!(__f, "high"),
+                Self::Xhigh => ::std::write!(__f, "xhigh"),
+                Self::Max => ::std::write!(__f, "max"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct OutputConfig {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub effort: Option<OutputConfigEffort>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub format: Option<JsonOutputFormat>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingConfigEnabledType {
+        #[serde(rename = "enabled")]
+        Enabled,
+    }
+    impl ::std::fmt::Display for ThinkingConfigEnabledType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Enabled => ::std::write!(__f, "enabled"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingConfigEnabledDisplay {
+        #[serde(rename = "summarized")]
+        Summarized,
+        #[serde(rename = "omitted")]
+        Omitted,
+    }
+    impl ::std::fmt::Display for ThinkingConfigEnabledDisplay {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Summarized => ::std::write!(__f, "summarized"),
+                Self::Omitted => ::std::write!(__f, "omitted"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ThinkingConfigEnabled {
+        /// 必须 ≥1024 且 < max_tokens。
+        pub budget_tokens: i64,
+        pub r#type: ThinkingConfigEnabledType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub display: Option<ThinkingConfigEnabledDisplay>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingConfigDisabledType {
+        #[serde(rename = "disabled")]
+        Disabled,
+    }
+    impl ::std::fmt::Display for ThinkingConfigDisabledType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Disabled => ::std::write!(__f, "disabled"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ThinkingConfigDisabled {
+        pub r#type: ThinkingConfigDisabledType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingConfigAdaptiveType {
+        #[serde(rename = "adaptive")]
+        Adaptive,
+    }
+    impl ::std::fmt::Display for ThinkingConfigAdaptiveType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Adaptive => ::std::write!(__f, "adaptive"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingConfigAdaptiveDisplay {
+        #[serde(rename = "summarized")]
+        Summarized,
+        #[serde(rename = "omitted")]
+        Omitted,
+    }
+    impl ::std::fmt::Display for ThinkingConfigAdaptiveDisplay {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Summarized => ::std::write!(__f, "summarized"),
+                Self::Omitted => ::std::write!(__f, "omitted"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ThinkingConfigAdaptive {
+        pub r#type: ThinkingConfigAdaptiveType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub display: Option<ThinkingConfigAdaptiveDisplay>,
+    }
+    impl ::std::convert::From<ThinkingConfigEnabled> for ThinkingConfigParam {
+        fn from(value: ThinkingConfigEnabled) -> Self {
+            ThinkingConfigParam::ThinkingConfigEnabled(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ThinkingConfigParam> for ThinkingConfigEnabled {
+        type Error = ThinkingConfigParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ThinkingConfigParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ThinkingConfigParam::ThinkingConfigEnabled(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ThinkingConfigDisabled> for ThinkingConfigParam {
+        fn from(value: ThinkingConfigDisabled) -> Self {
+            ThinkingConfigParam::ThinkingConfigDisabled(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ThinkingConfigParam> for ThinkingConfigDisabled {
+        type Error = ThinkingConfigParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ThinkingConfigParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ThinkingConfigParam::ThinkingConfigDisabled(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ThinkingConfigAdaptive> for ThinkingConfigParam {
+        fn from(value: ThinkingConfigAdaptive) -> Self {
+            ThinkingConfigParam::ThinkingConfigAdaptive(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ThinkingConfigParam> for ThinkingConfigAdaptive {
+        type Error = ThinkingConfigParam;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ThinkingConfigParam,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ThinkingConfigParam::ThinkingConfigAdaptive(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ThinkingConfigParam {
+        ThinkingConfigEnabled(ThinkingConfigEnabled),
+        ThinkingConfigDisabled(ThinkingConfigDisabled),
+        ThinkingConfigAdaptive(ThinkingConfigAdaptive),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolChoiceAutoType {
+        #[serde(rename = "auto")]
+        Auto,
+    }
+    impl ::std::fmt::Display for ToolChoiceAutoType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Auto => ::std::write!(__f, "auto"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolChoiceAuto {
+        pub r#type: ToolChoiceAutoType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub disable_parallel_tool_use: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolChoiceAnyType {
+        #[serde(rename = "any")]
+        Any,
+    }
+    impl ::std::fmt::Display for ToolChoiceAnyType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Any => ::std::write!(__f, "any"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolChoiceAny {
+        pub r#type: ToolChoiceAnyType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub disable_parallel_tool_use: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolChoiceToolType {
+        #[serde(rename = "tool")]
+        Tool,
+    }
+    impl ::std::fmt::Display for ToolChoiceToolType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Tool => ::std::write!(__f, "tool"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolChoiceTool {
+        pub name: String,
+        pub r#type: ToolChoiceToolType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub disable_parallel_tool_use: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolChoiceNoneType {
+        #[serde(rename = "none")]
+        None,
+    }
+    impl ::std::fmt::Display for ToolChoiceNoneType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::None => ::std::write!(__f, "none"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolChoiceNone {
+        pub r#type: ToolChoiceNoneType,
+    }
+    impl ::std::convert::From<ToolChoiceAuto> for ToolChoice {
+        fn from(value: ToolChoiceAuto) -> Self {
+            ToolChoice::ToolChoiceAuto(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolChoice> for ToolChoiceAuto {
+        type Error = ToolChoice;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolChoice) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolChoice::ToolChoiceAuto(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolChoiceAny> for ToolChoice {
+        fn from(value: ToolChoiceAny) -> Self {
+            ToolChoice::ToolChoiceAny(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolChoice> for ToolChoiceAny {
+        type Error = ToolChoice;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolChoice) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolChoice::ToolChoiceAny(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolChoiceTool> for ToolChoice {
+        fn from(value: ToolChoiceTool) -> Self {
+            ToolChoice::ToolChoiceTool(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolChoice> for ToolChoiceTool {
+        type Error = ToolChoice;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolChoice) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolChoice::ToolChoiceTool(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolChoiceNone> for ToolChoice {
+        fn from(value: ToolChoiceNone) -> Self {
+            ToolChoice::ToolChoiceNone(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolChoice> for ToolChoiceNone {
+        type Error = ToolChoice;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolChoice) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolChoice::ToolChoiceNone(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ToolChoice {
+        ToolChoiceAuto(ToolChoiceAuto),
+        ToolChoiceAny(ToolChoiceAny),
+        ToolChoiceTool(ToolChoiceTool),
+        ToolChoiceNone(ToolChoiceNone),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum AllowedCallersItem {
+        #[serde(rename = "direct")]
+        Direct,
+        #[serde(rename = "code_execution_20250825")]
+        CodeExecution20250825,
+        #[serde(rename = "code_execution_20260120")]
+        CodeExecution20260120,
+    }
+    impl ::std::fmt::Display for AllowedCallersItem {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Direct => ::std::write!(__f, "direct"),
+                Self::CodeExecution20250825 => {
+                    ::std::write!(__f, "code_execution_20250825")
+                }
+                Self::CodeExecution20260120 => {
+                    ::std::write!(__f, "code_execution_20260120")
+                }
+            }
+        }
+    }
+    pub type AllowedCallers = Vec<AllowedCallersItem>;
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolInputSchemaType {
+        #[serde(rename = "object")]
+        Object,
+    }
+    impl ::std::fmt::Display for ToolInputSchemaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Object => ::std::write!(__f, "object"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 工具入参 JSON schema。
+    pub struct ToolInputSchema {
+        pub r#type: ToolInputSchemaType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub properties: Option<::std::collections::HashMap<String, ::serde_json::Value>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub required: Option<Vec<String>>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolType {
+        #[serde(rename = "custom")]
+        Custom,
+    }
+    impl ::std::fmt::Display for ToolType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Custom => ::std::write!(__f, "custom"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct Tool {
+        /// 工具入参 JSON schema。
+        pub input_schema: ToolInputSchema,
+        pub name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub eager_input_streaming: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_examples: Option<
+            Vec<::std::collections::HashMap<String, ::serde_json::Value>>,
+        >,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub r#type: Option<ToolType>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolBash20250124Name {
+        #[serde(rename = "bash")]
+        Bash,
+    }
+    impl ::std::fmt::Display for ToolBash20250124Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Bash => ::std::write!(__f, "bash"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolBash20250124Type {
+        #[serde(rename = "bash_20250124")]
+        Bash20250124,
+    }
+    impl ::std::fmt::Display for ToolBash20250124Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Bash20250124 => ::std::write!(__f, "bash_20250124"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolBash20250124 {
+        pub name: ToolBash20250124Name,
+        pub r#type: ToolBash20250124Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_examples: Option<
+            Vec<::std::collections::HashMap<String, ::serde_json::Value>>,
+        >,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionTool20250522Name {
+        #[serde(rename = "code_execution")]
+        CodeExecution,
+    }
+    impl ::std::fmt::Display for CodeExecutionTool20250522Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution => ::std::write!(__f, "code_execution"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionTool20250522Type {
+        #[serde(rename = "code_execution_20250522")]
+        CodeExecution20250522,
+    }
+    impl ::std::fmt::Display for CodeExecutionTool20250522Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution20250522 => {
+                    ::std::write!(__f, "code_execution_20250522")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionTool20250522 {
+        pub name: CodeExecutionTool20250522Name,
+        pub r#type: CodeExecutionTool20250522Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionTool20250825Name {
+        #[serde(rename = "code_execution")]
+        CodeExecution,
+    }
+    impl ::std::fmt::Display for CodeExecutionTool20250825Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution => ::std::write!(__f, "code_execution"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionTool20250825Type {
+        #[serde(rename = "code_execution_20250825")]
+        CodeExecution20250825,
+    }
+    impl ::std::fmt::Display for CodeExecutionTool20250825Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution20250825 => {
+                    ::std::write!(__f, "code_execution_20250825")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionTool20250825 {
+        pub name: CodeExecutionTool20250825Name,
+        pub r#type: CodeExecutionTool20250825Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionTool20260120Name {
+        #[serde(rename = "code_execution")]
+        CodeExecution,
+    }
+    impl ::std::fmt::Display for CodeExecutionTool20260120Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution => ::std::write!(__f, "code_execution"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionTool20260120Type {
+        #[serde(rename = "code_execution_20260120")]
+        CodeExecution20260120,
+    }
+    impl ::std::fmt::Display for CodeExecutionTool20260120Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecution20260120 => {
+                    ::std::write!(__f, "code_execution_20260120")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 带 REPL 状态持久化的 code execution（daemon + gVisor checkpoint）。
+    pub struct CodeExecutionTool20260120 {
+        pub name: CodeExecutionTool20260120Name,
+        pub r#type: CodeExecutionTool20260120Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MemoryTool20250818Name {
+        #[serde(rename = "memory")]
+        Memory,
+    }
+    impl ::std::fmt::Display for MemoryTool20250818Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Memory => ::std::write!(__f, "memory"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MemoryTool20250818Type {
+        #[serde(rename = "memory_20250818")]
+        Memory20250818,
+    }
+    impl ::std::fmt::Display for MemoryTool20250818Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Memory20250818 => ::std::write!(__f, "memory_20250818"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct MemoryTool20250818 {
+        pub name: MemoryTool20250818Name,
+        pub r#type: MemoryTool20250818Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_examples: Option<
+            Vec<::std::collections::HashMap<String, ::serde_json::Value>>,
+        >,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolTextEditor20250124Name {
+        #[serde(rename = "str_replace_editor")]
+        StrReplaceEditor,
+    }
+    impl ::std::fmt::Display for ToolTextEditor20250124Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::StrReplaceEditor => ::std::write!(__f, "str_replace_editor"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolTextEditor20250124Type {
+        #[serde(rename = "text_editor_20250124")]
+        TextEditor20250124,
+    }
+    impl ::std::fmt::Display for ToolTextEditor20250124Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditor20250124 => ::std::write!(__f, "text_editor_20250124"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolTextEditor20250124 {
+        pub name: ToolTextEditor20250124Name,
+        pub r#type: ToolTextEditor20250124Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_examples: Option<
+            Vec<::std::collections::HashMap<String, ::serde_json::Value>>,
+        >,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolTextEditor20250429Name {
+        #[serde(rename = "str_replace_based_edit_tool")]
+        StrReplaceBasedEditTool,
+    }
+    impl ::std::fmt::Display for ToolTextEditor20250429Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::StrReplaceBasedEditTool => {
+                    ::std::write!(__f, "str_replace_based_edit_tool")
+                }
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolTextEditor20250429Type {
+        #[serde(rename = "text_editor_20250429")]
+        TextEditor20250429,
+    }
+    impl ::std::fmt::Display for ToolTextEditor20250429Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditor20250429 => ::std::write!(__f, "text_editor_20250429"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolTextEditor20250429 {
+        pub name: ToolTextEditor20250429Name,
+        pub r#type: ToolTextEditor20250429Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_examples: Option<
+            Vec<::std::collections::HashMap<String, ::serde_json::Value>>,
+        >,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolTextEditor20250728Name {
+        #[serde(rename = "str_replace_based_edit_tool")]
+        StrReplaceBasedEditTool,
+    }
+    impl ::std::fmt::Display for ToolTextEditor20250728Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::StrReplaceBasedEditTool => {
+                    ::std::write!(__f, "str_replace_based_edit_tool")
+                }
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolTextEditor20250728Type {
+        #[serde(rename = "text_editor_20250728")]
+        TextEditor20250728,
+    }
+    impl ::std::fmt::Display for ToolTextEditor20250728Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditor20250728 => ::std::write!(__f, "text_editor_20250728"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolTextEditor20250728 {
+        pub name: ToolTextEditor20250728Name,
+        pub r#type: ToolTextEditor20250728Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_examples: Option<
+            Vec<::std::collections::HashMap<String, ::serde_json::Value>>,
+        >,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// 查看文件时显示的最大字符数。
+        pub max_characters: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum UserLocationType {
+        #[serde(rename = "approximate")]
+        Approximate,
+    }
+    impl ::std::fmt::Display for UserLocationType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Approximate => ::std::write!(__f, "approximate"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct UserLocation {
+        pub r#type: UserLocationType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub city: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// ISO 3166-1 alpha-2 双字母国家码。
+        pub country: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub region: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// IANA 时区。
+        pub timezone: Option<String>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchTool20250305Name {
+        #[serde(rename = "web_search")]
+        WebSearch,
+    }
+    impl ::std::fmt::Display for WebSearchTool20250305Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearch => ::std::write!(__f, "web_search"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchTool20250305Type {
+        #[serde(rename = "web_search_20250305")]
+        WebSearch20250305,
+    }
+    impl ::std::fmt::Display for WebSearchTool20250305Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearch20250305 => ::std::write!(__f, "web_search_20250305"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchTool20250305 {
+        pub name: WebSearchTool20250305Name,
+        pub r#type: WebSearchTool20250305Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub blocked_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_uses: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub user_location: Option<UserLocation>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchTool20260209Name {
+        #[serde(rename = "web_search")]
+        WebSearch,
+    }
+    impl ::std::fmt::Display for WebSearchTool20260209Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearch => ::std::write!(__f, "web_search"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchTool20260209Type {
+        #[serde(rename = "web_search_20260209")]
+        WebSearch20260209,
+    }
+    impl ::std::fmt::Display for WebSearchTool20260209Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearch20260209 => ::std::write!(__f, "web_search_20260209"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchTool20260209 {
+        pub name: WebSearchTool20260209Name,
+        pub r#type: WebSearchTool20260209Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub blocked_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_uses: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub user_location: Option<UserLocation>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchTool20250910Name {
+        #[serde(rename = "web_fetch")]
+        WebFetch,
+    }
+    impl ::std::fmt::Display for WebFetchTool20250910Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetch => ::std::write!(__f, "web_fetch"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchTool20250910Type {
+        #[serde(rename = "web_fetch_20250910")]
+        WebFetch20250910,
+    }
+    impl ::std::fmt::Display for WebFetchTool20250910Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetch20250910 => ::std::write!(__f, "web_fetch_20250910"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchTool20250910 {
+        pub name: WebFetchTool20250910Name,
+        pub r#type: WebFetchTool20250910Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub blocked_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub citations: Option<CitationsConfigParam>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_content_tokens: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_uses: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchTool20260209Name {
+        #[serde(rename = "web_fetch")]
+        WebFetch,
+    }
+    impl ::std::fmt::Display for WebFetchTool20260209Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetch => ::std::write!(__f, "web_fetch"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchTool20260209Type {
+        #[serde(rename = "web_fetch_20260209")]
+        WebFetch20260209,
+    }
+    impl ::std::fmt::Display for WebFetchTool20260209Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetch20260209 => ::std::write!(__f, "web_fetch_20260209"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchTool20260209 {
+        pub name: WebFetchTool20260209Name,
+        pub r#type: WebFetchTool20260209Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub blocked_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub citations: Option<CitationsConfigParam>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_content_tokens: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_uses: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchTool20260309Name {
+        #[serde(rename = "web_fetch")]
+        WebFetch,
+    }
+    impl ::std::fmt::Display for WebFetchTool20260309Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetch => ::std::write!(__f, "web_fetch"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchTool20260309Type {
+        #[serde(rename = "web_fetch_20260309")]
+        WebFetch20260309,
+    }
+    impl ::std::fmt::Display for WebFetchTool20260309Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetch20260309 => ::std::write!(__f, "web_fetch_20260309"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 多了 use_cache 参数（绕过缓存内容）。
+    pub struct WebFetchTool20260309 {
+        pub name: WebFetchTool20260309Name,
+        pub r#type: WebFetchTool20260309Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub blocked_domains: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub citations: Option<CitationsConfigParam>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_content_tokens: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_uses: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub use_cache: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolBm2520251119Name {
+        #[serde(rename = "tool_search_tool_bm25")]
+        ToolSearchToolBm25,
+    }
+    impl ::std::fmt::Display for ToolSearchToolBm2520251119Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolBm25 => ::std::write!(__f, "tool_search_tool_bm25"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolBm2520251119Type {
+        #[serde(rename = "tool_search_tool_bm25_20251119")]
+        ToolSearchToolBm2520251119,
+        #[serde(rename = "tool_search_tool_bm25")]
+        ToolSearchToolBm25,
+    }
+    impl ::std::fmt::Display for ToolSearchToolBm2520251119Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolBm2520251119 => {
+                    ::std::write!(__f, "tool_search_tool_bm25_20251119")
+                }
+                Self::ToolSearchToolBm25 => ::std::write!(__f, "tool_search_tool_bm25"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolBm2520251119 {
+        pub name: ToolSearchToolBm2520251119Name,
+        pub r#type: ToolSearchToolBm2520251119Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolRegex20251119Name {
+        #[serde(rename = "tool_search_tool_regex")]
+        ToolSearchToolRegex,
+    }
+    impl ::std::fmt::Display for ToolSearchToolRegex20251119Name {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolRegex => ::std::write!(__f, "tool_search_tool_regex"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolRegex20251119Type {
+        #[serde(rename = "tool_search_tool_regex_20251119")]
+        ToolSearchToolRegex20251119,
+        #[serde(rename = "tool_search_tool_regex")]
+        ToolSearchToolRegex,
+    }
+    impl ::std::fmt::Display for ToolSearchToolRegex20251119Type {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolRegex20251119 => {
+                    ::std::write!(__f, "tool_search_tool_regex_20251119")
+                }
+                Self::ToolSearchToolRegex => ::std::write!(__f, "tool_search_tool_regex"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolRegex20251119 {
+        pub name: ToolSearchToolRegex20251119Name,
+        pub r#type: ToolSearchToolRegex20251119Type,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub allowed_callers: Option<AllowedCallers>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub defer_loading: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub strict: Option<bool>,
+    }
+    impl ::std::convert::From<Tool> for ToolUnion {
+        fn from(value: Tool) -> Self {
+            ToolUnion::Tool(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for Tool {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::Tool(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolBash20250124> for ToolUnion {
+        fn from(value: ToolBash20250124) -> Self {
+            ToolUnion::ToolBash20250124(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for ToolBash20250124 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::ToolBash20250124(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CodeExecutionTool20250522> for ToolUnion {
+        fn from(value: CodeExecutionTool20250522) -> Self {
+            ToolUnion::CodeExecutionTool20250522(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for CodeExecutionTool20250522 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::CodeExecutionTool20250522(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CodeExecutionTool20250825> for ToolUnion {
+        fn from(value: CodeExecutionTool20250825) -> Self {
+            ToolUnion::CodeExecutionTool20250825(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for CodeExecutionTool20250825 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::CodeExecutionTool20250825(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CodeExecutionTool20260120> for ToolUnion {
+        fn from(value: CodeExecutionTool20260120) -> Self {
+            ToolUnion::CodeExecutionTool20260120(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for CodeExecutionTool20260120 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::CodeExecutionTool20260120(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<MemoryTool20250818> for ToolUnion {
+        fn from(value: MemoryTool20250818) -> Self {
+            ToolUnion::MemoryTool20250818(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for MemoryTool20250818 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::MemoryTool20250818(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolTextEditor20250124> for ToolUnion {
+        fn from(value: ToolTextEditor20250124) -> Self {
+            ToolUnion::ToolTextEditor20250124(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for ToolTextEditor20250124 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::ToolTextEditor20250124(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolTextEditor20250429> for ToolUnion {
+        fn from(value: ToolTextEditor20250429) -> Self {
+            ToolUnion::ToolTextEditor20250429(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for ToolTextEditor20250429 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::ToolTextEditor20250429(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolTextEditor20250728> for ToolUnion {
+        fn from(value: ToolTextEditor20250728) -> Self {
+            ToolUnion::ToolTextEditor20250728(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for ToolTextEditor20250728 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::ToolTextEditor20250728(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebSearchTool20250305> for ToolUnion {
+        fn from(value: WebSearchTool20250305) -> Self {
+            ToolUnion::WebSearchTool20250305(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for WebSearchTool20250305 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::WebSearchTool20250305(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebSearchTool20260209> for ToolUnion {
+        fn from(value: WebSearchTool20260209) -> Self {
+            ToolUnion::WebSearchTool20260209(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for WebSearchTool20260209 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::WebSearchTool20260209(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebFetchTool20250910> for ToolUnion {
+        fn from(value: WebFetchTool20250910) -> Self {
+            ToolUnion::WebFetchTool20250910(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for WebFetchTool20250910 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::WebFetchTool20250910(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebFetchTool20260209> for ToolUnion {
+        fn from(value: WebFetchTool20260209) -> Self {
+            ToolUnion::WebFetchTool20260209(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for WebFetchTool20260209 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::WebFetchTool20260209(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebFetchTool20260309> for ToolUnion {
+        fn from(value: WebFetchTool20260309) -> Self {
+            ToolUnion::WebFetchTool20260309(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for WebFetchTool20260309 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::WebFetchTool20260309(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolSearchToolBm2520251119> for ToolUnion {
+        fn from(value: ToolSearchToolBm2520251119) -> Self {
+            ToolUnion::ToolSearchToolBm2520251119(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for ToolSearchToolBm2520251119 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::ToolSearchToolBm2520251119(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolSearchToolRegex20251119> for ToolUnion {
+        fn from(value: ToolSearchToolRegex20251119) -> Self {
+            ToolUnion::ToolSearchToolRegex20251119(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolUnion> for ToolSearchToolRegex20251119 {
+        type Error = ToolUnion;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolUnion::ToolSearchToolRegex20251119(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ToolUnion {
+        Tool(Tool),
+        ToolBash20250124(ToolBash20250124),
+        CodeExecutionTool20250522(CodeExecutionTool20250522),
+        CodeExecutionTool20250825(CodeExecutionTool20250825),
+        CodeExecutionTool20260120(CodeExecutionTool20260120),
+        MemoryTool20250818(MemoryTool20250818),
+        ToolTextEditor20250124(ToolTextEditor20250124),
+        ToolTextEditor20250429(ToolTextEditor20250429),
+        ToolTextEditor20250728(ToolTextEditor20250728),
+        WebSearchTool20250305(WebSearchTool20250305),
+        WebSearchTool20260209(WebSearchTool20260209),
+        WebFetchTool20250910(WebFetchTool20250910),
+        WebFetchTool20260209(WebFetchTool20260209),
+        WebFetchTool20260309(WebFetchTool20260309),
+        #[serde(rename = "ToolSearchToolBm25_20251119")]
+        ToolSearchToolBm2520251119(ToolSearchToolBm2520251119),
+        ToolSearchToolRegex20251119(ToolSearchToolRegex20251119),
+    }
+    impl ::std::convert::From<String> for SystemPrompt {
+        fn from(value: String) -> Self {
+            SystemPrompt::SystemPromptVariant0(value)
+        }
+    }
+    impl ::std::convert::TryFrom<SystemPrompt> for String {
+        type Error = SystemPrompt;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: SystemPrompt) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                SystemPrompt::SystemPromptVariant0(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<Vec<TextBlockParam>> for SystemPrompt {
+        fn from(value: Vec<TextBlockParam>) -> Self {
+            SystemPrompt::SystemPromptVariant1(value)
+        }
+    }
+    impl ::std::convert::TryFrom<SystemPrompt> for Vec<TextBlockParam> {
+        type Error = SystemPrompt;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: SystemPrompt) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                SystemPrompt::SystemPromptVariant1(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum SystemPrompt {
+        SystemPromptVariant0(String),
+        SystemPromptVariant1(Vec<TextBlockParam>),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CreateMessageParamsServiceTier {
+        #[serde(rename = "auto")]
+        Auto,
+        #[serde(rename = "standard_only")]
+        StandardOnly,
+    }
+    impl ::std::fmt::Display for CreateMessageParamsServiceTier {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Auto => ::std::write!(__f, "auto"),
+                Self::StandardOnly => ::std::write!(__f, "standard_only"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CreateMessageParams {
+        /// 生成停止前的最大 token 数。设 0 时仅 prewarm prompt cache，
+        /// 不产生回复。不同模型上限不同。
+        pub max_tokens: i64,
+        pub messages: Vec<MessageParam>,
+        pub model: Model,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_control: Option<CacheControlEphemeral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// 跨请求复用的 container id。
+        pub container: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// 指定推理地理区域；不传则用 workspace 的 default_inference_geo。
+        pub inference_geo: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub metadata: Option<Metadata>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub output_config: Option<OutputConfig>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub service_tier: Option<CreateMessageParamsServiceTier>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub stop_sequences: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// 是否走 SSE 流。
+        pub stream: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub system: Option<SystemPrompt>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub temperature: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub thinking: Option<ThinkingConfigParam>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tool_choice: Option<ToolChoice>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tools: Option<Vec<ToolUnion>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub top_k: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub top_p: Option<f32>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextBlockType {
+        #[serde(rename = "text")]
+        Text,
+    }
+    impl ::std::fmt::Display for TextBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Text => ::std::write!(__f, "text"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextBlock {
+        pub citations: Vec<TextCitation>,
+        pub text: String,
+        pub r#type: TextBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingBlockType {
+        #[serde(rename = "thinking")]
+        Thinking,
+    }
+    impl ::std::fmt::Display for ThinkingBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Thinking => ::std::write!(__f, "thinking"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ThinkingBlock {
+        pub signature: String,
+        pub thinking: String,
+        pub r#type: ThinkingBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum RedactedThinkingBlockType {
+        #[serde(rename = "redacted_thinking")]
+        RedactedThinking,
+    }
+    impl ::std::fmt::Display for RedactedThinkingBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::RedactedThinking => ::std::write!(__f, "redacted_thinking"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct RedactedThinkingBlock {
+        pub data: String,
+        pub r#type: RedactedThinkingBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolUseBlockType {
+        #[serde(rename = "tool_use")]
+        ToolUse,
+    }
+    impl ::std::fmt::Display for ToolUseBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolUse => ::std::write!(__f, "tool_use"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolUseBlock {
+        pub id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+        pub input: ::std::collections::HashMap<String, ::serde_json::Value>,
+        pub name: String,
+        pub r#type: ToolUseBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ServerToolUseBlockName {
+        #[serde(rename = "web_search")]
+        WebSearch,
+        #[serde(rename = "web_fetch")]
+        WebFetch,
+        #[serde(rename = "code_execution")]
+        CodeExecution,
+        #[serde(rename = "bash_code_execution")]
+        BashCodeExecution,
+        #[serde(rename = "text_editor_code_execution")]
+        TextEditorCodeExecution,
+        #[serde(rename = "tool_search_tool_regex")]
+        ToolSearchToolRegex,
+        #[serde(rename = "tool_search_tool_bm25")]
+        ToolSearchToolBm25,
+    }
+    impl ::std::fmt::Display for ServerToolUseBlockName {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearch => ::std::write!(__f, "web_search"),
+                Self::WebFetch => ::std::write!(__f, "web_fetch"),
+                Self::CodeExecution => ::std::write!(__f, "code_execution"),
+                Self::BashCodeExecution => ::std::write!(__f, "bash_code_execution"),
+                Self::TextEditorCodeExecution => {
+                    ::std::write!(__f, "text_editor_code_execution")
+                }
+                Self::ToolSearchToolRegex => ::std::write!(__f, "tool_search_tool_regex"),
+                Self::ToolSearchToolBm25 => ::std::write!(__f, "tool_search_tool_bm25"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ServerToolUseBlockType {
+        #[serde(rename = "server_tool_use")]
+        ServerToolUse,
+    }
+    impl ::std::fmt::Display for ServerToolUseBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ServerToolUse => ::std::write!(__f, "server_tool_use"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ServerToolUseBlock {
+        pub id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+        pub input: ::std::collections::HashMap<String, ::serde_json::Value>,
+        pub name: ServerToolUseBlockName,
+        pub r#type: ServerToolUseBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchResultBlockType {
+        #[serde(rename = "web_search_result")]
+        WebSearchResult,
+    }
+    impl ::std::fmt::Display for WebSearchResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchResult => ::std::write!(__f, "web_search_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchResultBlock {
+        pub encrypted_content: String,
+        pub page_age: String,
+        pub title: String,
+        pub r#type: WebSearchResultBlockType,
+        pub url: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchToolResultErrorErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "max_uses_exceeded")]
+        MaxUsesExceeded,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "query_too_long")]
+        QueryTooLong,
+        #[serde(rename = "request_too_large")]
+        RequestTooLarge,
+    }
+    impl ::std::fmt::Display for WebSearchToolResultErrorErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::MaxUsesExceeded => ::std::write!(__f, "max_uses_exceeded"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::QueryTooLong => ::std::write!(__f, "query_too_long"),
+                Self::RequestTooLarge => ::std::write!(__f, "request_too_large"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchToolResultErrorType {
+        #[serde(rename = "web_search_tool_result_error")]
+        WebSearchToolResultError,
+    }
+    impl ::std::fmt::Display for WebSearchToolResultErrorType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchToolResultError => {
+                    ::std::write!(__f, "web_search_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchToolResultError {
+        pub error_code: WebSearchToolResultErrorErrorCode,
+        pub r#type: WebSearchToolResultErrorType,
+    }
+    impl ::std::convert::From<WebSearchToolResultError>
+    for WebSearchToolResultBlockContent {
+        fn from(value: WebSearchToolResultError) -> Self {
+            WebSearchToolResultBlockContent::WebSearchToolResultError(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebSearchToolResultBlockContent>
+    for WebSearchToolResultError {
+        type Error = WebSearchToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebSearchToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebSearchToolResultBlockContent::WebSearchToolResultError(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<Vec<WebSearchResultBlock>>
+    for WebSearchToolResultBlockContent {
+        fn from(value: Vec<WebSearchResultBlock>) -> Self {
+            WebSearchToolResultBlockContent::WebSearchToolResultBlockContentVariant1(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<WebSearchToolResultBlockContent>
+    for Vec<WebSearchResultBlock> {
+        type Error = WebSearchToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebSearchToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebSearchToolResultBlockContent::WebSearchToolResultBlockContentVariant1(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum WebSearchToolResultBlockContent {
+        WebSearchToolResultError(WebSearchToolResultError),
+        WebSearchToolResultBlockContentVariant1(Vec<WebSearchResultBlock>),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebSearchToolResultBlockType {
+        #[serde(rename = "web_search_tool_result")]
+        WebSearchToolResult,
+    }
+    impl ::std::fmt::Display for WebSearchToolResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebSearchToolResult => ::std::write!(__f, "web_search_tool_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebSearchToolResultBlock {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+        pub content: WebSearchToolResultBlockContent,
+        pub tool_use_id: String,
+        pub r#type: WebSearchToolResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchToolResultErrorBlockErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "url_too_long")]
+        UrlTooLong,
+        #[serde(rename = "url_not_allowed")]
+        UrlNotAllowed,
+        #[serde(rename = "url_not_accessible")]
+        UrlNotAccessible,
+        #[serde(rename = "unsupported_content_type")]
+        UnsupportedContentType,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "max_uses_exceeded")]
+        MaxUsesExceeded,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+    }
+    impl ::std::fmt::Display for WebFetchToolResultErrorBlockErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::UrlTooLong => ::std::write!(__f, "url_too_long"),
+                Self::UrlNotAllowed => ::std::write!(__f, "url_not_allowed"),
+                Self::UrlNotAccessible => ::std::write!(__f, "url_not_accessible"),
+                Self::UnsupportedContentType => {
+                    ::std::write!(__f, "unsupported_content_type")
+                }
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::MaxUsesExceeded => ::std::write!(__f, "max_uses_exceeded"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchToolResultErrorBlockType {
+        #[serde(rename = "web_fetch_tool_result_error")]
+        WebFetchToolResultError,
+    }
+    impl ::std::fmt::Display for WebFetchToolResultErrorBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetchToolResultError => {
+                    ::std::write!(__f, "web_fetch_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchToolResultErrorBlock {
+        pub error_code: WebFetchToolResultErrorBlockErrorCode,
+        pub r#type: WebFetchToolResultErrorBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum DocumentBlockType {
+        #[serde(rename = "document")]
+        Document,
+    }
+    impl ::std::fmt::Display for DocumentBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Document => ::std::write!(__f, "document"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct DocumentBlock {
+        pub citations: CitationsConfig,
+        pub source: WebFetchDocumentSource,
+        pub title: String,
+        pub r#type: DocumentBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchBlockType {
+        #[serde(rename = "web_fetch_result")]
+        WebFetchResult,
+    }
+    impl ::std::fmt::Display for WebFetchBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetchResult => ::std::write!(__f, "web_fetch_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchBlock {
+        pub content: DocumentBlock,
+        pub retrieved_at: String,
+        pub r#type: WebFetchBlockType,
+        pub url: String,
+    }
+    impl ::std::convert::From<WebFetchToolResultErrorBlock>
+    for WebFetchToolResultBlockContent {
+        fn from(value: WebFetchToolResultErrorBlock) -> Self {
+            WebFetchToolResultBlockContent::WebFetchToolResultErrorBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebFetchToolResultBlockContent>
+    for WebFetchToolResultErrorBlock {
+        type Error = WebFetchToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebFetchToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebFetchToolResultBlockContent::WebFetchToolResultErrorBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebFetchBlock> for WebFetchToolResultBlockContent {
+        fn from(value: WebFetchBlock) -> Self {
+            WebFetchToolResultBlockContent::WebFetchBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<WebFetchToolResultBlockContent> for WebFetchBlock {
+        type Error = WebFetchToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: WebFetchToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                WebFetchToolResultBlockContent::WebFetchBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum WebFetchToolResultBlockContent {
+        WebFetchToolResultErrorBlock(WebFetchToolResultErrorBlock),
+        WebFetchBlock(WebFetchBlock),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum WebFetchToolResultBlockType {
+        #[serde(rename = "web_fetch_tool_result")]
+        WebFetchToolResult,
+    }
+    impl ::std::fmt::Display for WebFetchToolResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::WebFetchToolResult => ::std::write!(__f, "web_fetch_tool_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct WebFetchToolResultBlock {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub caller: Option<Caller>,
+        pub content: WebFetchToolResultBlockContent,
+        pub tool_use_id: String,
+        pub r#type: WebFetchToolResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionOutputBlockType {
+        #[serde(rename = "code_execution_output")]
+        CodeExecutionOutput,
+    }
+    impl ::std::fmt::Display for CodeExecutionOutputBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionOutput => ::std::write!(__f, "code_execution_output"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionOutputBlock {
+        pub file_id: String,
+        pub r#type: CodeExecutionOutputBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionToolResultErrorErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+    }
+    impl ::std::fmt::Display for CodeExecutionToolResultErrorErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionToolResultErrorType {
+        #[serde(rename = "code_execution_tool_result_error")]
+        CodeExecutionToolResultError,
+    }
+    impl ::std::fmt::Display for CodeExecutionToolResultErrorType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionToolResultError => {
+                    ::std::write!(__f, "code_execution_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionToolResultError {
+        pub error_code: CodeExecutionToolResultErrorErrorCode,
+        pub r#type: CodeExecutionToolResultErrorType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionResultBlockType {
+        #[serde(rename = "code_execution_result")]
+        CodeExecutionResult,
+    }
+    impl ::std::fmt::Display for CodeExecutionResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionResult => ::std::write!(__f, "code_execution_result"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionResultBlock {
+        pub content: Vec<CodeExecutionOutputBlock>,
+        pub return_code: i64,
+        pub stderr: String,
+        pub stdout: String,
+        pub r#type: CodeExecutionResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum EncryptedCodeExecutionResultBlockType {
+        #[serde(rename = "encrypted_code_execution_result")]
+        EncryptedCodeExecutionResult,
+    }
+    impl ::std::fmt::Display for EncryptedCodeExecutionResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::EncryptedCodeExecutionResult => {
+                    ::std::write!(__f, "encrypted_code_execution_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct EncryptedCodeExecutionResultBlock {
+        pub content: Vec<CodeExecutionOutputBlock>,
+        pub encrypted_stdout: String,
+        pub return_code: i64,
+        pub stderr: String,
+        pub r#type: EncryptedCodeExecutionResultBlockType,
+    }
+    impl ::std::convert::From<CodeExecutionToolResultError>
+    for CodeExecutionToolResultBlockContent {
+        fn from(value: CodeExecutionToolResultError) -> Self {
+            CodeExecutionToolResultBlockContent::CodeExecutionToolResultError(value)
+        }
+    }
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent>
+    for CodeExecutionToolResultError {
+        type Error = CodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: CodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                CodeExecutionToolResultBlockContent::CodeExecutionToolResultError(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CodeExecutionResultBlock>
+    for CodeExecutionToolResultBlockContent {
+        fn from(value: CodeExecutionResultBlock) -> Self {
+            CodeExecutionToolResultBlockContent::CodeExecutionResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent>
+    for CodeExecutionResultBlock {
+        type Error = CodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: CodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                CodeExecutionToolResultBlockContent::CodeExecutionResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<EncryptedCodeExecutionResultBlock>
+    for CodeExecutionToolResultBlockContent {
+        fn from(value: EncryptedCodeExecutionResultBlock) -> Self {
+            CodeExecutionToolResultBlockContent::EncryptedCodeExecutionResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent>
+    for EncryptedCodeExecutionResultBlock {
+        type Error = CodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: CodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                CodeExecutionToolResultBlockContent::EncryptedCodeExecutionResultBlock(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum CodeExecutionToolResultBlockContent {
+        CodeExecutionToolResultError(CodeExecutionToolResultError),
+        CodeExecutionResultBlock(CodeExecutionResultBlock),
+        EncryptedCodeExecutionResultBlock(EncryptedCodeExecutionResultBlock),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CodeExecutionToolResultBlockType {
+        #[serde(rename = "code_execution_tool_result")]
+        CodeExecutionToolResult,
+    }
+    impl ::std::fmt::Display for CodeExecutionToolResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CodeExecutionToolResult => {
+                    ::std::write!(__f, "code_execution_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CodeExecutionToolResultBlock {
+        pub content: CodeExecutionToolResultBlockContent,
+        pub tool_use_id: String,
+        pub r#type: CodeExecutionToolResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionOutputBlockType {
+        #[serde(rename = "bash_code_execution_output")]
+        BashCodeExecutionOutput,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionOutputBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionOutput => {
+                    ::std::write!(__f, "bash_code_execution_output")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionOutputBlock {
+        pub file_id: String,
+        pub r#type: BashCodeExecutionOutputBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionToolResultErrorErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+        #[serde(rename = "output_file_too_large")]
+        OutputFileTooLarge,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionToolResultErrorErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+                Self::OutputFileTooLarge => ::std::write!(__f, "output_file_too_large"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionToolResultErrorType {
+        #[serde(rename = "bash_code_execution_tool_result_error")]
+        BashCodeExecutionToolResultError,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionToolResultErrorType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionToolResultError => {
+                    ::std::write!(__f, "bash_code_execution_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionToolResultError {
+        pub error_code: BashCodeExecutionToolResultErrorErrorCode,
+        pub r#type: BashCodeExecutionToolResultErrorType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionResultBlockType {
+        #[serde(rename = "bash_code_execution_result")]
+        BashCodeExecutionResult,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionResult => {
+                    ::std::write!(__f, "bash_code_execution_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionResultBlock {
+        pub content: Vec<BashCodeExecutionOutputBlock>,
+        pub return_code: i64,
+        pub stderr: String,
+        pub stdout: String,
+        pub r#type: BashCodeExecutionResultBlockType,
+    }
+    impl ::std::convert::From<BashCodeExecutionToolResultError>
+    for BashCodeExecutionToolResultBlockContent {
+        fn from(value: BashCodeExecutionToolResultError) -> Self {
+            BashCodeExecutionToolResultBlockContent::BashCodeExecutionToolResultError(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockContent>
+    for BashCodeExecutionToolResultError {
+        type Error = BashCodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: BashCodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                BashCodeExecutionToolResultBlockContent::BashCodeExecutionToolResultError(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<BashCodeExecutionResultBlock>
+    for BashCodeExecutionToolResultBlockContent {
+        fn from(value: BashCodeExecutionResultBlock) -> Self {
+            BashCodeExecutionToolResultBlockContent::BashCodeExecutionResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockContent>
+    for BashCodeExecutionResultBlock {
+        type Error = BashCodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: BashCodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                BashCodeExecutionToolResultBlockContent::BashCodeExecutionResultBlock(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum BashCodeExecutionToolResultBlockContent {
+        BashCodeExecutionToolResultError(BashCodeExecutionToolResultError),
+        BashCodeExecutionResultBlock(BashCodeExecutionResultBlock),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum BashCodeExecutionToolResultBlockType {
+        #[serde(rename = "bash_code_execution_tool_result")]
+        BashCodeExecutionToolResult,
+    }
+    impl ::std::fmt::Display for BashCodeExecutionToolResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::BashCodeExecutionToolResult => {
+                    ::std::write!(__f, "bash_code_execution_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct BashCodeExecutionToolResultBlock {
+        pub content: BashCodeExecutionToolResultBlockContent,
+        pub tool_use_id: String,
+        pub r#type: BashCodeExecutionToolResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionToolResultErrorErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+        #[serde(rename = "file_not_found")]
+        FileNotFound,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionToolResultErrorErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+                Self::FileNotFound => ::std::write!(__f, "file_not_found"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionToolResultErrorType {
+        #[serde(rename = "text_editor_code_execution_tool_result_error")]
+        TextEditorCodeExecutionToolResultError,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionToolResultErrorType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionToolResultError => {
+                    ::std::write!(__f, "text_editor_code_execution_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionToolResultError {
+        pub error_code: TextEditorCodeExecutionToolResultErrorErrorCode,
+        pub error_message: String,
+        pub r#type: TextEditorCodeExecutionToolResultErrorType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionViewResultBlockFileType {
+        #[serde(rename = "text")]
+        Text,
+        #[serde(rename = "image")]
+        Image,
+        #[serde(rename = "pdf")]
+        Pdf,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionViewResultBlockFileType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Text => ::std::write!(__f, "text"),
+                Self::Image => ::std::write!(__f, "image"),
+                Self::Pdf => ::std::write!(__f, "pdf"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionViewResultBlockType {
+        #[serde(rename = "text_editor_code_execution_view_result")]
+        TextEditorCodeExecutionViewResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionViewResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionViewResult => {
+                    ::std::write!(__f, "text_editor_code_execution_view_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionViewResultBlock {
+        pub content: String,
+        pub file_type: TextEditorCodeExecutionViewResultBlockFileType,
+        pub num_lines: i64,
+        pub start_line: i64,
+        pub total_lines: i64,
+        pub r#type: TextEditorCodeExecutionViewResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionCreateResultBlockType {
+        #[serde(rename = "text_editor_code_execution_create_result")]
+        TextEditorCodeExecutionCreateResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionCreateResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionCreateResult => {
+                    ::std::write!(__f, "text_editor_code_execution_create_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionCreateResultBlock {
+        pub is_file_update: bool,
+        pub r#type: TextEditorCodeExecutionCreateResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionStrReplaceResultBlockType {
+        #[serde(rename = "text_editor_code_execution_str_replace_result")]
+        TextEditorCodeExecutionStrReplaceResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionStrReplaceResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionStrReplaceResult => {
+                    ::std::write!(__f, "text_editor_code_execution_str_replace_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionStrReplaceResultBlock {
+        pub lines: Vec<String>,
+        pub new_lines: i64,
+        pub new_start: i64,
+        pub old_lines: i64,
+        pub old_start: i64,
+        pub r#type: TextEditorCodeExecutionStrReplaceResultBlockType,
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionToolResultError>
+    for TextEditorCodeExecutionToolResultBlockContent {
+        fn from(value: TextEditorCodeExecutionToolResultError) -> Self {
+            TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionToolResultError(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
+    for TextEditorCodeExecutionToolResultError {
+        type Error = TextEditorCodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionToolResultError(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionViewResultBlock>
+    for TextEditorCodeExecutionToolResultBlockContent {
+        fn from(value: TextEditorCodeExecutionViewResultBlock) -> Self {
+            TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionViewResultBlock(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
+    for TextEditorCodeExecutionViewResultBlock {
+        type Error = TextEditorCodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionViewResultBlock(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionCreateResultBlock>
+    for TextEditorCodeExecutionToolResultBlockContent {
+        fn from(value: TextEditorCodeExecutionCreateResultBlock) -> Self {
+            TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionCreateResultBlock(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
+    for TextEditorCodeExecutionCreateResultBlock {
+        type Error = TextEditorCodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionCreateResultBlock(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionStrReplaceResultBlock>
+    for TextEditorCodeExecutionToolResultBlockContent {
+        fn from(value: TextEditorCodeExecutionStrReplaceResultBlock) -> Self {
+            TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionStrReplaceResultBlock(
+                value,
+            )
+        }
+    }
+    impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
+    for TextEditorCodeExecutionStrReplaceResultBlock {
+        type Error = TextEditorCodeExecutionToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: TextEditorCodeExecutionToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionStrReplaceResultBlock(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum TextEditorCodeExecutionToolResultBlockContent {
+        TextEditorCodeExecutionToolResultError(TextEditorCodeExecutionToolResultError),
+        TextEditorCodeExecutionViewResultBlock(TextEditorCodeExecutionViewResultBlock),
+        TextEditorCodeExecutionCreateResultBlock(
+            TextEditorCodeExecutionCreateResultBlock,
+        ),
+        TextEditorCodeExecutionStrReplaceResultBlock(
+            TextEditorCodeExecutionStrReplaceResultBlock,
+        ),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextEditorCodeExecutionToolResultBlockType {
+        #[serde(rename = "text_editor_code_execution_tool_result")]
+        TextEditorCodeExecutionToolResult,
+    }
+    impl ::std::fmt::Display for TextEditorCodeExecutionToolResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextEditorCodeExecutionToolResult => {
+                    ::std::write!(__f, "text_editor_code_execution_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextEditorCodeExecutionToolResultBlock {
+        pub content: TextEditorCodeExecutionToolResultBlockContent,
+        pub tool_use_id: String,
+        pub r#type: TextEditorCodeExecutionToolResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolReferenceBlockType {
+        #[serde(rename = "tool_reference")]
+        ToolReference,
+    }
+    impl ::std::fmt::Display for ToolReferenceBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolReference => ::std::write!(__f, "tool_reference"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolReferenceBlock {
+        pub tool_name: String,
+        pub r#type: ToolReferenceBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolResultErrorErrorCode {
+        #[serde(rename = "invalid_tool_input")]
+        InvalidToolInput,
+        #[serde(rename = "unavailable")]
+        Unavailable,
+        #[serde(rename = "too_many_requests")]
+        TooManyRequests,
+        #[serde(rename = "execution_time_exceeded")]
+        ExecutionTimeExceeded,
+    }
+    impl ::std::fmt::Display for ToolSearchToolResultErrorErrorCode {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InvalidToolInput => ::std::write!(__f, "invalid_tool_input"),
+                Self::Unavailable => ::std::write!(__f, "unavailable"),
+                Self::TooManyRequests => ::std::write!(__f, "too_many_requests"),
+                Self::ExecutionTimeExceeded => {
+                    ::std::write!(__f, "execution_time_exceeded")
+                }
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolResultErrorType {
+        #[serde(rename = "tool_search_tool_result_error")]
+        ToolSearchToolResultError,
+    }
+    impl ::std::fmt::Display for ToolSearchToolResultErrorType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolResultError => {
+                    ::std::write!(__f, "tool_search_tool_result_error")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolResultError {
+        pub error_code: ToolSearchToolResultErrorErrorCode,
+        pub error_message: String,
+        pub r#type: ToolSearchToolResultErrorType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolSearchResultBlockType {
+        #[serde(rename = "tool_search_tool_search_result")]
+        ToolSearchToolSearchResult,
+    }
+    impl ::std::fmt::Display for ToolSearchToolSearchResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolSearchResult => {
+                    ::std::write!(__f, "tool_search_tool_search_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolSearchResultBlock {
+        pub tool_references: Vec<ToolReferenceBlock>,
+        pub r#type: ToolSearchToolSearchResultBlockType,
+    }
+    impl ::std::convert::From<ToolSearchToolResultError>
+    for ToolSearchToolResultBlockContent {
+        fn from(value: ToolSearchToolResultError) -> Self {
+            ToolSearchToolResultBlockContent::ToolSearchToolResultError(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolSearchToolResultBlockContent>
+    for ToolSearchToolResultError {
+        type Error = ToolSearchToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolSearchToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolSearchToolResultBlockContent::ToolSearchToolResultError(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolSearchToolSearchResultBlock>
+    for ToolSearchToolResultBlockContent {
+        fn from(value: ToolSearchToolSearchResultBlock) -> Self {
+            ToolSearchToolResultBlockContent::ToolSearchToolSearchResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ToolSearchToolResultBlockContent>
+    for ToolSearchToolSearchResultBlock {
+        type Error = ToolSearchToolResultBlockContent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ToolSearchToolResultBlockContent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ToolSearchToolResultBlockContent::ToolSearchToolSearchResultBlock(
+                    inner,
+                ) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ToolSearchToolResultBlockContent {
+        ToolSearchToolResultError(ToolSearchToolResultError),
+        ToolSearchToolSearchResultBlock(ToolSearchToolSearchResultBlock),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ToolSearchToolResultBlockType {
+        #[serde(rename = "tool_search_tool_result")]
+        ToolSearchToolResult,
+    }
+    impl ::std::fmt::Display for ToolSearchToolResultBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ToolSearchToolResult => {
+                    ::std::write!(__f, "tool_search_tool_result")
+                }
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ToolSearchToolResultBlock {
+        pub content: ToolSearchToolResultBlockContent,
+        pub tool_use_id: String,
+        pub r#type: ToolSearchToolResultBlockType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ContainerUploadBlockType {
+        #[serde(rename = "container_upload")]
+        ContainerUpload,
+    }
+    impl ::std::fmt::Display for ContainerUploadBlockType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ContainerUpload => ::std::write!(__f, "container_upload"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ContainerUploadBlock {
+        pub file_id: String,
+        pub r#type: ContainerUploadBlockType,
+    }
+    impl ::std::convert::From<TextBlock> for ContentBlock {
+        fn from(value: TextBlock) -> Self {
+            ContentBlock::TextBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for TextBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::TextBlock(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ThinkingBlock> for ContentBlock {
+        fn from(value: ThinkingBlock) -> Self {
+            ContentBlock::ThinkingBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for ThinkingBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::ThinkingBlock(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<RedactedThinkingBlock> for ContentBlock {
+        fn from(value: RedactedThinkingBlock) -> Self {
+            ContentBlock::RedactedThinkingBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for RedactedThinkingBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::RedactedThinkingBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolUseBlock> for ContentBlock {
+        fn from(value: ToolUseBlock) -> Self {
+            ContentBlock::ToolUseBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for ToolUseBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::ToolUseBlock(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ServerToolUseBlock> for ContentBlock {
+        fn from(value: ServerToolUseBlock) -> Self {
+            ContentBlock::ServerToolUseBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for ServerToolUseBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::ServerToolUseBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebSearchToolResultBlock> for ContentBlock {
+        fn from(value: WebSearchToolResultBlock) -> Self {
+            ContentBlock::WebSearchToolResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for WebSearchToolResultBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::WebSearchToolResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<WebFetchToolResultBlock> for ContentBlock {
+        fn from(value: WebFetchToolResultBlock) -> Self {
+            ContentBlock::WebFetchToolResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for WebFetchToolResultBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::WebFetchToolResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CodeExecutionToolResultBlock> for ContentBlock {
+        fn from(value: CodeExecutionToolResultBlock) -> Self {
+            ContentBlock::CodeExecutionToolResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for CodeExecutionToolResultBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::CodeExecutionToolResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<BashCodeExecutionToolResultBlock> for ContentBlock {
+        fn from(value: BashCodeExecutionToolResultBlock) -> Self {
+            ContentBlock::BashCodeExecutionToolResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for BashCodeExecutionToolResultBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::BashCodeExecutionToolResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<TextEditorCodeExecutionToolResultBlock> for ContentBlock {
+        fn from(value: TextEditorCodeExecutionToolResultBlock) -> Self {
+            ContentBlock::TextEditorCodeExecutionToolResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock>
+    for TextEditorCodeExecutionToolResultBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::TextEditorCodeExecutionToolResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ToolSearchToolResultBlock> for ContentBlock {
+        fn from(value: ToolSearchToolResultBlock) -> Self {
+            ContentBlock::ToolSearchToolResultBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for ToolSearchToolResultBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::ToolSearchToolResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ContainerUploadBlock> for ContentBlock {
+        fn from(value: ContainerUploadBlock) -> Self {
+            ContentBlock::ContainerUploadBlock(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlock> for ContainerUploadBlock {
+        type Error = ContentBlock;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlock::ContainerUploadBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ContentBlock {
+        TextBlock(TextBlock),
+        ThinkingBlock(ThinkingBlock),
+        RedactedThinkingBlock(RedactedThinkingBlock),
+        ToolUseBlock(ToolUseBlock),
+        ServerToolUseBlock(ServerToolUseBlock),
+        WebSearchToolResultBlock(WebSearchToolResultBlock),
+        WebFetchToolResultBlock(WebFetchToolResultBlock),
+        CodeExecutionToolResultBlock(CodeExecutionToolResultBlock),
+        BashCodeExecutionToolResultBlock(BashCodeExecutionToolResultBlock),
+        TextEditorCodeExecutionToolResultBlock(TextEditorCodeExecutionToolResultBlock),
+        ToolSearchToolResultBlock(ToolSearchToolResultBlock),
+        ContainerUploadBlock(ContainerUploadBlock),
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 代码执行容器信息（仅在用了 code execution tool 时返回）。
+    pub struct Container {
+        pub id: String,
+        pub expires_at: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum RefusalStopDetailsCategory {
+        #[serde(rename = "cyber")]
+        Cyber,
+        #[serde(rename = "bio")]
+        Bio,
+    }
+    impl ::std::fmt::Display for RefusalStopDetailsCategory {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Cyber => ::std::write!(__f, "cyber"),
+                Self::Bio => ::std::write!(__f, "bio"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum RefusalStopDetailsType {
+        #[serde(rename = "refusal")]
+        Refusal,
+    }
+    impl ::std::fmt::Display for RefusalStopDetailsType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Refusal => ::std::write!(__f, "refusal"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 结构化 refusal 信息。
+    pub struct RefusalStopDetails {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub category: Option<RefusalStopDetailsCategory>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub explanation: Option<String>,
+        pub r#type: RefusalStopDetailsType,
+    }
+    impl ::std::fmt::Display for StopReason {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::EndTurn => ::std::write!(__f, "end_turn"),
+                Self::MaxTokens => ::std::write!(__f, "max_tokens"),
+                Self::StopSequence => ::std::write!(__f, "stop_sequence"),
+                Self::ToolUse => ::std::write!(__f, "tool_use"),
+                Self::PauseTurn => ::std::write!(__f, "pause_turn"),
+                Self::Refusal => ::std::write!(__f, "refusal"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum StopReason {
+        #[serde(rename = "end_turn")]
+        EndTurn,
+        #[serde(rename = "max_tokens")]
+        MaxTokens,
+        #[serde(rename = "stop_sequence")]
+        StopSequence,
+        #[serde(rename = "tool_use")]
+        ToolUse,
+        #[serde(rename = "pause_turn")]
+        PauseTurn,
+        #[serde(rename = "refusal")]
+        Refusal,
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct CacheCreation {
+        pub ephemeral_1h_input_tokens: i64,
+        pub ephemeral_5m_input_tokens: i64,
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ServerToolUsage {
+        pub web_fetch_requests: i64,
+        pub web_search_requests: i64,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum UsageServiceTier {
+        #[serde(rename = "standard")]
+        Standard,
+        #[serde(rename = "priority")]
+        Priority,
+        #[serde(rename = "batch")]
+        Batch,
+    }
+    impl ::std::fmt::Display for UsageServiceTier {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Standard => ::std::write!(__f, "standard"),
+                Self::Priority => ::std::write!(__f, "priority"),
+                Self::Batch => ::std::write!(__f, "batch"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// 计费/限流相关的 token 用量。
+    pub struct Usage {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_creation: Option<CacheCreation>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_creation_input_tokens: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_read_input_tokens: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub inference_geo: Option<String>,
+        pub input_tokens: i64,
+        pub output_tokens: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub server_tool_use: Option<ServerToolUsage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub service_tier: Option<UsageServiceTier>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageRole {
+        #[serde(rename = "assistant")]
+        Assistant,
+    }
+    impl ::std::fmt::Display for MessageRole {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Assistant => ::std::write!(__f, "assistant"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageType {
+        #[serde(rename = "message")]
+        Message,
+    }
+    impl ::std::fmt::Display for MessageType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Message => ::std::write!(__f, "message"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct Message {
+        pub id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub container: Option<Container>,
+        pub content: Vec<ContentBlock>,
+        pub model: Model,
+        pub role: MessageRole,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub stop_details: Option<RefusalStopDetails>,
+        pub stop_reason: StopReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub stop_sequence: Option<String>,
+        pub r#type: MessageType,
+        pub usage: Usage,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageStartEventMessageType {
+        #[serde(rename = "message")]
+        Message,
+    }
+    impl ::std::fmt::Display for MessageStartEventMessageType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Message => ::std::write!(__f, "message"),
+            }
+        }
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageStartEventMessageRole {
+        #[serde(rename = "assistant")]
+        Assistant,
+    }
+    impl ::std::fmt::Display for MessageStartEventMessageRole {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Assistant => ::std::write!(__f, "assistant"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// message_start 事件携带的 Message 体；与 /v1/messages 同步返回的
+    /// Message 几乎相同，但 content 总是空数组（在后续 content_block_*
+    /// 事件里逐步填充），且 stop_reason / stop_details 为 null。usage
+    /// 在此事件里只有 input_tokens / output_tokens 是有效的。
+    pub struct MessageStartEventMessage {
+        pub id: String,
+        pub r#type: MessageStartEventMessageType,
+        pub role: MessageStartEventMessageRole,
+        pub content: Vec<ContentBlock>,
+        pub model: Model,
+        pub stop_reason: StopReason,
+        pub stop_sequence: String,
+        pub usage: Usage,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageStartEventType {
+        #[serde(rename = "message_start")]
+        MessageStart,
+    }
+    impl ::std::fmt::Display for MessageStartEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::MessageStart => ::std::write!(__f, "message_start"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct MessageStartEvent {
+        pub r#type: MessageStartEventType,
+        pub message: MessageStartEventMessage,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ContentBlockStartEventType {
+        #[serde(rename = "content_block_start")]
+        ContentBlockStart,
+    }
+    impl ::std::fmt::Display for ContentBlockStartEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ContentBlockStart => ::std::write!(__f, "content_block_start"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ContentBlockStartEvent {
+        pub r#type: ContentBlockStartEventType,
+        pub index: i64,
+        pub content_block: ContentBlock,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum TextDeltaType {
+        #[serde(rename = "text_delta")]
+        TextDelta,
+    }
+    impl ::std::fmt::Display for TextDeltaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::TextDelta => ::std::write!(__f, "text_delta"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct TextDelta {
+        pub r#type: TextDeltaType,
+        pub text: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum InputJsonDeltaType {
+        #[serde(rename = "input_json_delta")]
+        InputJsonDelta,
+    }
+    impl ::std::fmt::Display for InputJsonDeltaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::InputJsonDelta => ::std::write!(__f, "input_json_delta"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// tool_use input 的 partial JSON（字符串形式逐段流出）。
+    pub struct InputJsonDelta {
+        pub r#type: InputJsonDeltaType,
+        pub partial_json: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ThinkingDeltaType {
+        #[serde(rename = "thinking_delta")]
+        ThinkingDelta,
+    }
+    impl ::std::fmt::Display for ThinkingDeltaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ThinkingDelta => ::std::write!(__f, "thinking_delta"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ThinkingDelta {
+        pub r#type: ThinkingDeltaType,
+        pub thinking: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum SignatureDeltaType {
+        #[serde(rename = "signature_delta")]
+        SignatureDelta,
+    }
+    impl ::std::fmt::Display for SignatureDeltaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::SignatureDelta => ::std::write!(__f, "signature_delta"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct SignatureDelta {
+        pub r#type: SignatureDeltaType,
+        pub signature: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum CitationsDeltaType {
+        #[serde(rename = "citations_delta")]
+        CitationsDelta,
+    }
+    impl ::std::fmt::Display for CitationsDeltaType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::CitationsDelta => ::std::write!(__f, "citations_delta"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// citation_delta 事件：每个 delta 携带一条新增的 TextCitation
+    /// （响应版，含 file_id），追加到对应文本块的 citations 数组。
+    pub struct CitationsDelta {
+        pub r#type: CitationsDeltaType,
+        pub citation: TextCitation,
+    }
+    impl ::std::convert::From<TextDelta> for ContentBlockDelta {
+        fn from(value: TextDelta) -> Self {
+            ContentBlockDelta::TextDelta(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockDelta> for TextDelta {
+        type Error = ContentBlockDelta;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockDelta,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockDelta::TextDelta(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<InputJsonDelta> for ContentBlockDelta {
+        fn from(value: InputJsonDelta) -> Self {
+            ContentBlockDelta::InputJsonDelta(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockDelta> for InputJsonDelta {
+        type Error = ContentBlockDelta;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockDelta,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockDelta::InputJsonDelta(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ThinkingDelta> for ContentBlockDelta {
+        fn from(value: ThinkingDelta) -> Self {
+            ContentBlockDelta::ThinkingDelta(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockDelta> for ThinkingDelta {
+        type Error = ContentBlockDelta;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockDelta,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockDelta::ThinkingDelta(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<SignatureDelta> for ContentBlockDelta {
+        fn from(value: SignatureDelta) -> Self {
+            ContentBlockDelta::SignatureDelta(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockDelta> for SignatureDelta {
+        type Error = ContentBlockDelta;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockDelta,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockDelta::SignatureDelta(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<CitationsDelta> for ContentBlockDelta {
+        fn from(value: CitationsDelta) -> Self {
+            ContentBlockDelta::CitationsDelta(value)
+        }
+    }
+    impl ::std::convert::TryFrom<ContentBlockDelta> for CitationsDelta {
+        type Error = ContentBlockDelta;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: ContentBlockDelta,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                ContentBlockDelta::CitationsDelta(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum ContentBlockDelta {
+        TextDelta(TextDelta),
+        InputJsonDelta(InputJsonDelta),
+        ThinkingDelta(ThinkingDelta),
+        SignatureDelta(SignatureDelta),
+        CitationsDelta(CitationsDelta),
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ContentBlockDeltaEventType {
+        #[serde(rename = "content_block_delta")]
+        ContentBlockDelta,
+    }
+    impl ::std::fmt::Display for ContentBlockDeltaEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ContentBlockDelta => ::std::write!(__f, "content_block_delta"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ContentBlockDeltaEvent {
+        pub r#type: ContentBlockDeltaEventType,
+        pub index: i64,
+        pub delta: ContentBlockDelta,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ContentBlockStopEventType {
+        #[serde(rename = "content_block_stop")]
+        ContentBlockStop,
+    }
+    impl ::std::fmt::Display for ContentBlockStopEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::ContentBlockStop => ::std::write!(__f, "content_block_stop"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ContentBlockStopEvent {
+        pub r#type: ContentBlockStopEventType,
+        pub index: i64,
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// message_delta 事件携带的 message 顶层增量。stop_reason/sequence
+    /// 在 turn 收尾时填充。
+    pub struct MessageDeltaUpdate {
+        pub stop_reason: StopReason,
+        pub stop_sequence: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub stop_details: Option<RefusalStopDetails>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub container: Option<Container>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageDeltaUsageServiceTier {
+        #[serde(rename = "standard")]
+        Standard,
+        #[serde(rename = "priority")]
+        Priority,
+        #[serde(rename = "batch")]
+        Batch,
+    }
+    impl ::std::fmt::Display for MessageDeltaUsageServiceTier {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Standard => ::std::write!(__f, "standard"),
+                Self::Priority => ::std::write!(__f, "priority"),
+                Self::Batch => ::std::write!(__f, "batch"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    /// message_delta.usage 累积值（注意：是累积，不是增量）。其它
+    /// 字段（cache_*、server_tool_use 等）在收尾时也可能填充。
+    pub struct MessageDeltaUsage {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_creation: Option<CacheCreation>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_creation_input_tokens: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cache_read_input_tokens: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_tokens: Option<i64>,
+        pub output_tokens: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub server_tool_use: Option<ServerToolUsage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub service_tier: Option<MessageDeltaUsageServiceTier>,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageDeltaEventType {
+        #[serde(rename = "message_delta")]
+        MessageDelta,
+    }
+    impl ::std::fmt::Display for MessageDeltaEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::MessageDelta => ::std::write!(__f, "message_delta"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct MessageDeltaEvent {
+        pub r#type: MessageDeltaEventType,
+        pub delta: MessageDeltaUpdate,
+        pub usage: MessageDeltaUsage,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum MessageStopEventType {
+        #[serde(rename = "message_stop")]
+        MessageStop,
+    }
+    impl ::std::fmt::Display for MessageStopEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::MessageStop => ::std::write!(__f, "message_stop"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct MessageStopEvent {
+        pub r#type: MessageStopEventType,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum PingEventType {
+        #[serde(rename = "ping")]
+        Ping,
+    }
+    impl ::std::fmt::Display for PingEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Ping => ::std::write!(__f, "ping"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct PingEvent {
+        pub r#type: PingEventType,
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct StreamErrorPayload {
+        /// 常见值：overloaded_error / api_error / invalid_request_error。
+        pub r#type: String,
+        pub message: String,
+    }
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        ::serde::Serialize,
+        ::serde::Deserialize
+    )]
+    pub enum ErrorEventType {
+        #[serde(rename = "error")]
+        Error,
+    }
+    impl ::std::fmt::Display for ErrorEventType {
+        fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            match self {
+                Self::Error => ::std::write!(__f, "error"),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    pub struct ErrorEvent {
+        pub r#type: ErrorEventType,
+        pub error: StreamErrorPayload,
+    }
+    impl ::std::convert::From<MessageStartEvent> for MessageStreamEvent {
+        fn from(value: MessageStartEvent) -> Self {
+            MessageStreamEvent::MessageStartEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for MessageStartEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::MessageStartEvent(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ContentBlockStartEvent> for MessageStreamEvent {
+        fn from(value: ContentBlockStartEvent) -> Self {
+            MessageStreamEvent::ContentBlockStartEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for ContentBlockStartEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::ContentBlockStartEvent(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ContentBlockDeltaEvent> for MessageStreamEvent {
+        fn from(value: ContentBlockDeltaEvent) -> Self {
+            MessageStreamEvent::ContentBlockDeltaEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for ContentBlockDeltaEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::ContentBlockDeltaEvent(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ContentBlockStopEvent> for MessageStreamEvent {
+        fn from(value: ContentBlockStopEvent) -> Self {
+            MessageStreamEvent::ContentBlockStopEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for ContentBlockStopEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::ContentBlockStopEvent(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<MessageDeltaEvent> for MessageStreamEvent {
+        fn from(value: MessageDeltaEvent) -> Self {
+            MessageStreamEvent::MessageDeltaEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for MessageDeltaEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::MessageDeltaEvent(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<MessageStopEvent> for MessageStreamEvent {
+        fn from(value: MessageStopEvent) -> Self {
+            MessageStreamEvent::MessageStopEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for MessageStopEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::MessageStopEvent(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<PingEvent> for MessageStreamEvent {
+        fn from(value: PingEvent) -> Self {
+            MessageStreamEvent::PingEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for PingEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::PingEvent(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    impl ::std::convert::From<ErrorEvent> for MessageStreamEvent {
+        fn from(value: ErrorEvent) -> Self {
+            MessageStreamEvent::ErrorEvent(value)
+        }
+    }
+    impl ::std::convert::TryFrom<MessageStreamEvent> for ErrorEvent {
+        type Error = MessageStreamEvent;
+        /// # Errors
+        ///
+        /// Returns the original enum value if it does not match the
+        /// `#variant_ident` variant.
+        fn try_from(
+            value: MessageStreamEvent,
+        ) -> ::std::result::Result<Self, Self::Error> {
+            match value {
+                MessageStreamEvent::ErrorEvent(inner) => ::std::result::Result::Ok(inner),
+                other => ::std::result::Result::Err(other),
+            }
+        }
+    }
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[serde(untagged)]
+    /// Anthropic SSE 流的单个事件载荷（去掉 SSE 框架后的 JSON）。所有
+    /// 变体共享 `type` 字段做 discriminator。客户端必须能容忍未知
+    /// type（按 versioning policy，未来会新增）。
+    pub enum MessageStreamEvent {
+        MessageStartEvent(MessageStartEvent),
+        ContentBlockStartEvent(ContentBlockStartEvent),
+        ContentBlockDeltaEvent(ContentBlockDeltaEvent),
+        ContentBlockStopEvent(ContentBlockStopEvent),
+        MessageDeltaEvent(MessageDeltaEvent),
+        MessageStopEvent(MessageStopEvent),
+        PingEvent(PingEvent),
+        ErrorEvent(ErrorEvent),
     }
 }
 pub mod operations {
@@ -320,6 +8683,288 @@ pub mod operations {
                 }
             }
         }
+        pub mod messages {
+            pub mod post {
+                #[derive(Debug, Clone, PartialEq)]
+                /// # Create a Message
+                /// 发送一组 user/assistant 消息，让模型生成下一条消息。当 `stream=false`
+                /// 时同步返回完整 `Message`；`stream=true` 时返回 SSE 流（按 8 类
+                /// 事件序列拼出最终 Message）。客户端通过 `Accept` 头 (`application/json`
+                /// vs `text/event-stream`) 选择 200 响应分支——见 `Request::with_accept`。
+                pub struct Request {
+                    pub body: crate::wire::anthropic::components::CreateMessageParams,
+                }
+                impl Request {
+                    /// `POST /v1/messages`
+                    /// Operation ID: `createMessage`.
+                    pub const METHOD: ::http::Method = ::http::Method::POST;
+                    /// URL path template, with `{name}` placeholders for path
+                    /// parameters. Rendering into a concrete URL is the caller's
+                    /// responsibility.
+                    pub const PATH_TEMPLATE: &'static str = "/v1/messages";
+                    /// Security requirement declared by the spec for this
+                    /// operation. Outer slice encodes OR alternatives; inner
+                    /// slice encodes AND requirements within one alternative.
+                    /// Empty outer slice means "public, no auth required".
+                    pub const SECURITY: &'static [&'static [&'static str]] = &[
+                        &["ApiKeyAuth"],
+                    ];
+                    /// Wraps this request with an `Accept` header override.
+                    ///
+                    /// The generated [`::toac::MakeRequest`] impl auto-emits an
+                    /// `Accept` header listing every response media type
+                    /// declared in the spec. Use this method to steer content
+                    /// negotiation to one specific type (for example, asking
+                    /// for `text/event-stream` to land on a streaming branch).
+                    pub fn with_accept(
+                        self,
+                        accept: ::http::HeaderValue,
+                    ) -> ::toac::WithAccept<Self> {
+                        ::toac::WithAccept::new(self, accept)
+                    }
+                }
+                impl ::toac::MakeRequest for Request {
+                    type Error = ::serde_json::Error;
+                    fn make_request(
+                        self,
+                    ) -> impl ::std::future::Future<
+                        Output = ::std::result::Result<::toac::Request, Self::Error>,
+                    > + Send {
+                        async move {
+                            let mut __path = ::std::string::String::new();
+                            __path.push_str("/v1/messages");
+                            let mut __builder = ::http::Request::builder()
+                                .method(::http::Method::POST)
+                                .uri(__path);
+                            __builder = __builder
+                                .header(
+                                    ::http::header::ACCEPT,
+                                    ::http::HeaderValue::from_static(
+                                        "application/json, text/event-stream",
+                                    ),
+                                );
+                            let mut __request = __builder
+                                .body(::toac::body::Body::empty())
+                                .expect("valid generated HTTP request");
+                            __request
+                                .extensions_mut()
+                                .insert(::toac::OperationSecurity(&[&["ApiKeyAuth"]]));
+                            {
+                                let __payload = &self.body;
+                                ::toac::body::codec::encode_body(
+                                    &<::toac::body::codec::json::JsonEncoder as ::std::default::Default>::default(),
+                                    __payload,
+                                    __request,
+                                )
+                            }
+                        }
+                    }
+                }
+                pub enum Response {
+                    ///OK
+                    Status200Json(crate::wire::anthropic::components::Message),
+                    ///OK
+                    Status200Sse(::toac::body::codec::sse::SseEventStream),
+                    ///Bad request
+                    Status400(crate::wire::anthropic::components::ErrorResponse),
+                    ///Authentication failed
+                    Status401(crate::wire::anthropic::components::ErrorResponse),
+                    ///Forbidden
+                    Status403(crate::wire::anthropic::components::ErrorResponse),
+                    ///Not found
+                    Status404(crate::wire::anthropic::components::ErrorResponse),
+                    ///Request too large
+                    Status413(crate::wire::anthropic::components::ErrorResponse),
+                    ///Rate limited
+                    Status429(crate::wire::anthropic::components::ErrorResponse),
+                    ///Server error
+                    Status500(crate::wire::anthropic::components::ErrorResponse),
+                    ///Overloaded
+                    Status529(crate::wire::anthropic::components::ErrorResponse),
+                }
+                impl ::toac::ParseResponse for Response {
+                    type Error = ::toac::DecodeError;
+                    fn parse_response<__B>(
+                        response: ::http::Response<__B>,
+                    ) -> impl ::std::future::Future<
+                        Output = ::std::result::Result<Self, Self::Error>,
+                    > + ::std::marker::Send
+                    where
+                        __B: ::http_body::Body<Data = ::bytes::Bytes>
+                            + ::std::marker::Send + ::std::marker::Sync + 'static,
+                        __B::Error: ::std::convert::Into<::toac::BoxError>,
+                    {
+                        async move {
+                            let (__parts, __body) = response.into_parts();
+                            let __status = __parts.status;
+                            let __content_type = __parts
+                                .headers
+                                .get(::http::header::CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok())
+                                .map(|s| {
+                                    s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase()
+                                });
+                            match __status.as_u16() {
+                                200u16 => {
+                                    match __content_type.as_deref() {
+                                        ::std::option::Option::Some(
+                                            __ct,
+                                        ) if __ct == "application/json" => {
+                                            let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                            let __value = ::toac::body::codec::decode_body(
+                                                    &__decoder,
+                                                    __body,
+                                                )
+                                                .await
+                                                .map_err(|e| ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                ))?;
+                                            return ::std::result::Result::Ok(
+                                                Self::Status200Json(__value),
+                                            );
+                                        }
+                                        ::std::option::Option::Some(
+                                            __ct,
+                                        ) if __ct == "text/event-stream" => {
+                                            let __decoder = <::toac::body::codec::sse::SseDecoder as ::std::default::Default>::default();
+                                            let __value = ::toac::body::codec::decode_body(
+                                                    &__decoder,
+                                                    __body,
+                                                )
+                                                .await
+                                                .map_err(|e| ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                ))?;
+                                            return ::std::result::Result::Ok(
+                                                Self::Status200Sse(__value),
+                                            );
+                                        }
+                                        _ => {
+                                            let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                            let __value = ::toac::body::codec::decode_body(
+                                                    &__decoder,
+                                                    __body,
+                                                )
+                                                .await
+                                                .map_err(|e| ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                ))?;
+                                            return ::std::result::Result::Ok(
+                                                Self::Status200Json(__value),
+                                            );
+                                        }
+                                    }
+                                }
+                                400u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status400(__value));
+                                }
+                                401u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status401(__value));
+                                }
+                                403u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status403(__value));
+                                }
+                                404u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status404(__value));
+                                }
+                                413u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status413(__value));
+                                }
+                                429u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status429(__value));
+                                }
+                                500u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status500(__value));
+                                }
+                                529u16 => {
+                                    let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                    let __value = ::toac::body::codec::decode_body(
+                                            &__decoder,
+                                            __body,
+                                        )
+                                        .await
+                                        .map_err(|e| ::toac::DecodeError::Codec(
+                                            ::std::convert::Into::into(e),
+                                        ))?;
+                                    return ::std::result::Result::Ok(Self::Status529(__value));
+                                }
+                                _ => {}
+                            }
+                            ::std::mem::drop(__body);
+                            return ::std::result::Result::Err(
+                                ::toac::DecodeError::UnexpectedStatus(__status),
+                            );
+                        }
+                    }
+                }
+                impl ::toac::Operation for Request {
+                    type Response = Response;
+                }
+            }
+        }
     }
 }
 pub mod servers {
@@ -329,7 +8974,8 @@ pub mod servers {
     #![allow(non_snake_case)]
     #![allow(clippy::all, clippy::pedantic)]
     /// `https://api.anthropic.com`
-    /// Anthropic 官方 API endpoint。base_url 由 provider 在 运行期通过 `ANTHROPIC_BASE_URL` env 覆盖（codegen 不参与）。
+    /// Anthropic 官方 API endpoint。base_url 由 provider 在运行期通过
+    /// `ANTHROPIC_BASE_URL` env 覆盖（codegen 不参与）。
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub struct ServerOption0;
     impl ::toac::Server for ServerOption0 {

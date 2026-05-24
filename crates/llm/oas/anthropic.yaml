@@ -2,15 +2,20 @@ openapi: 3.1.0
 info:
   title: Anthropic Messages API
   description: |
-    本地裁剪版的 Anthropic Messages API OAS。仅保留 defect-llm 实际用到
-    的端点（v0：/v1/models；后续会加 /v1/messages）。每次 Anthropic
-    上游加字段时，手动同步对应 schema 段。
+    本地版的 Anthropic API OAS。**只裁端点不裁字段**：当前仅
+    挂 `/v1/models` 与 `/v1/messages` 两条 defect-llm 实际要走的
+    路；这两条端点的 schema 全字段保留（含 citations、cache_control、
+    image base64+url、document 全 4 种 source、thinking 3 种、
+    tool_choice 4 种、所有 server tool 与 result 变体、Usage 全
+    breakdown、SSE 8 类事件）。Anthropic 上游加字段时手动
+    diff 同步对应 schema。
   version: "2023-06-01"
 
 servers:
   - url: https://api.anthropic.com
-    description: Anthropic 官方 API endpoint。base_url 由 provider 在
-      运行期通过 `ANTHROPIC_BASE_URL` env 覆盖（codegen 不参与）。
+    description: |
+      Anthropic 官方 API endpoint。base_url 由 provider 在运行期通过
+      `ANTHROPIC_BASE_URL` env 覆盖（codegen 不参与）。
 
 components:
   securitySchemes:
@@ -24,6 +29,9 @@ components:
         codegen 会出可空字段，每请求多一次 builder 调用，无意义）。
 
   schemas:
+    # =========================================================================
+    # /v1/models 相关
+    # =========================================================================
     ModelInfo:
       type: object
       required: [type, id, display_name, created_at]
@@ -31,17 +39,14 @@ components:
         type:
           type: string
           enum: [model]
-          description: 固定字面量 "model"。
         id:
           type: string
           description: 模型 id，例如 "claude-3-5-sonnet-20241022"。
         display_name:
           type: string
-          description: 人类可读名称。
         created_at:
           type: string
           format: date-time
-          description: ISO-8601 时间戳。
 
     ListModelsResponse:
       type: object
@@ -53,7 +58,6 @@ components:
             $ref: "#/components/schemas/ModelInfo"
         has_more:
           type: boolean
-          description: 后面还有页时为 true。
         first_id:
           type: string
           nullable: true
@@ -81,6 +85,2439 @@ components:
                 api_error / overloaded_error。
             message:
               type: string
+
+    # =========================================================================
+    # 通用：cache_control / model 字面量
+    # =========================================================================
+    CacheControlEphemeral:
+      type: object
+      required: [type]
+      description: 在该 content block 上插入缓存断点。
+      properties:
+        type:
+          type: string
+          enum: [ephemeral]
+        ttl:
+          type: string
+          enum: ["5m", "1h"]
+          description: 缓存断点 TTL，默认 5m。
+
+    Model:
+      description: |
+        要使用的模型 id。允许任意字符串以容纳新发布版本，但同时
+        枚举出当前已知的模型名作为 IDE 提示。
+      oneOf:
+        - type: string
+          enum:
+            - claude-opus-4-7
+            - claude-mythos-preview
+            - claude-opus-4-6
+            - claude-sonnet-4-6
+            - claude-haiku-4-5
+            - claude-haiku-4-5-20251001
+            - claude-opus-4-5
+            - claude-opus-4-5-20251101
+            - claude-sonnet-4-5
+            - claude-sonnet-4-5-20250929
+            - claude-opus-4-1
+            - claude-opus-4-1-20250805
+            - claude-opus-4-0
+            - claude-opus-4-20250514
+            - claude-sonnet-4-0
+            - claude-sonnet-4-20250514
+            - claude-3-haiku-20240307
+        - type: string
+
+    # =========================================================================
+    # citations（请求参数版）
+    # =========================================================================
+    CitationCharLocationParam:
+      type: object
+      required: [cited_text, document_index, document_title, end_char_index, start_char_index, type]
+      properties:
+        cited_text: { type: string }
+        document_index: { type: integer }
+        document_title: { type: string }
+        end_char_index: { type: integer }
+        start_char_index: { type: integer }
+        type:
+          type: string
+          enum: [char_location]
+
+    CitationPageLocationParam:
+      type: object
+      required: [cited_text, document_index, document_title, end_page_number, start_page_number, type]
+      properties:
+        cited_text: { type: string }
+        document_index: { type: integer }
+        document_title: { type: string }
+        end_page_number: { type: integer }
+        start_page_number: { type: integer }
+        type:
+          type: string
+          enum: [page_location]
+
+    CitationContentBlockLocationParam:
+      type: object
+      required: [cited_text, document_index, document_title, end_block_index, start_block_index, type]
+      properties:
+        cited_text: { type: string }
+        document_index: { type: integer }
+        document_title: { type: string }
+        end_block_index: { type: integer }
+        start_block_index: { type: integer }
+        type:
+          type: string
+          enum: [content_block_location]
+
+    CitationWebSearchResultLocationParam:
+      type: object
+      required: [cited_text, encrypted_index, title, type, url]
+      properties:
+        cited_text: { type: string }
+        encrypted_index: { type: string }
+        title: { type: string }
+        type:
+          type: string
+          enum: [web_search_result_location]
+        url: { type: string }
+
+    CitationSearchResultLocationParam:
+      type: object
+      required: [cited_text, end_block_index, search_result_index, source, start_block_index, title, type]
+      properties:
+        cited_text: { type: string }
+        end_block_index: { type: integer }
+        search_result_index: { type: integer }
+        source: { type: string }
+        start_block_index: { type: integer }
+        title: { type: string }
+        type:
+          type: string
+          enum: [search_result_location]
+
+    TextCitationParam:
+      oneOf:
+        - $ref: "#/components/schemas/CitationCharLocationParam"
+        - $ref: "#/components/schemas/CitationPageLocationParam"
+        - $ref: "#/components/schemas/CitationContentBlockLocationParam"
+        - $ref: "#/components/schemas/CitationWebSearchResultLocationParam"
+        - $ref: "#/components/schemas/CitationSearchResultLocationParam"
+
+    # =========================================================================
+    # citations（响应版，多了 file_id 字段）
+    # =========================================================================
+    CitationCharLocation:
+      type: object
+      required: [cited_text, document_index, document_title, end_char_index, start_char_index, type]
+      properties:
+        cited_text: { type: string }
+        document_index: { type: integer }
+        document_title: { type: string }
+        end_char_index: { type: integer }
+        start_char_index: { type: integer }
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [char_location]
+
+    CitationPageLocation:
+      type: object
+      required: [cited_text, document_index, document_title, end_page_number, start_page_number, type]
+      properties:
+        cited_text: { type: string }
+        document_index: { type: integer }
+        document_title: { type: string }
+        end_page_number: { type: integer }
+        start_page_number: { type: integer }
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [page_location]
+
+    CitationContentBlockLocation:
+      type: object
+      required: [cited_text, document_index, document_title, end_block_index, start_block_index, type]
+      properties:
+        cited_text: { type: string }
+        document_index: { type: integer }
+        document_title: { type: string }
+        end_block_index: { type: integer }
+        start_block_index: { type: integer }
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [content_block_location]
+
+    CitationsWebSearchResultLocation:
+      type: object
+      required: [cited_text, encrypted_index, title, type, url]
+      properties:
+        cited_text: { type: string }
+        encrypted_index: { type: string }
+        title: { type: string }
+        type:
+          type: string
+          enum: [web_search_result_location]
+        url: { type: string }
+
+    CitationsSearchResultLocation:
+      type: object
+      required: [cited_text, end_block_index, search_result_index, source, start_block_index, title, type]
+      properties:
+        cited_text: { type: string }
+        end_block_index: { type: integer }
+        search_result_index: { type: integer }
+        source: { type: string }
+        start_block_index: { type: integer }
+        title: { type: string }
+        type:
+          type: string
+          enum: [search_result_location]
+
+    TextCitation:
+      oneOf:
+        - $ref: "#/components/schemas/CitationCharLocation"
+        - $ref: "#/components/schemas/CitationPageLocation"
+        - $ref: "#/components/schemas/CitationContentBlockLocation"
+        - $ref: "#/components/schemas/CitationsWebSearchResultLocation"
+        - $ref: "#/components/schemas/CitationsSearchResultLocation"
+
+    CitationsConfigParam:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+
+    CitationsConfig:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+
+    # =========================================================================
+    # caller —— tool_use / server_tool_use / 各 result 都引用
+    # =========================================================================
+    DirectCaller:
+      type: object
+      required: [type]
+      description: 模型直接调起的工具调用。
+      properties:
+        type:
+          type: string
+          enum: [direct]
+
+    ServerToolCaller:
+      type: object
+      required: [tool_id, type]
+      description: 由 server-side tool 触发的子调用。
+      properties:
+        tool_id: { type: string }
+        type:
+          type: string
+          enum: [code_execution_20250825]
+
+    ServerToolCaller20260120:
+      type: object
+      required: [tool_id, type]
+      properties:
+        tool_id: { type: string }
+        type:
+          type: string
+          enum: [code_execution_20260120]
+
+    Caller:
+      oneOf:
+        - $ref: "#/components/schemas/DirectCaller"
+        - $ref: "#/components/schemas/ServerToolCaller"
+        - $ref: "#/components/schemas/ServerToolCaller20260120"
+
+    # =========================================================================
+    # source 子类型
+    # =========================================================================
+    Base64ImageSource:
+      type: object
+      required: [data, media_type, type]
+      properties:
+        data: { type: string }
+        media_type:
+          type: string
+          enum: [image/jpeg, image/png, image/gif, image/webp]
+        type:
+          type: string
+          enum: [base64]
+
+    URLImageSource:
+      type: object
+      required: [type, url]
+      properties:
+        type:
+          type: string
+          enum: [url]
+        url: { type: string }
+
+    ImageSource:
+      oneOf:
+        - $ref: "#/components/schemas/Base64ImageSource"
+        - $ref: "#/components/schemas/URLImageSource"
+
+    Base64PDFSource:
+      type: object
+      required: [data, media_type, type]
+      properties:
+        data: { type: string }
+        media_type:
+          type: string
+          enum: [application/pdf]
+        type:
+          type: string
+          enum: [base64]
+
+    PlainTextSource:
+      type: object
+      required: [data, media_type, type]
+      properties:
+        data: { type: string }
+        media_type:
+          type: string
+          enum: [text/plain]
+        type:
+          type: string
+          enum: [text]
+
+    ContentBlockSourceContent:
+      oneOf:
+        - $ref: "#/components/schemas/TextBlockParam"
+        - $ref: "#/components/schemas/ImageBlockParam"
+
+    ContentBlockSource:
+      type: object
+      required: [content, type]
+      properties:
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ContentBlockSourceContent"
+        type:
+          type: string
+          enum: [content]
+
+    URLPDFSource:
+      type: object
+      required: [type, url]
+      properties:
+        type:
+          type: string
+          enum: [url]
+        url: { type: string }
+
+    DocumentSource:
+      oneOf:
+        - $ref: "#/components/schemas/Base64PDFSource"
+        - $ref: "#/components/schemas/PlainTextSource"
+        - $ref: "#/components/schemas/ContentBlockSource"
+        - $ref: "#/components/schemas/URLPDFSource"
+
+    WebFetchDocumentSource:
+      oneOf:
+        - $ref: "#/components/schemas/Base64PDFSource"
+        - $ref: "#/components/schemas/PlainTextSource"
+
+    # =========================================================================
+    # ContentBlockParam 14 变体（请求体里 messages[].content 用）
+    # =========================================================================
+    TextBlockParam:
+      type: object
+      required: [text, type]
+      properties:
+        text: { type: string }
+        type:
+          type: string
+          enum: [text]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/TextCitationParam"
+
+    ImageBlockParam:
+      type: object
+      required: [source, type]
+      properties:
+        source:
+          $ref: "#/components/schemas/ImageSource"
+        type:
+          type: string
+          enum: [image]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+
+    DocumentBlockParam:
+      type: object
+      required: [source, type]
+      properties:
+        source:
+          $ref: "#/components/schemas/DocumentSource"
+        type:
+          type: string
+          enum: [document]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        citations:
+          $ref: "#/components/schemas/CitationsConfigParam"
+        context:
+          type: string
+        title:
+          type: string
+
+    SearchResultBlockParam:
+      type: object
+      required: [content, source, title, type]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/TextBlockParam"
+        source: { type: string }
+        title: { type: string }
+        type:
+          type: string
+          enum: [search_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        citations:
+          $ref: "#/components/schemas/CitationsConfigParam"
+
+    ThinkingBlockParam:
+      type: object
+      required: [signature, thinking, type]
+      properties:
+        signature: { type: string }
+        thinking: { type: string }
+        type:
+          type: string
+          enum: [thinking]
+
+    RedactedThinkingBlockParam:
+      type: object
+      required: [data, type]
+      properties:
+        data: { type: string }
+        type:
+          type: string
+          enum: [redacted_thinking]
+
+    ToolUseBlockParam:
+      type: object
+      required: [id, input, name, type]
+      properties:
+        id: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+        name: { type: string }
+        type:
+          type: string
+          enum: [tool_use]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        caller:
+          $ref: "#/components/schemas/Caller"
+
+    ToolReferenceBlockParam:
+      type: object
+      required: [tool_name, type]
+      description: 可在 tool_result 内容里出现的 tool 引用 block。
+      properties:
+        tool_name: { type: string }
+        type:
+          type: string
+          enum: [tool_reference]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+
+    ToolResultBlockParamContent:
+      oneOf:
+        - $ref: "#/components/schemas/TextBlockParam"
+        - $ref: "#/components/schemas/ImageBlockParam"
+        - $ref: "#/components/schemas/SearchResultBlockParam"
+        - $ref: "#/components/schemas/DocumentBlockParam"
+        - $ref: "#/components/schemas/ToolReferenceBlockParam"
+
+    ToolResultBlockParam:
+      type: object
+      required: [tool_use_id, type]
+      properties:
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [tool_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ToolResultBlockParamContent"
+        is_error:
+          type: boolean
+
+    ServerToolUseBlockParam:
+      type: object
+      required: [id, input, name, type]
+      properties:
+        id: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+        name:
+          type: string
+          enum:
+            - web_search
+            - web_fetch
+            - code_execution
+            - bash_code_execution
+            - text_editor_code_execution
+            - tool_search_tool_regex
+            - tool_search_tool_bm25
+        type:
+          type: string
+          enum: [server_tool_use]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        caller:
+          $ref: "#/components/schemas/Caller"
+
+    # web_search result 子类型（请求里复用）
+    WebSearchResultBlockParam:
+      type: object
+      required: [encrypted_content, title, type, url]
+      properties:
+        encrypted_content: { type: string }
+        title: { type: string }
+        type:
+          type: string
+          enum: [web_search_result]
+        url: { type: string }
+        page_age:
+          type: string
+
+    WebSearchToolRequestError:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - max_uses_exceeded
+            - too_many_requests
+            - query_too_long
+            - request_too_large
+        type:
+          type: string
+          enum: [web_search_tool_result_error]
+
+    WebSearchToolResultBlockParamContent:
+      oneOf:
+        - type: array
+          items:
+            $ref: "#/components/schemas/WebSearchResultBlockParam"
+        - $ref: "#/components/schemas/WebSearchToolRequestError"
+
+    WebSearchToolResultBlockParam:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/WebSearchToolResultBlockParamContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [web_search_tool_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        caller:
+          $ref: "#/components/schemas/Caller"
+
+    WebFetchToolResultErrorBlockParam:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - url_too_long
+            - url_not_allowed
+            - url_not_accessible
+            - unsupported_content_type
+            - too_many_requests
+            - max_uses_exceeded
+            - unavailable
+        type:
+          type: string
+          enum: [web_fetch_tool_result_error]
+
+    WebFetchBlockParam:
+      type: object
+      required: [content, type, url]
+      properties:
+        content:
+          $ref: "#/components/schemas/DocumentBlockParam"
+        type:
+          type: string
+          enum: [web_fetch_result]
+        url:
+          type: string
+          description: Fetched content URL
+        retrieved_at:
+          type: string
+          description: ISO 8601 时间戳
+
+    WebFetchToolResultBlockParamContent:
+      oneOf:
+        - $ref: "#/components/schemas/WebFetchToolResultErrorBlockParam"
+        - $ref: "#/components/schemas/WebFetchBlockParam"
+
+    WebFetchToolResultBlockParam:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/WebFetchToolResultBlockParamContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [web_fetch_tool_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        caller:
+          $ref: "#/components/schemas/Caller"
+
+    CodeExecutionOutputBlockParam:
+      type: object
+      required: [file_id, type]
+      properties:
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [code_execution_output]
+
+    CodeExecutionToolResultErrorParam:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+        type:
+          type: string
+          enum: [code_execution_tool_result_error]
+
+    CodeExecutionResultBlockParam:
+      type: object
+      required: [content, return_code, stderr, stdout, type]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeExecutionOutputBlockParam"
+        return_code: { type: integer }
+        stderr: { type: string }
+        stdout: { type: string }
+        type:
+          type: string
+          enum: [code_execution_result]
+
+    EncryptedCodeExecutionResultBlockParam:
+      type: object
+      required: [content, encrypted_stdout, return_code, stderr, type]
+      description: PFC + web_search 加密 stdout 的代码执行结果。
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeExecutionOutputBlockParam"
+        encrypted_stdout: { type: string }
+        return_code: { type: integer }
+        stderr: { type: string }
+        type:
+          type: string
+          enum: [encrypted_code_execution_result]
+
+    CodeExecutionToolResultBlockParamContent:
+      oneOf:
+        - $ref: "#/components/schemas/CodeExecutionToolResultErrorParam"
+        - $ref: "#/components/schemas/CodeExecutionResultBlockParam"
+        - $ref: "#/components/schemas/EncryptedCodeExecutionResultBlockParam"
+
+    CodeExecutionToolResultBlockParam:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/CodeExecutionToolResultBlockParamContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [code_execution_tool_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+
+    BashCodeExecutionOutputBlockParam:
+      type: object
+      required: [file_id, type]
+      properties:
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [bash_code_execution_output]
+
+    BashCodeExecutionToolResultErrorParam:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+            - output_file_too_large
+        type:
+          type: string
+          enum: [bash_code_execution_tool_result_error]
+
+    BashCodeExecutionResultBlockParam:
+      type: object
+      required: [content, return_code, stderr, stdout, type]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/BashCodeExecutionOutputBlockParam"
+        return_code: { type: integer }
+        stderr: { type: string }
+        stdout: { type: string }
+        type:
+          type: string
+          enum: [bash_code_execution_result]
+
+    BashCodeExecutionToolResultBlockParamContent:
+      oneOf:
+        - $ref: "#/components/schemas/BashCodeExecutionToolResultErrorParam"
+        - $ref: "#/components/schemas/BashCodeExecutionResultBlockParam"
+
+    BashCodeExecutionToolResultBlockParam:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/BashCodeExecutionToolResultBlockParamContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [bash_code_execution_tool_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+
+    TextEditorCodeExecutionToolResultErrorParam:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+            - file_not_found
+        type:
+          type: string
+          enum: [text_editor_code_execution_tool_result_error]
+        error_message:
+          type: string
+
+    TextEditorCodeExecutionViewResultBlockParam:
+      type: object
+      required: [content, file_type, type]
+      properties:
+        content: { type: string }
+        file_type:
+          type: string
+          enum: [text, image, pdf]
+        type:
+          type: string
+          enum: [text_editor_code_execution_view_result]
+        num_lines:
+          type: integer
+        start_line:
+          type: integer
+        total_lines:
+          type: integer
+
+    TextEditorCodeExecutionCreateResultBlockParam:
+      type: object
+      required: [is_file_update, type]
+      properties:
+        is_file_update:
+          type: boolean
+        type:
+          type: string
+          enum: [text_editor_code_execution_create_result]
+
+    TextEditorCodeExecutionStrReplaceResultBlockParam:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [text_editor_code_execution_str_replace_result]
+        lines:
+          type: array
+          items:
+            type: string
+        new_lines:
+          type: integer
+        new_start:
+          type: integer
+        old_lines:
+          type: integer
+        old_start:
+          type: integer
+
+    TextEditorCodeExecutionToolResultBlockParamContent:
+      oneOf:
+        - $ref: "#/components/schemas/TextEditorCodeExecutionToolResultErrorParam"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionViewResultBlockParam"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionCreateResultBlockParam"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionStrReplaceResultBlockParam"
+
+    TextEditorCodeExecutionToolResultBlockParam:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/TextEditorCodeExecutionToolResultBlockParamContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [text_editor_code_execution_tool_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+
+    ToolSearchToolResultErrorParam:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+        type:
+          type: string
+          enum: [tool_search_tool_result_error]
+
+    ToolSearchToolSearchResultBlockParam:
+      type: object
+      required: [tool_references, type]
+      properties:
+        tool_references:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolReferenceBlockParam"
+        type:
+          type: string
+          enum: [tool_search_tool_search_result]
+
+    ToolSearchToolResultBlockParamContent:
+      oneOf:
+        - $ref: "#/components/schemas/ToolSearchToolResultErrorParam"
+        - $ref: "#/components/schemas/ToolSearchToolSearchResultBlockParam"
+
+    ToolSearchToolResultBlockParam:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/ToolSearchToolResultBlockParamContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [tool_search_tool_result]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+
+    ContainerUploadBlockParam:
+      type: object
+      required: [file_id, type]
+      description: 上传到容器的文件占位 block。
+      properties:
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [container_upload]
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+
+    ContentBlockParam:
+      oneOf:
+        - $ref: "#/components/schemas/TextBlockParam"
+        - $ref: "#/components/schemas/ImageBlockParam"
+        - $ref: "#/components/schemas/DocumentBlockParam"
+        - $ref: "#/components/schemas/SearchResultBlockParam"
+        - $ref: "#/components/schemas/ThinkingBlockParam"
+        - $ref: "#/components/schemas/RedactedThinkingBlockParam"
+        - $ref: "#/components/schemas/ToolUseBlockParam"
+        - $ref: "#/components/schemas/ToolResultBlockParam"
+        - $ref: "#/components/schemas/ServerToolUseBlockParam"
+        - $ref: "#/components/schemas/WebSearchToolResultBlockParam"
+        - $ref: "#/components/schemas/WebFetchToolResultBlockParam"
+        - $ref: "#/components/schemas/CodeExecutionToolResultBlockParam"
+        - $ref: "#/components/schemas/BashCodeExecutionToolResultBlockParam"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionToolResultBlockParam"
+        - $ref: "#/components/schemas/ToolSearchToolResultBlockParam"
+        - $ref: "#/components/schemas/ContainerUploadBlockParam"
+
+    # =========================================================================
+    # MessageParam（请求体的 messages[] 元素）
+    # =========================================================================
+    MessageParamContent:
+      oneOf:
+        - type: string
+        - type: array
+          items:
+            $ref: "#/components/schemas/ContentBlockParam"
+
+    MessageParam:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          $ref: "#/components/schemas/MessageParamContent"
+
+    # =========================================================================
+    # metadata / output_config / thinking / tool_choice
+    # =========================================================================
+    Metadata:
+      type: object
+      properties:
+        user_id:
+          type: string
+          nullable: true
+          description: 用户外部标识（uuid / hash），不要塞 PII。
+
+    JSONOutputFormat:
+      type: object
+      required: [schema, type]
+      properties:
+        schema:
+          type: object
+          additionalProperties: true
+          description: 输出格式的 JSON schema。
+        type:
+          type: string
+          enum: [json_schema]
+
+    OutputConfig:
+      type: object
+      properties:
+        effort:
+          type: string
+          enum: [low, medium, high, xhigh, max]
+        format:
+          $ref: "#/components/schemas/JSONOutputFormat"
+
+    ThinkingConfigEnabled:
+      type: object
+      required: [budget_tokens, type]
+      properties:
+        budget_tokens:
+          type: integer
+          description: 必须 ≥1024 且 < max_tokens。
+        type:
+          type: string
+          enum: [enabled]
+        display:
+          type: string
+          enum: [summarized, omitted]
+
+    ThinkingConfigDisabled:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [disabled]
+
+    ThinkingConfigAdaptive:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [adaptive]
+        display:
+          type: string
+          enum: [summarized, omitted]
+
+    ThinkingConfigParam:
+      oneOf:
+        - $ref: "#/components/schemas/ThinkingConfigEnabled"
+        - $ref: "#/components/schemas/ThinkingConfigDisabled"
+        - $ref: "#/components/schemas/ThinkingConfigAdaptive"
+
+    ToolChoiceAuto:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [auto]
+        disable_parallel_tool_use:
+          type: boolean
+
+    ToolChoiceAny:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [any]
+        disable_parallel_tool_use:
+          type: boolean
+
+    ToolChoiceTool:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [tool]
+        disable_parallel_tool_use:
+          type: boolean
+
+    ToolChoiceNone:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [none]
+
+    ToolChoice:
+      oneOf:
+        - $ref: "#/components/schemas/ToolChoiceAuto"
+        - $ref: "#/components/schemas/ToolChoiceAny"
+        - $ref: "#/components/schemas/ToolChoiceTool"
+        - $ref: "#/components/schemas/ToolChoiceNone"
+
+    # =========================================================================
+    # tools 13 个变体（自定义 + bash + 3 code_execution + memory + 3 text_editor
+    #                  + 2 web_search + 3 web_fetch + 2 tool_search）
+    # =========================================================================
+    AllowedCallers:
+      type: array
+      items:
+        type: string
+        enum:
+          - direct
+          - code_execution_20250825
+          - code_execution_20260120
+
+    Tool:
+      type: object
+      required: [input_schema, name]
+      properties:
+        input_schema:
+          type: object
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [object]
+            properties:
+              type: object
+              additionalProperties: true
+            required:
+              type: array
+              items:
+                type: string
+          description: 工具入参 JSON schema。
+        name:
+          type: string
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        description:
+          type: string
+        eager_input_streaming:
+          type: boolean
+        input_examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        strict:
+          type: boolean
+        type:
+          type: string
+          enum: [custom]
+
+    ToolBash20250124:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [bash]
+        type:
+          type: string
+          enum: [bash_20250124]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        input_examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        strict:
+          type: boolean
+
+    CodeExecutionTool20250522:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [code_execution]
+        type:
+          type: string
+          enum: [code_execution_20250522]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        strict:
+          type: boolean
+
+    CodeExecutionTool20250825:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [code_execution]
+        type:
+          type: string
+          enum: [code_execution_20250825]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        strict:
+          type: boolean
+
+    CodeExecutionTool20260120:
+      type: object
+      required: [name, type]
+      description: 带 REPL 状态持久化的 code execution（daemon + gVisor checkpoint）。
+      properties:
+        name:
+          type: string
+          enum: [code_execution]
+        type:
+          type: string
+          enum: [code_execution_20260120]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        strict:
+          type: boolean
+
+    MemoryTool20250818:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [memory]
+        type:
+          type: string
+          enum: [memory_20250818]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        input_examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        strict:
+          type: boolean
+
+    ToolTextEditor20250124:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [str_replace_editor]
+        type:
+          type: string
+          enum: [text_editor_20250124]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        input_examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        strict:
+          type: boolean
+
+    ToolTextEditor20250429:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [str_replace_based_edit_tool]
+        type:
+          type: string
+          enum: [text_editor_20250429]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        input_examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        strict:
+          type: boolean
+
+    ToolTextEditor20250728:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [str_replace_based_edit_tool]
+        type:
+          type: string
+          enum: [text_editor_20250728]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        input_examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        max_characters:
+          type: integer
+          description: 查看文件时显示的最大字符数。
+        strict:
+          type: boolean
+
+    UserLocation:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [approximate]
+        city:
+          type: string
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 双字母国家码。
+        region:
+          type: string
+        timezone:
+          type: string
+          description: IANA 时区。
+
+    WebSearchTool20250305:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [web_search]
+        type:
+          type: string
+          enum: [web_search_20250305]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        blocked_domains:
+          type: array
+          items:
+            type: string
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        max_uses:
+          type: integer
+        strict:
+          type: boolean
+        user_location:
+          $ref: "#/components/schemas/UserLocation"
+
+    WebSearchTool20260209:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [web_search]
+        type:
+          type: string
+          enum: [web_search_20260209]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        blocked_domains:
+          type: array
+          items:
+            type: string
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        max_uses:
+          type: integer
+        strict:
+          type: boolean
+        user_location:
+          $ref: "#/components/schemas/UserLocation"
+
+    WebFetchTool20250910:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [web_fetch]
+        type:
+          type: string
+          enum: [web_fetch_20250910]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        blocked_domains:
+          type: array
+          items:
+            type: string
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        citations:
+          $ref: "#/components/schemas/CitationsConfigParam"
+        defer_loading:
+          type: boolean
+        max_content_tokens:
+          type: integer
+        max_uses:
+          type: integer
+        strict:
+          type: boolean
+
+    WebFetchTool20260209:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [web_fetch]
+        type:
+          type: string
+          enum: [web_fetch_20260209]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        blocked_domains:
+          type: array
+          items:
+            type: string
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        citations:
+          $ref: "#/components/schemas/CitationsConfigParam"
+        defer_loading:
+          type: boolean
+        max_content_tokens:
+          type: integer
+        max_uses:
+          type: integer
+        strict:
+          type: boolean
+
+    WebFetchTool20260309:
+      type: object
+      required: [name, type]
+      description: 多了 use_cache 参数（绕过缓存内容）。
+      properties:
+        name:
+          type: string
+          enum: [web_fetch]
+        type:
+          type: string
+          enum: [web_fetch_20260309]
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        allowed_domains:
+          type: array
+          items:
+            type: string
+        blocked_domains:
+          type: array
+          items:
+            type: string
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        citations:
+          $ref: "#/components/schemas/CitationsConfigParam"
+        defer_loading:
+          type: boolean
+        max_content_tokens:
+          type: integer
+        max_uses:
+          type: integer
+        strict:
+          type: boolean
+        use_cache:
+          type: boolean
+
+    ToolSearchToolBm25_20251119:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [tool_search_tool_bm25]
+        type:
+          type: string
+          enum:
+            - tool_search_tool_bm25_20251119
+            - tool_search_tool_bm25
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        strict:
+          type: boolean
+
+    ToolSearchToolRegex20251119:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          enum: [tool_search_tool_regex]
+        type:
+          type: string
+          enum:
+            - tool_search_tool_regex_20251119
+            - tool_search_tool_regex
+        allowed_callers:
+          $ref: "#/components/schemas/AllowedCallers"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        defer_loading:
+          type: boolean
+        strict:
+          type: boolean
+
+    ToolUnion:
+      oneOf:
+        - $ref: "#/components/schemas/Tool"
+        - $ref: "#/components/schemas/ToolBash20250124"
+        - $ref: "#/components/schemas/CodeExecutionTool20250522"
+        - $ref: "#/components/schemas/CodeExecutionTool20250825"
+        - $ref: "#/components/schemas/CodeExecutionTool20260120"
+        - $ref: "#/components/schemas/MemoryTool20250818"
+        - $ref: "#/components/schemas/ToolTextEditor20250124"
+        - $ref: "#/components/schemas/ToolTextEditor20250429"
+        - $ref: "#/components/schemas/ToolTextEditor20250728"
+        - $ref: "#/components/schemas/WebSearchTool20250305"
+        - $ref: "#/components/schemas/WebSearchTool20260209"
+        - $ref: "#/components/schemas/WebFetchTool20250910"
+        - $ref: "#/components/schemas/WebFetchTool20260209"
+        - $ref: "#/components/schemas/WebFetchTool20260309"
+        - $ref: "#/components/schemas/ToolSearchToolBm25_20251119"
+        - $ref: "#/components/schemas/ToolSearchToolRegex20251119"
+
+    SystemPrompt:
+      oneOf:
+        - type: string
+        - type: array
+          items:
+            $ref: "#/components/schemas/TextBlockParam"
+
+    # =========================================================================
+    # CreateMessageParams 请求体
+    # =========================================================================
+    CreateMessageParams:
+      type: object
+      required: [max_tokens, messages, model]
+      properties:
+        max_tokens:
+          type: integer
+          description: |
+            生成停止前的最大 token 数。设 0 时仅 prewarm prompt cache，
+            不产生回复。不同模型上限不同。
+        messages:
+          type: array
+          maxItems: 100000
+          items:
+            $ref: "#/components/schemas/MessageParam"
+        model:
+          $ref: "#/components/schemas/Model"
+        cache_control:
+          $ref: "#/components/schemas/CacheControlEphemeral"
+        container:
+          type: string
+          description: 跨请求复用的 container id。
+        inference_geo:
+          type: string
+          description: |
+            指定推理地理区域；不传则用 workspace 的 default_inference_geo。
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+        output_config:
+          $ref: "#/components/schemas/OutputConfig"
+        service_tier:
+          type: string
+          enum: [auto, standard_only]
+        stop_sequences:
+          type: array
+          items:
+            type: string
+        stream:
+          type: boolean
+          description: 是否走 SSE 流。
+        system:
+          $ref: "#/components/schemas/SystemPrompt"
+        temperature:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+        thinking:
+          $ref: "#/components/schemas/ThinkingConfigParam"
+        tool_choice:
+          $ref: "#/components/schemas/ToolChoice"
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolUnion"
+        top_k:
+          type: integer
+        top_p:
+          type: number
+          format: float
+
+    # =========================================================================
+    # 响应版 Content 14 变体
+    # =========================================================================
+    TextBlock:
+      type: object
+      required: [citations, text, type]
+      properties:
+        citations:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/TextCitation"
+        text: { type: string }
+        type:
+          type: string
+          enum: [text]
+
+    ThinkingBlock:
+      type: object
+      required: [signature, thinking, type]
+      properties:
+        signature: { type: string }
+        thinking: { type: string }
+        type:
+          type: string
+          enum: [thinking]
+
+    RedactedThinkingBlock:
+      type: object
+      required: [data, type]
+      properties:
+        data: { type: string }
+        type:
+          type: string
+          enum: [redacted_thinking]
+
+    ToolUseBlock:
+      type: object
+      required: [id, input, name, type]
+      properties:
+        id: { type: string }
+        caller:
+          $ref: "#/components/schemas/Caller"
+        input:
+          type: object
+          additionalProperties: true
+        name: { type: string }
+        type:
+          type: string
+          enum: [tool_use]
+
+    ServerToolUseBlock:
+      type: object
+      required: [id, input, name, type]
+      properties:
+        id: { type: string }
+        caller:
+          $ref: "#/components/schemas/Caller"
+        input:
+          type: object
+          additionalProperties: true
+        name:
+          type: string
+          enum:
+            - web_search
+            - web_fetch
+            - code_execution
+            - bash_code_execution
+            - text_editor_code_execution
+            - tool_search_tool_regex
+            - tool_search_tool_bm25
+        type:
+          type: string
+          enum: [server_tool_use]
+
+    WebSearchResultBlock:
+      type: object
+      required: [encrypted_content, page_age, title, type, url]
+      properties:
+        encrypted_content: { type: string }
+        page_age:
+          type: string
+          nullable: true
+        title: { type: string }
+        type:
+          type: string
+          enum: [web_search_result]
+        url: { type: string }
+
+    WebSearchToolResultError:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - max_uses_exceeded
+            - too_many_requests
+            - query_too_long
+            - request_too_large
+        type:
+          type: string
+          enum: [web_search_tool_result_error]
+
+    WebSearchToolResultBlockContent:
+      oneOf:
+        - $ref: "#/components/schemas/WebSearchToolResultError"
+        - type: array
+          items:
+            $ref: "#/components/schemas/WebSearchResultBlock"
+
+    WebSearchToolResultBlock:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        caller:
+          $ref: "#/components/schemas/Caller"
+        content:
+          $ref: "#/components/schemas/WebSearchToolResultBlockContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [web_search_tool_result]
+
+    WebFetchToolResultErrorBlock:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - url_too_long
+            - url_not_allowed
+            - url_not_accessible
+            - unsupported_content_type
+            - too_many_requests
+            - max_uses_exceeded
+            - unavailable
+        type:
+          type: string
+          enum: [web_fetch_tool_result_error]
+
+    DocumentBlock:
+      type: object
+      required: [citations, source, title, type]
+      properties:
+        citations:
+          $ref: "#/components/schemas/CitationsConfig"
+        source:
+          $ref: "#/components/schemas/WebFetchDocumentSource"
+        title: { type: string }
+        type:
+          type: string
+          enum: [document]
+
+    WebFetchBlock:
+      type: object
+      required: [content, retrieved_at, type, url]
+      properties:
+        content:
+          $ref: "#/components/schemas/DocumentBlock"
+        retrieved_at: { type: string }
+        type:
+          type: string
+          enum: [web_fetch_result]
+        url: { type: string }
+
+    WebFetchToolResultBlockContent:
+      oneOf:
+        - $ref: "#/components/schemas/WebFetchToolResultErrorBlock"
+        - $ref: "#/components/schemas/WebFetchBlock"
+
+    WebFetchToolResultBlock:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        caller:
+          $ref: "#/components/schemas/Caller"
+        content:
+          $ref: "#/components/schemas/WebFetchToolResultBlockContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [web_fetch_tool_result]
+
+    CodeExecutionOutputBlock:
+      type: object
+      required: [file_id, type]
+      properties:
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [code_execution_output]
+
+    CodeExecutionToolResultError:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+        type:
+          type: string
+          enum: [code_execution_tool_result_error]
+
+    CodeExecutionResultBlock:
+      type: object
+      required: [content, return_code, stderr, stdout, type]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeExecutionOutputBlock"
+        return_code: { type: integer }
+        stderr: { type: string }
+        stdout: { type: string }
+        type:
+          type: string
+          enum: [code_execution_result]
+
+    EncryptedCodeExecutionResultBlock:
+      type: object
+      required: [content, encrypted_stdout, return_code, stderr, type]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeExecutionOutputBlock"
+        encrypted_stdout: { type: string }
+        return_code: { type: integer }
+        stderr: { type: string }
+        type:
+          type: string
+          enum: [encrypted_code_execution_result]
+
+    CodeExecutionToolResultBlockContent:
+      oneOf:
+        - $ref: "#/components/schemas/CodeExecutionToolResultError"
+        - $ref: "#/components/schemas/CodeExecutionResultBlock"
+        - $ref: "#/components/schemas/EncryptedCodeExecutionResultBlock"
+
+    CodeExecutionToolResultBlock:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/CodeExecutionToolResultBlockContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [code_execution_tool_result]
+
+    BashCodeExecutionOutputBlock:
+      type: object
+      required: [file_id, type]
+      properties:
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [bash_code_execution_output]
+
+    BashCodeExecutionToolResultError:
+      type: object
+      required: [error_code, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+            - output_file_too_large
+        type:
+          type: string
+          enum: [bash_code_execution_tool_result_error]
+
+    BashCodeExecutionResultBlock:
+      type: object
+      required: [content, return_code, stderr, stdout, type]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/BashCodeExecutionOutputBlock"
+        return_code: { type: integer }
+        stderr: { type: string }
+        stdout: { type: string }
+        type:
+          type: string
+          enum: [bash_code_execution_result]
+
+    BashCodeExecutionToolResultBlockContent:
+      oneOf:
+        - $ref: "#/components/schemas/BashCodeExecutionToolResultError"
+        - $ref: "#/components/schemas/BashCodeExecutionResultBlock"
+
+    BashCodeExecutionToolResultBlock:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/BashCodeExecutionToolResultBlockContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [bash_code_execution_tool_result]
+
+    TextEditorCodeExecutionToolResultError:
+      type: object
+      required: [error_code, error_message, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+            - file_not_found
+        error_message: { type: string }
+        type:
+          type: string
+          enum: [text_editor_code_execution_tool_result_error]
+
+    TextEditorCodeExecutionViewResultBlock:
+      type: object
+      required: [content, file_type, num_lines, start_line, total_lines, type]
+      properties:
+        content: { type: string }
+        file_type:
+          type: string
+          enum: [text, image, pdf]
+        num_lines: { type: integer }
+        start_line: { type: integer }
+        total_lines: { type: integer }
+        type:
+          type: string
+          enum: [text_editor_code_execution_view_result]
+
+    TextEditorCodeExecutionCreateResultBlock:
+      type: object
+      required: [is_file_update, type]
+      properties:
+        is_file_update:
+          type: boolean
+        type:
+          type: string
+          enum: [text_editor_code_execution_create_result]
+
+    TextEditorCodeExecutionStrReplaceResultBlock:
+      type: object
+      required: [lines, new_lines, new_start, old_lines, old_start, type]
+      properties:
+        lines:
+          type: array
+          items:
+            type: string
+        new_lines: { type: integer }
+        new_start: { type: integer }
+        old_lines: { type: integer }
+        old_start: { type: integer }
+        type:
+          type: string
+          enum: [text_editor_code_execution_str_replace_result]
+
+    TextEditorCodeExecutionToolResultBlockContent:
+      oneOf:
+        - $ref: "#/components/schemas/TextEditorCodeExecutionToolResultError"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionViewResultBlock"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionCreateResultBlock"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionStrReplaceResultBlock"
+
+    TextEditorCodeExecutionToolResultBlock:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/TextEditorCodeExecutionToolResultBlockContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [text_editor_code_execution_tool_result]
+
+    ToolReferenceBlock:
+      type: object
+      required: [tool_name, type]
+      properties:
+        tool_name: { type: string }
+        type:
+          type: string
+          enum: [tool_reference]
+
+    ToolSearchToolResultError:
+      type: object
+      required: [error_code, error_message, type]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - invalid_tool_input
+            - unavailable
+            - too_many_requests
+            - execution_time_exceeded
+        error_message: { type: string }
+        type:
+          type: string
+          enum: [tool_search_tool_result_error]
+
+    ToolSearchToolSearchResultBlock:
+      type: object
+      required: [tool_references, type]
+      properties:
+        tool_references:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolReferenceBlock"
+        type:
+          type: string
+          enum: [tool_search_tool_search_result]
+
+    ToolSearchToolResultBlockContent:
+      oneOf:
+        - $ref: "#/components/schemas/ToolSearchToolResultError"
+        - $ref: "#/components/schemas/ToolSearchToolSearchResultBlock"
+
+    ToolSearchToolResultBlock:
+      type: object
+      required: [content, tool_use_id, type]
+      properties:
+        content:
+          $ref: "#/components/schemas/ToolSearchToolResultBlockContent"
+        tool_use_id: { type: string }
+        type:
+          type: string
+          enum: [tool_search_tool_result]
+
+    ContainerUploadBlock:
+      type: object
+      required: [file_id, type]
+      properties:
+        file_id: { type: string }
+        type:
+          type: string
+          enum: [container_upload]
+
+    ContentBlock:
+      oneOf:
+        - $ref: "#/components/schemas/TextBlock"
+        - $ref: "#/components/schemas/ThinkingBlock"
+        - $ref: "#/components/schemas/RedactedThinkingBlock"
+        - $ref: "#/components/schemas/ToolUseBlock"
+        - $ref: "#/components/schemas/ServerToolUseBlock"
+        - $ref: "#/components/schemas/WebSearchToolResultBlock"
+        - $ref: "#/components/schemas/WebFetchToolResultBlock"
+        - $ref: "#/components/schemas/CodeExecutionToolResultBlock"
+        - $ref: "#/components/schemas/BashCodeExecutionToolResultBlock"
+        - $ref: "#/components/schemas/TextEditorCodeExecutionToolResultBlock"
+        - $ref: "#/components/schemas/ToolSearchToolResultBlock"
+        - $ref: "#/components/schemas/ContainerUploadBlock"
+
+    # =========================================================================
+    # Container / StopDetails / Usage / Message
+    # =========================================================================
+    Container:
+      type: object
+      required: [id, expires_at]
+      description: 代码执行容器信息（仅在用了 code execution tool 时返回）。
+      properties:
+        id: { type: string }
+        expires_at:
+          type: string
+          format: date-time
+
+    RefusalStopDetails:
+      type: object
+      required: [type]
+      description: 结构化 refusal 信息。
+      properties:
+        category:
+          type: string
+          enum: [cyber, bio]
+          nullable: true
+        explanation:
+          type: string
+          nullable: true
+        type:
+          type: string
+          enum: [refusal]
+
+    StopReason:
+      type: string
+      nullable: true
+      enum:
+        - end_turn
+        - max_tokens
+        - stop_sequence
+        - tool_use
+        - pause_turn
+        - refusal
+
+    CacheCreation:
+      type: object
+      required: [ephemeral_1h_input_tokens, ephemeral_5m_input_tokens]
+      properties:
+        ephemeral_1h_input_tokens:
+          type: integer
+        ephemeral_5m_input_tokens:
+          type: integer
+
+    ServerToolUsage:
+      type: object
+      required: [web_fetch_requests, web_search_requests]
+      properties:
+        web_fetch_requests:
+          type: integer
+        web_search_requests:
+          type: integer
+
+    Usage:
+      type: object
+      required: [input_tokens, output_tokens]
+      description: 计费/限流相关的 token 用量。
+      properties:
+        cache_creation:
+          $ref: "#/components/schemas/CacheCreation"
+          nullable: true
+        cache_creation_input_tokens:
+          type: integer
+          nullable: true
+        cache_read_input_tokens:
+          type: integer
+          nullable: true
+        inference_geo:
+          type: string
+          nullable: true
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        server_tool_use:
+          $ref: "#/components/schemas/ServerToolUsage"
+          nullable: true
+        service_tier:
+          type: string
+          enum: [standard, priority, batch]
+          nullable: true
+
+    Message:
+      type: object
+      required: [id, content, model, role, stop_reason, type, usage]
+      properties:
+        id: { type: string }
+        container:
+          $ref: "#/components/schemas/Container"
+          nullable: true
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContentBlock"
+        model:
+          $ref: "#/components/schemas/Model"
+        role:
+          type: string
+          enum: [assistant]
+        stop_details:
+          $ref: "#/components/schemas/RefusalStopDetails"
+          nullable: true
+        stop_reason:
+          $ref: "#/components/schemas/StopReason"
+        stop_sequence:
+          type: string
+          nullable: true
+        type:
+          type: string
+          enum: [message]
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    # =========================================================================
+    # SSE 事件流（8 种事件 oneOf；按 type 字段做内部 tag）
+    # =========================================================================
+    MessageStartEventMessage:
+      type: object
+      description: |
+        message_start 事件携带的 Message 体；与 /v1/messages 同步返回的
+        Message 几乎相同，但 content 总是空数组（在后续 content_block_*
+        事件里逐步填充），且 stop_reason / stop_details 为 null。usage
+        在此事件里只有 input_tokens / output_tokens 是有效的。
+      required: [id, type, role, content, model, stop_reason, stop_sequence, usage]
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [message]
+        role:
+          type: string
+          enum: [assistant]
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContentBlock"
+        model:
+          $ref: "#/components/schemas/Model"
+        stop_reason:
+          $ref: "#/components/schemas/StopReason"
+        stop_sequence:
+          type: string
+          nullable: true
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    MessageStartEvent:
+      type: object
+      required: [type, message]
+      properties:
+        type:
+          type: string
+          enum: [message_start]
+        message:
+          $ref: "#/components/schemas/MessageStartEventMessage"
+
+    ContentBlockStartEvent:
+      type: object
+      required: [type, index, content_block]
+      properties:
+        type:
+          type: string
+          enum: [content_block_start]
+        index:
+          type: integer
+        content_block:
+          $ref: "#/components/schemas/ContentBlock"
+
+    TextDelta:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          type: string
+          enum: [text_delta]
+        text:
+          type: string
+
+    InputJsonDelta:
+      type: object
+      required: [type, partial_json]
+      description: tool_use input 的 partial JSON（字符串形式逐段流出）。
+      properties:
+        type:
+          type: string
+          enum: [input_json_delta]
+        partial_json:
+          type: string
+
+    ThinkingDelta:
+      type: object
+      required: [type, thinking]
+      properties:
+        type:
+          type: string
+          enum: [thinking_delta]
+        thinking:
+          type: string
+
+    SignatureDelta:
+      type: object
+      required: [type, signature]
+      properties:
+        type:
+          type: string
+          enum: [signature_delta]
+        signature:
+          type: string
+
+    CitationsDelta:
+      type: object
+      required: [type, citation]
+      description: |
+        citation_delta 事件：每个 delta 携带一条新增的 TextCitation
+        （响应版，含 file_id），追加到对应文本块的 citations 数组。
+      properties:
+        type:
+          type: string
+          enum: [citations_delta]
+        citation:
+          $ref: "#/components/schemas/TextCitation"
+
+    ContentBlockDelta:
+      oneOf:
+        - $ref: "#/components/schemas/TextDelta"
+        - $ref: "#/components/schemas/InputJsonDelta"
+        - $ref: "#/components/schemas/ThinkingDelta"
+        - $ref: "#/components/schemas/SignatureDelta"
+        - $ref: "#/components/schemas/CitationsDelta"
+
+    ContentBlockDeltaEvent:
+      type: object
+      required: [type, index, delta]
+      properties:
+        type:
+          type: string
+          enum: [content_block_delta]
+        index:
+          type: integer
+        delta:
+          $ref: "#/components/schemas/ContentBlockDelta"
+
+    ContentBlockStopEvent:
+      type: object
+      required: [type, index]
+      properties:
+        type:
+          type: string
+          enum: [content_block_stop]
+        index:
+          type: integer
+
+    MessageDeltaUpdate:
+      type: object
+      required: [stop_reason, stop_sequence]
+      description: |
+        message_delta 事件携带的 message 顶层增量。stop_reason/sequence
+        在 turn 收尾时填充。
+      properties:
+        stop_reason:
+          $ref: "#/components/schemas/StopReason"
+        stop_sequence:
+          type: string
+          nullable: true
+        stop_details:
+          $ref: "#/components/schemas/RefusalStopDetails"
+          nullable: true
+        container:
+          $ref: "#/components/schemas/Container"
+          nullable: true
+
+    MessageDeltaUsage:
+      type: object
+      required: [output_tokens]
+      description: |
+        message_delta.usage 累积值（注意：是累积，不是增量）。其它
+        字段（cache_*、server_tool_use 等）在收尾时也可能填充。
+      properties:
+        cache_creation:
+          $ref: "#/components/schemas/CacheCreation"
+          nullable: true
+        cache_creation_input_tokens:
+          type: integer
+          nullable: true
+        cache_read_input_tokens:
+          type: integer
+          nullable: true
+        input_tokens:
+          type: integer
+          nullable: true
+        output_tokens:
+          type: integer
+        server_tool_use:
+          $ref: "#/components/schemas/ServerToolUsage"
+          nullable: true
+        service_tier:
+          type: string
+          enum: [standard, priority, batch]
+          nullable: true
+
+    MessageDeltaEvent:
+      type: object
+      required: [type, delta, usage]
+      properties:
+        type:
+          type: string
+          enum: [message_delta]
+        delta:
+          $ref: "#/components/schemas/MessageDeltaUpdate"
+        usage:
+          $ref: "#/components/schemas/MessageDeltaUsage"
+
+    MessageStopEvent:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [message_stop]
+
+    PingEvent:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [ping]
+
+    StreamErrorPayload:
+      type: object
+      required: [type, message]
+      properties:
+        type:
+          type: string
+          description: |
+            常见值：overloaded_error / api_error / invalid_request_error。
+        message:
+          type: string
+
+    ErrorEvent:
+      type: object
+      required: [type, error]
+      properties:
+        type:
+          type: string
+          enum: [error]
+        error:
+          $ref: "#/components/schemas/StreamErrorPayload"
+
+    MessageStreamEvent:
+      description: |
+        Anthropic SSE 流的单个事件载荷（去掉 SSE 框架后的 JSON）。所有
+        变体共享 `type` 字段做 discriminator。客户端必须能容忍未知
+        type（按 versioning policy，未来会新增）。
+      oneOf:
+        - $ref: "#/components/schemas/MessageStartEvent"
+        - $ref: "#/components/schemas/ContentBlockStartEvent"
+        - $ref: "#/components/schemas/ContentBlockDeltaEvent"
+        - $ref: "#/components/schemas/ContentBlockStopEvent"
+        - $ref: "#/components/schemas/MessageDeltaEvent"
+        - $ref: "#/components/schemas/MessageStopEvent"
+        - $ref: "#/components/schemas/PingEvent"
+        - $ref: "#/components/schemas/ErrorEvent"
 
 security:
   - ApiKeyAuth: []
@@ -136,6 +2573,80 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/messages:
+    post:
+      operationId: createMessage
+      summary: Create a Message
+      description: |
+        发送一组 user/assistant 消息，让模型生成下一条消息。当 `stream=false`
+        时同步返回完整 `Message`；`stream=true` 时返回 SSE 流（按 8 类
+        事件序列拼出最终 Message）。客户端通过 `Accept` 头 (`application/json`
+        vs `text/event-stream`) 选择 200 响应分支——见 `Request::with_accept`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMessageParams"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/MessageStreamEvent"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Request too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "529":
+          description: Overloaded
           content:
             application/json:
               schema:
