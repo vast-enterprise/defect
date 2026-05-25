@@ -10,12 +10,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use agent_client_protocol::schema::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion,
-    SessionNotification, SessionUpdate, StopReason as AcpStopReason, TextContent,
+    ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    ProtocolVersion, SessionNotification, SessionUpdate, StopReason as AcpStopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectTo, Role};
 use defect_acp::{EchoProvider, serve_on};
 use defect_agent::session::{AgentCore, DefaultAgentCore, TurnConfig};
+use defect_storage::StorageObserver;
 
 /// `Channel` 实现的是 `ConnectTo<R>` for 任意 R，但 `serve_on` 需要
 /// `T: ConnectTo<Agent>`。这里的 wrapper 仅是显式声明 role，方便类型推导。
@@ -146,4 +147,90 @@ async fn echo_round_trip() {
         assistant_text.contains(prompt_text),
         "echo response should include user's prompt; got {assistant_text:?}; updates {updates:?}",
     );
+}
+
+#[tokio::test]
+async fn load_session_round_trip() {
+    let provider = Arc::new(EchoProvider::new());
+    let config = TurnConfig {
+        model: "echo".to_string(),
+        ..TurnConfig::default()
+    };
+    let sessions_dir = tempfile::tempdir().expect("tempdir");
+    let storage = Arc::new(StorageObserver::new(sessions_dir.path().to_path_buf()));
+    let agent_core = DefaultAgentCore::builder()
+        .provider(provider)
+        .observe_session(storage.clone())
+        .session_loader(storage)
+        .config(config)
+        .build();
+    let agent_core: Arc<dyn AgentCore> = Arc::new(agent_core);
+
+    let (channel_a, channel_b) = Channel::duplex();
+    let server_handle = tokio::spawn(serve_on(
+        agent_core,
+        ChannelTransport::<Agent>::new(channel_b),
+    ));
+
+    let cwd = std::env::current_dir().expect("cwd available");
+    let prompt_text = "resume me";
+
+    let client_result = Client
+        .builder()
+        .name("load-session-client")
+        .connect_with(
+            ChannelTransport::<Client>::new(channel_a),
+            async move |cx| {
+                let init = cx
+                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .block_task()
+                    .await?;
+                assert!(
+                    init.agent_capabilities.load_session,
+                    "agent should advertise load_session capability"
+                );
+
+                let new_session = cx
+                    .send_request(NewSessionRequest::new(cwd.clone()))
+                    .block_task()
+                    .await?;
+
+                let first = cx
+                    .send_request(PromptRequest::new(
+                        new_session.session_id.clone(),
+                        vec![ContentBlock::Text(TextContent::new(
+                            prompt_text.to_string(),
+                        ))],
+                    ))
+                    .block_task()
+                    .await?;
+                assert_eq!(first.stop_reason, AcpStopReason::EndTurn);
+
+                cx.send_request(LoadSessionRequest::new(
+                    new_session.session_id.clone(),
+                    cwd.clone(),
+                ))
+                .block_task()
+                .await?;
+
+                let second = cx
+                    .send_request(PromptRequest::new(
+                        new_session.session_id,
+                        vec![ContentBlock::Text(TextContent::new(
+                            "after load".to_string(),
+                        ))],
+                    ))
+                    .block_task()
+                    .await?;
+
+                Ok(second.stop_reason)
+            },
+        )
+        .await
+        .expect("client connection completed");
+
+    assert_eq!(client_result, AcpStopReason::EndTurn);
+
+    server_handle.abort();
+    let _ = server_handle.await;
 }

@@ -534,6 +534,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "defect-agent",
+ "defect-storage",
  "defect-tools",
  "futures",
  "serde_json",

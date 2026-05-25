@@ -9,9 +9,9 @@ use std::sync::{Arc, RwLock};
 
 use agent_client_protocol::schema::{
     AgentCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities,
-    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    StopReason as AcpStopReason,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionId, StopReason as AcpStopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
@@ -71,6 +71,9 @@ pub enum AcpError {
     #[error("create_session failed: {0}")]
     CreateSession(#[source] AgentError),
 
+    #[error("load_session failed: {0}")]
+    LoadSession(#[source] AgentError),
+
     /// `session/prompt` 跑 turn 时失败（重试用尽的 provider 错误 / 主循环
     /// invariant 被破坏）。
     #[error("turn failed: {0}")]
@@ -115,6 +118,13 @@ impl AcpError {
                 // 全埋在 `data` 里，导致用户只看见 "RUNTIME: Internal error"。
                 Wire::new(ErrorCode::InternalError.into(), err.to_string()).data(json!({
                     "kind": "create_session_failed",
+                    "message": err.to_string(),
+                }))
+            }
+
+            AcpError::LoadSession(err) => {
+                Wire::new(ErrorCode::InternalError.into(), err.to_string()).data(json!({
+                    "kind": "load_session_failed",
                     "message": err.to_string(),
                 }))
             }
@@ -206,6 +216,7 @@ where
 {
     let agent_init = agent.clone();
     let agent_session_new = agent.clone();
+    let agent_session_load = agent.clone();
     let agent_prompt = agent.clone();
     let agent_cancel = agent.clone();
 
@@ -235,7 +246,7 @@ where
                 let _ = &agent_init;
                 responder.respond(
                     InitializeResponse::new(req.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new()),
+                        .agent_capabilities(AgentCapabilities::new().load_session(true)),
                 )
             },
             agent_client_protocol::on_receive_request!(),
@@ -280,6 +291,47 @@ where
                         Err(err) => {
                             let acp_err = AcpError::CreateSession(err);
                             tracing::warn!(error = %acp_err, "create_session failed");
+                            responder.respond_with_error(acp_err.into_wire_error())
+                        }
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let agent = agent_session_load.clone();
+                let fs_mode = fs_mode_new.clone();
+                async move |req: LoadSessionRequest, responder, cx: ConnectionTo<Client>| {
+                    let agent = agent.clone();
+                    let session_id = req.session_id.clone();
+                    let cwd_for_log = req.cwd.clone();
+                    let mode = fs_mode.read().map(|g| *g).unwrap_or(FsMode::Local);
+                    let fs: Arc<dyn FsBackend> = match mode {
+                        FsMode::Delegated => Arc::new(AcpFsBackend::new(
+                            cx.clone(),
+                            session_id.clone(),
+                            req.cwd.clone(),
+                        )),
+                        FsMode::Local => Arc::new(LocalFsBackend::new(req.cwd.clone())),
+                    };
+                    match agent.load_session(session_id.clone(), fs).await {
+                        Ok(session) => {
+                            tracing::info!(
+                                session_id = %short_session_id(session.id()),
+                                cwd = %cwd_for_log.display(),
+                                "session loaded"
+                            );
+                            responder.respond(LoadSessionResponse::new())
+                        }
+                        Err(err) => {
+                            let acp_err = match err {
+                                AgentError::SessionNotFound(id) => AcpError::SessionNotFound {
+                                    session_id: id.0.to_string(),
+                                },
+                                other => AcpError::LoadSession(other),
+                            };
+                            tracing::warn!(error = %acp_err, "load_session failed");
                             responder.respond_with_error(acp_err.into_wire_error())
                         }
                     }
