@@ -102,20 +102,21 @@ ToolCallUpdateFields {
             ▼                   ▼                   ▼
        stdout chunks       stderr chunks       wait_with_status
             │                   │                   │
-            └────────► merge by-line buffer ◄───────┘
-                                │  flush every 50ms or on newline
+            └────────► merge into one accumulator ◄─┘
+                                │   (cap at 1 MiB; overflow tracked)
                                 ▼
-                    ToolEvent::Progress({ content: Terminal(...) })
-                                │
             ┌───────────── child exited / cancel / timeout ─────────────┐
             ▼                            ▼                              ▼
         exit==0                       exit!=0                       cancelled
             │                            │                              │
             ▼                            ▼                              ▼
    ToolEvent::Completed         ToolEvent::Completed              ToolEvent::Failed(
-   ({ content: Terminal,        ({ content: Terminal,                ToolError::Canceled
-     raw_output: { exit:0 } })    raw_output: { exit:N } })          )
+   ({ content: Text(buf),       ({ content: Text(buf+               ToolError::Canceled
+     raw_output: { exit:0 } })    "\n[exit code: N]"),               )
+                                  raw_output: { exit:N } })
 ```
+
+v0 只发**一帧** `Completed`（不发中间 `Progress`），原因见 §4.2。`Failed(Canceled)` 也是终态唯一帧。
 
 ### 4.1 进程生成
 
@@ -144,13 +145,15 @@ cmd.current_dir(&workdir)
 
 ### 4.2 输出捕获策略
 
-**stdout / stderr 合并成一条文本流**，按 ACP `ToolCallContent::Terminal` 推送。理由：
+**stdout / stderr 合并成一条文本流**，按 ACP `ToolCallContent::Content(Content::new(text))` 推送（即标准的 `ContentBlock::Text`）。**不用** `ToolCallContent::Terminal`——后者是 ACP `terminal/create` 反向请求建出来的"持久终端"，agent 要先跟客户端协商出 `TerminalId` 才能引用，v0 没接 terminal 协议。等 `terminal` 工具引入（见 §8）时再上 `Terminal` 形态。
+
+合并理由：
 
 - LLM 看到的工具输出几乎都是"shell 命令输出"心智模型——分两条流让模型很难判断时序。
-- 客户端 UI 用 ACP `terminal` 控件显示时本来就是一个滚动框；分流没有展示意义。
-- 真要分流的话 ACP 没有 `Stderr` content kind；自己造 wire 字段违背 §设计原则。
+- 客户端 UI 渲染本来就是一个滚动框；分流没有展示意义。
+- 真要分流 ACP 没有 `Stderr` content kind；自己造 wire 字段违背 §设计原则。
 
-合并算法：用 [`tokio::io::BufReader::read_until(b'\n')`] 各自读一行，扔进同一个 `mpsc::channel<TerminalChunk>`。`select!` 在 stdout/stderr/timeout/cancel 之间多路选择。
+合并算法：用 [`tokio::io::BufReader::read_until(b'\n')`] 各自读一行，扔进同一个 `mpsc::channel<Vec<u8>>`。`select!` 在 stdout/stderr/timeout/cancel 之间多路选择。
 
 **buffer 上限**：单条 bash 输出限 1 MiB（`MAX_OUTPUT_BYTES`），与 codex `exec.rs:68` 的 `DEFAULT_OUTPUT_BYTES_CAP` 同量级。超过后的字节直接 drop，最终 `Completed` content 末尾追加 `[output truncated; remaining N bytes dropped]`。理由：
 
@@ -160,7 +163,7 @@ cmd.current_dir(&workdir)
 
 **v0 不做 spill-to-disk**：opencode `shell.ts:435-596` 用双缓冲（内存留 tail、超出 spill 到 `/tmp` 临时文件、metadata 暴露文件路径），让 LLM 即便看不到全量也能 grep/tail 后半段。我们 v0 直接 drop 是为了省掉"临时文件生命周期与 turn / session 解耦"这一摊；演进项见 §8。
 
-**flush 策略**：每收到完整一行 *或* 50ms 静默期 *或* buffer 达 4 KiB，发一次 `ToolEvent::Progress`。粒度兜底，避免每个字符都打一帧。
+**v0 单发 `Completed`，不发 `Progress`**：ACP `ToolCallUpdateFields::content` 是 *replace* 语义（每次 update 整段重写），不是 append。要做"流式增量看输出"得每次 Progress 都发整段累积 buffer，对 1 MiB 量级 + 多个 Progress 帧，wire bytes 是 `O(N²)`——`yes` 这种命令直接打爆带宽。v0 选单发：跑完一次性把整段 content 装进 `Completed`。**演进项见 §8**："增量 stream"等到 ACP 给 content 加 append 语义、或我们引入 Terminal 形态。
 
 [`tokio::io::BufReader::read_until(b'\n')`]: https://docs.rs/tokio/latest/tokio/io/trait.AsyncBufReadExt.html#method.read_until
 
@@ -298,6 +301,7 @@ fn resolve_workdir(cwd: &Path, requested: Option<&str>) -> Result<PathBuf, ToolE
 - **命令解析 / 白名单**：codex 走 [`execpolicy`](../coding-reference/codex/codex-rs/execpolicy/)（Starlark + 规则集 + [`shell-command/parse_command.rs`](../coding-reference/codex/codex-rs/shell-command/src/parse_command.rs) 的 2500 行 shell 词法分析器）。我们直接用而不是自己写。届时 §2 的 `safety_hint` 改成调 execpolicy 决定 `ReadOnly` / `Mutating` / `Destructive`，每条 bash 不再无脑 Destructive。
 - **argv 模式作为更安全形态**：codex 用 `Vec<String>` 把 program 与 args 分开 spawn，从协议层规避 shell 注入。我们 v0 用 `command: String` + `sh -c` 是为 LLM 友好（一行写完 pipeline / redirect），代价是注入风险归 LLM 负责。v1+ 可以并存两个工具：`bash`（任意 shell 行）走 ask_writes、`exec`（argv 形态）走更宽松 policy。
 - **spill-to-disk 大输出**：v0 超 1 MiB 直接 drop。opencode `shell.ts:435-596` 双缓冲：内存只留 tail、超量 spill 到 `/tmp` 临时文件、metadata 暴露文件路径让 LLM 后续用 `tail` / `grep` 取。v1 实现时要把临时文件生命周期挂到 session（session 关闭一起清）。
+- **流式增量输出**：v0 一次性 `Completed`（见 §4.2）。要做"边跑边在客户端滚"必须解决 wire 形态——要么走 ACP `terminal/create` 反向请求拿 `TerminalId` 后用 `ToolCallContent::Terminal` 引用（客户端读 terminal）、要么等 ACP 给 `content` 加 append 语义。前者是 ACP 标准答案，配合 `terminal` 工具一起做。
 - **持久 shell session**：codex 的 zsh-fork backend 让多次 `bash` 调用共享 PWD / env。我们 v0 每条命令都是新 `sh -c`。需要持久态时由 LLM 自己 `cd ... && cmd` 串成一行。
 - **交互式命令**：v0 `stdin=null` 截断。要交互式（PTY、子进程问 y/n）时引入新的 `terminal` 工具，对位 ACP [`terminal/create`] 反向请求；不挤进 `bash`。
 - **后台/异步执行**：`bash` 调用必须在 turn 内同步完成。需要"后台跑构建"时引入 `background_task` 工具，对位 ACP 的长跑机制。

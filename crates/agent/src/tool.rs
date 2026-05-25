@@ -119,6 +119,15 @@ pub struct ToolContext<'a> {
     pub cancel: CancellationToken,
 }
 
+impl<'a> ToolContext<'a> {
+    /// 构造一个最小 `ToolContext`。`#[non_exhaustive]` 让外部 crate 不能直接
+    /// 用结构体字面量构造——这个构造函数是 cross-crate 唯一入口。新增字段时
+    /// 给签名加默认值或新构造函数，不破坏现有调用点。
+    pub fn new(cwd: &'a Path, cancel: CancellationToken) -> Self {
+        Self { cwd, cancel }
+    }
+}
+
 /// agent 可调用的工具。
 ///
 /// 实现者通常是无状态的（每次调用通过 `args` + [`ToolContext`] 拿到

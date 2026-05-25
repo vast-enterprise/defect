@@ -12,6 +12,7 @@ path = "src/main.rs"
 defect-acp.workspace = true
 defect-agent.workspace = true
 defect-llm.workspace = true
+defect-tools.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

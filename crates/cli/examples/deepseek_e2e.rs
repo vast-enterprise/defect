@@ -21,11 +21,22 @@ use agent_client_protocol::schema::{
 use agent_client_protocol::{Agent, Channel, Client, ConnectTo, Role};
 use defect_acp::serve_on;
 use defect_agent::llm::LlmProvider;
-use defect_agent::session::{AgentCore, DefaultAgentCore, TurnConfig};
+use defect_agent::policy::{OpenPolicy, SandboxPolicy};
+use defect_agent::session::{
+    AgentCore, DefaultAgentCore, StaticToolRegistry, ToolRegistry, TurnConfig,
+};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
+use defect_tools::BashTool;
 
-const PROMPT: &str = "Say hello in one short sentence, then stop.";
+const DEFAULT_PROMPT: &str = "Say hello in one short sentence, then stop.";
 const MODEL: &str = "deepseek-chat";
+
+fn prompt_text() -> String {
+    std::env::var("DEEPSEEK_E2E_PROMPT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_PROMPT.to_string())
+}
 
 struct ChannelTransport<R: Role> {
     inner: Channel,
@@ -68,8 +79,16 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("deepseek provider init failed: {e}"))?;
     let provider: Arc<dyn LlmProvider> = Arc::new(provider);
 
+    let tools: Arc<dyn ToolRegistry> = Arc::new(
+        StaticToolRegistry::builder()
+            .insert(Arc::new(BashTool::new()))
+            .build(),
+    );
+    // OpenPolicy 让 bash 在 e2e 里直放——这是 smoke 脚本，不测权限交互。
     let core = DefaultAgentCore::builder()
         .provider(provider)
+        .process_tools(tools)
+        .policy(Arc::new(OpenPolicy) as Arc<dyn SandboxPolicy>)
         .config(TurnConfig {
             model: MODEL.to_string(),
             ..TurnConfig::default()
@@ -96,11 +115,27 @@ async fn main() -> anyhow::Result<()> {
         .on_receive_notification(
             async move |notif: SessionNotification, _cx| {
                 // 实时把 chunk 打到 stdout，方便肉眼看流式有没有真的在出。
-                if let SessionUpdate::AgentMessageChunk(chunk) = &notif.update
-                    && let ContentBlock::Text(t) = &chunk.content
-                {
-                    print!("{}", t.text);
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                match &notif.update {
+                    SessionUpdate::AgentMessageChunk(chunk) => {
+                        if let ContentBlock::Text(t) = &chunk.content {
+                            print!("{}", t.text);
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
+                    }
+                    SessionUpdate::ToolCall(tc) => {
+                        let title = tc.title.clone();
+                        eprintln!("\n[tool start] {title}");
+                    }
+                    SessionUpdate::ToolCallUpdate(upd) => {
+                        if matches!(
+                            upd.fields.status,
+                            Some(agent_client_protocol::schema::ToolCallStatus::Completed)
+                                | Some(agent_client_protocol::schema::ToolCallStatus::Failed)
+                        ) {
+                            eprintln!("[tool end]   status={:?}", upd.fields.status);
+                        }
+                    }
+                    _ => {}
                 }
                 updates_for_handler
                     .lock()
@@ -125,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
                 let resp = cx
                     .send_request(PromptRequest::new(
                         session.session_id,
-                        vec![ContentBlock::Text(TextContent::new(PROMPT.to_string()))],
+                        vec![ContentBlock::Text(TextContent::new(prompt_text()))],
                     ))
                     .block_task()
                     .await?;

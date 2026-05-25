@@ -19,10 +19,13 @@ use std::sync::Arc;
 
 use defect_acp::EchoProvider;
 use defect_agent::llm::LlmProvider;
-use defect_agent::session::{AgentCore, DefaultAgentCore, TurnConfig};
+use defect_agent::session::{
+    AgentCore, DefaultAgentCore, StaticToolRegistry, ToolRegistry, TurnConfig,
+};
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
 use defect_llm::provider::openai::{OpenAiConfig, OpenAiProvider};
+use defect_tools::BashTool;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
@@ -66,8 +69,14 @@ async fn main() -> anyhow::Result<()> {
         model,
         ..TurnConfig::default()
     };
+    let tools: Arc<dyn ToolRegistry> = Arc::new(
+        StaticToolRegistry::builder()
+            .insert(Arc::new(BashTool::new()))
+            .build(),
+    );
     let agent = DefaultAgentCore::builder()
         .provider(provider)
+        .process_tools(tools)
         .config(config)
         .build();
     let agent: Arc<dyn AgentCore> = Arc::new(agent);
