@@ -9,6 +9,7 @@ use std::sync::Arc;
 use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
 use defect_agent::fs::FsBackend;
 use defect_agent::tool::{Tool, ToolContext, ToolError, ToolEvent};
+use defect_config::FsToolConfig;
 use futures::StreamExt;
 use serde_json::json;
 use tempfile::TempDir;
@@ -118,6 +119,25 @@ async fn case2_read_with_offset_and_limit() {
     let raw = extract_raw(&events[0]);
     assert_eq!(raw["lines_returned"], json!(2));
     assert_eq!(raw["start_line"], json!(3));
+}
+
+#[tokio::test]
+async fn read_file_uses_configured_line_limits() {
+    let h = Harness::new();
+    h.write_file("nums.txt", "1\n2\n3\n4\n");
+    let tool = ReadFileTool::from_config(&FsToolConfig {
+        read_default_limit: 2,
+        read_max_limit: 3,
+    });
+    let events = drive(tool.execute(json!({"path": "nums.txt"}), h.ctx())).await;
+    assert_eq!(events.len(), 1);
+    let text = extract_text(&events[0]);
+    assert!(text.contains("   1| 1"), "text: {text:?}");
+    assert!(text.contains("   2| 2"), "text: {text:?}");
+    assert!(!text.contains("   3| 3"), "text: {text:?}");
+    let raw = extract_raw(&events[0]);
+    assert_eq!(raw["lines_returned"], json!(2));
+    assert_eq!(raw["truncated"], json!(true));
 }
 
 #[tokio::test]

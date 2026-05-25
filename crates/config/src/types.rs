@@ -10,6 +10,10 @@ pub(crate) const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
 pub(crate) const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
 pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-chat";
 pub(crate) const DEFAULT_ECHO_MODEL: &str = "echo";
+pub(crate) const DEFAULT_BASH_TIMEOUT_MS: u64 = 30_000;
+pub(crate) const DEFAULT_BASH_MAX_TIMEOUT_MS: u64 = 600_000;
+pub(crate) const DEFAULT_FS_READ_LIMIT: u32 = 2_000;
+pub(crate) const DEFAULT_FS_READ_MAX_LIMIT: u32 = 5_000;
 
 pub(crate) const USER_CONFIG_RELATIVE: &str = "defect/config.toml";
 pub(crate) const PROJECT_CONFIG_RELATIVE: &str = ".defect/config.toml";
@@ -66,6 +70,15 @@ pub enum ConfigWarning {
         key: String,
         reason: &'static str,
     },
+    UnknownKey {
+        path: PathBuf,
+        key: String,
+    },
+    DeprecatedKey {
+        path: PathBuf,
+        old: String,
+        new: String,
+    },
 }
 
 #[non_exhaustive]
@@ -116,11 +129,18 @@ pub struct LoadedConfig {
 
 #[derive(Debug, Clone)]
 pub struct EffectiveConfig {
-    pub provider: ProviderKind,
-    pub model: String,
+    pub cli: CliConfig,
     pub turn: TurnConfig,
     pub providers: ProviderConfigs,
+    pub tools: ToolsConfig,
+    pub sandbox: SandboxConfig,
     pub tracing: TracingConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliConfig {
+    pub provider: ProviderKind,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -128,6 +148,76 @@ pub struct ProviderConfigs {
     pub anthropic: AnthropicConfigFile,
     pub openai: OpenAiConfigFile,
     pub deepseek: DeepSeekConfigFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolsConfig {
+    pub bash: BashToolConfig,
+    pub fs: FsToolConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BashToolConfig {
+    pub default_timeout_ms: u64,
+    pub max_timeout_ms: u64,
+}
+
+impl Default for BashToolConfig {
+    fn default() -> Self {
+        Self {
+            default_timeout_ms: DEFAULT_BASH_TIMEOUT_MS,
+            max_timeout_ms: DEFAULT_BASH_MAX_TIMEOUT_MS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsToolConfig {
+    pub read_default_limit: u32,
+    pub read_max_limit: u32,
+}
+
+impl Default for FsToolConfig {
+    fn default() -> Self {
+        Self {
+            read_default_limit: DEFAULT_FS_READ_LIMIT,
+            read_max_limit: DEFAULT_FS_READ_MAX_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxConfig {
+    pub mode: SandboxMode,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            mode: SandboxMode::AskWrites,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    ReadOnly,
+    #[default]
+    AskWrites,
+    Open,
+    DenyAll,
+}
+
+impl SandboxMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::AskWrites => "ask-writes",
+            Self::Open => "open",
+            Self::DenyAll => "deny-all",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -153,6 +243,12 @@ pub struct DeepSeekConfigFile {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TracingConfig {
     pub filter: Option<String>,
+    pub otlp: Option<OtlpTracingConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OtlpTracingConfig {
+    pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -163,6 +259,10 @@ pub(crate) struct ConfigToml {
     pub(crate) turn: TurnSection,
     #[serde(default)]
     pub(crate) providers: ProvidersSection,
+    #[serde(default)]
+    pub(crate) tools: ToolsSection,
+    #[serde(default)]
+    pub(crate) sandbox: SandboxSection,
     #[serde(default)]
     pub(crate) tracing: TracingSection,
 }
@@ -210,6 +310,35 @@ pub(crate) struct DeepSeekProviderSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ToolsSection {
+    pub(crate) bash: Option<BashToolSection>,
+    pub(crate) fs: Option<FsToolSection>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct BashToolSection {
+    pub(crate) default_timeout_ms: Option<u64>,
+    pub(crate) max_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct FsToolSection {
+    pub(crate) read_default_limit: Option<u32>,
+    pub(crate) read_max_limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct SandboxSection {
+    pub(crate) mode: Option<SandboxMode>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct TracingSection {
     pub(crate) filter: Option<String>,
+    pub(crate) otlp: Option<OtlpTracingSection>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct OtlpTracingSection {
+    pub(crate) endpoint: Option<String>,
 }

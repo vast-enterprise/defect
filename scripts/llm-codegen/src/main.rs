@@ -74,7 +74,7 @@ fn run() -> Result<()> {
         .collect();
 
     let selected: Vec<_> = if names.is_empty() {
-        TARGETS.iter().copied().collect()
+        TARGETS.to_vec()
     } else {
         let mut out = Vec::new();
         for n in &names {
@@ -117,9 +117,11 @@ fn generate(name: &str, oas_path: &Path, root_path: &str) -> Result<String> {
     let raw =
         fs::read_to_string(oas_path).with_context(|| format!("read {}", oas_path.display()))?;
     let spec = parse_spec(oas_path, &raw)?;
-    let mut options = BuildOptions::default();
-    options.root_path = syn::parse_str(root_path)
-        .with_context(|| format!("parse root_path {root_path:?} for {name}"))?;
+    let options = BuildOptions {
+        root_path: syn::parse_str(root_path)
+            .with_context(|| format!("parse root_path {root_path:?} for {name}"))?,
+        ..BuildOptions::default()
+    };
     let tokens =
         build_with(&spec, options).with_context(|| format!("toac_build::build_with({name})"))?;
     let parsed: syn::File =

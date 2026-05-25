@@ -16,6 +16,7 @@ use defect_agent::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolError, ToolEvent, ToolSchema,
     ToolStream,
 };
+use defect_config::FsToolConfig;
 use futures::future::BoxFuture;
 use futures::stream;
 use serde::{Deserialize, Serialize};
@@ -26,10 +27,21 @@ const MAX_LIMIT: u32 = 5000;
 
 pub struct ReadFileTool {
     schema: ToolSchema,
+    default_limit: u32,
+    max_limit: u32,
 }
 
 impl ReadFileTool {
     pub fn new() -> Self {
+        Self::from_config(&FsToolConfig {
+            read_default_limit: DEFAULT_LIMIT,
+            read_max_limit: MAX_LIMIT,
+        })
+    }
+
+    pub fn from_config(config: &FsToolConfig) -> Self {
+        let default_limit = config.read_default_limit.max(1);
+        let max_limit = config.read_max_limit.max(default_limit);
         Self {
             schema: ToolSchema {
                 name: "read_file".to_string(),
@@ -54,13 +66,17 @@ impl ReadFileTool {
                         "limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "maximum": MAX_LIMIT,
-                            "description": "Optional max number of lines to read. Defaults to 2000."
+                            "maximum": max_limit,
+                            "description": format!(
+                                "Optional max number of lines to read. Defaults to {default_limit}."
+                            )
                         }
                     },
                     "required": ["path"]
                 }),
             },
+            default_limit,
+            max_limit,
         }
     }
 }
@@ -131,7 +147,9 @@ impl Tool for ReadFileTool {
     fn execute(&self, args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream {
         let cancel = ctx.cancel.clone();
         let fs = ctx.fs.clone();
-        let fut = async move { run_read(args, cancel, fs).await };
+        let default_limit = self.default_limit;
+        let max_limit = self.max_limit;
+        let fut = async move { run_read(args, cancel, fs, default_limit, max_limit).await };
         let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> = Box::pin(stream::once(fut));
         s
     }
@@ -141,13 +159,15 @@ async fn run_read(
     args: serde_json::Value,
     cancel: tokio_util::sync::CancellationToken,
     fs: Arc<dyn FsBackend>,
+    default_limit: u32,
+    max_limit: u32,
 ) -> ToolEvent {
     let parsed: ReadArgs = match serde_json::from_value(args) {
         Ok(v) => v,
         Err(err) => return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(err))),
     };
 
-    let limit = parsed.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).max(1);
+    let limit = parsed.limit.unwrap_or(default_limit).min(max_limit).max(1);
     let offset = parsed.offset.unwrap_or(1).max(1);
 
     let path = PathBuf::from(&parsed.path);

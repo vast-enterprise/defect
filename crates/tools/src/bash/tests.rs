@@ -7,6 +7,7 @@ use std::time::Duration;
 use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
 use defect_agent::fs::FsBackend;
 use defect_agent::tool::{SafetyClass, Tool, ToolContext, ToolError, ToolEvent};
+use defect_config::BashToolConfig;
 use futures::StreamExt;
 use serde_json::json;
 use tempfile::tempdir;
@@ -58,6 +59,20 @@ fn schema_smoke() {
     assert!(tool.schema().description.contains("shell command"));
     let safety = tool.safety_hint(&json!({"command": "ls"}));
     assert!(matches!(safety, SafetyClass::Destructive));
+}
+
+#[tokio::test]
+async fn uses_configured_timeout_limits() {
+    let dir = tempdir().unwrap();
+    let tool = BashTool::from_config(&BashToolConfig {
+        default_timeout_ms: 10,
+        max_timeout_ms: 10,
+    });
+    let ctx = ctx_with(dir.path(), CancellationToken::new());
+    let events = drive(tool.execute(json!({"command": "sleep 1"}), ctx)).await;
+    assert_eq!(events.len(), 1);
+    let raw = extract_raw(&events[0]);
+    assert_eq!(raw["timed_out"], json!(true));
 }
 
 #[tokio::test]

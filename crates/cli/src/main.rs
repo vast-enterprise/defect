@@ -14,19 +14,20 @@
 //! `DEEPSEEK_API_KEY` 读取。
 
 use std::env;
-use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
 use clap::{Parser, ValueEnum};
 use defect_acp::EchoProvider;
 use defect_agent::llm::LlmProvider;
+use defect_agent::policy::{
+    AskWritesPolicy, DenyAllPolicy, OpenPolicy, ReadOnlyPolicy, SandboxPolicy,
+};
 use defect_agent::session::{
     AgentCore, DefaultAgentCore, StaticToolRegistry, ToolRegistry, TurnConfig,
 };
 use defect_config::{
-    CliOverrides, LoadConfigOptions, LoadedConfig, ProviderKind as ConfigProviderKind,
-    parse_cli_override,
+    CliOverrides, LoadConfigOptions, LoadedConfig, ProviderKind as ConfigProviderKind, SandboxMode,
+    load_dotenv_compat, parse_cli_override,
 };
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
@@ -36,13 +37,12 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // .env 必须在 tracing_subscriber init 前加载——否则 RUST_LOG 这类 env 不生效。
-    // 已在进程 env 里的同名变量优先（user-set wins），避免文件覆盖 shell 显式覆盖。
-    load_env_file(Path::new(".env"));
+    let cwd = env::current_dir()?;
+    load_dotenv_compat(&cwd).map_err(|e| anyhow::anyhow!("dotenv load failed: {e}"))?;
 
     let cli = CliArgs::parse();
     let config = defect_config::load_config(LoadConfigOptions {
-        cwd: env::current_dir()?,
+        cwd,
         cli: cli.to_overrides()?,
         ..LoadConfigOptions::default()
     })
@@ -63,8 +63,12 @@ async fn main() -> anyhow::Result<()> {
 
     let tools: Arc<dyn ToolRegistry> = Arc::new(
         StaticToolRegistry::builder()
-            .insert(Arc::new(BashTool::new()))
-            .insert(Arc::new(ReadFileTool::new()))
+            .insert(Arc::new(BashTool::from_config(
+                &config.effective.tools.bash,
+            )))
+            .insert(Arc::new(ReadFileTool::from_config(
+                &config.effective.tools.fs,
+            )))
             .insert(Arc::new(WriteFileTool::new()))
             .insert(Arc::new(EditFileTool::new()))
             .build(),
@@ -72,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
     let agent = DefaultAgentCore::builder()
         .provider(provider)
         .process_tools(tools)
+        .policy(build_policy(config.effective.sandbox.mode))
         .config(turn_config)
         .build();
     let agent: Arc<dyn AgentCore> = Arc::new(agent);
@@ -127,7 +132,7 @@ impl CliArgs {
 }
 
 fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>, TurnConfig)> {
-    let provider: Arc<dyn LlmProvider> = match config.effective.provider {
+    let provider: Arc<dyn LlmProvider> = match config.effective.cli.provider {
         ConfigProviderKind::Echo => Arc::new(EchoProvider::new()) as Arc<dyn LlmProvider>,
         ConfigProviderKind::Anthropic => Arc::new(
             AnthropicProvider::new(AnthropicConfig {
@@ -158,6 +163,15 @@ fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>
     Ok((provider, config.effective.turn.clone()))
 }
 
+fn build_policy(mode: SandboxMode) -> Arc<dyn SandboxPolicy> {
+    match mode {
+        SandboxMode::ReadOnly => Arc::new(ReadOnlyPolicy),
+        SandboxMode::AskWrites => Arc::new(AskWritesPolicy::new()),
+        SandboxMode::Open => Arc::new(OpenPolicy),
+        SandboxMode::DenyAll => Arc::new(DenyAllPolicy),
+    }
+}
+
 impl From<ProviderKind> for ConfigProviderKind {
     fn from(value: ProviderKind) -> Self {
         match value {
@@ -182,56 +196,40 @@ fn init_tracing(filter: Option<&str>) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("tracing init failed: {e}"))
 }
 
-/// 极简 `.env` 加载器：`KEY=VALUE` 一行一条，`#` 开头注释、空行跳过；
-/// 支持外层 `"..."` / `'...'` 包裹去除。**已在进程 env 里的变量保留原值**，
-/// 避免 .env 覆盖 shell 显式 export。读不到文件 / 解析失败仅 warn。
-fn load_env_file(path: &Path) {
-    let raw = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
-        Err(err) => {
-            eprintln!("warning: failed to read {}: {err}", path.display());
-            return;
-        }
-    };
+#[cfg(test)]
+mod tests {
+    use super::build_policy;
 
-    for (lineno, line) in raw.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            eprintln!(
-                "warning: {}:{} skipped: missing '=' in {line:?}",
-                path.display(),
-                lineno + 1
-            );
-            continue;
-        };
-        let key = key.trim();
-        let value = strip_quotes(value.trim());
-        if key.is_empty() {
-            continue;
-        }
-        // 已显式 set 的不动；空字符串视作 unset。
-        if env::var_os(key).is_some() {
-            continue;
-        }
-        // SAFETY: 进入 main 前未起任何 spawn / signal handler，单线程读 env 安全。
-        unsafe {
-            env::set_var(key, value);
-        }
-    }
-}
+    use defect_agent::policy::{PolicyCtx, PolicyDecision};
+    use defect_agent::tool::SafetyClass;
+    use defect_config::SandboxMode;
+    use serde_json::json;
 
-fn strip_quotes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return &s[1..s.len() - 1];
-        }
+    #[test]
+    fn read_only_policy_denies_mutating_tools() {
+        let policy = build_policy(SandboxMode::ReadOnly);
+        let args = json!({});
+        let cwd = std::path::Path::new("/");
+
+        let decision = policy.classify(PolicyCtx::new(
+            "write_file",
+            SafetyClass::Mutating,
+            &args,
+            cwd,
+        ));
+
+        assert!(matches!(decision, PolicyDecision::Deny));
     }
-    s
+
+    #[test]
+    fn open_policy_allows_destructive_tools() {
+        let policy = build_policy(SandboxMode::Open);
+        let args = json!({});
+        let cwd = std::path::Path::new("/");
+
+        let decision =
+            policy.classify(PolicyCtx::new("bash", SafetyClass::Destructive, &args, cwd));
+
+        assert!(matches!(decision, PolicyDecision::Allow));
+    }
 }

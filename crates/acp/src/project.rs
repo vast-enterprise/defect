@@ -14,6 +14,7 @@ use defect_agent::event::AgentEvent;
 use defect_agent::policy::PolicyDecision;
 
 /// 一次投影的产物。
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Projection {
     /// 普通 `session/update` 通知。
     Update(SessionNotification),

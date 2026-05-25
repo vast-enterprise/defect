@@ -17,6 +17,7 @@ use defect_agent::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolError, ToolEvent, ToolSchema,
     ToolStream,
 };
+use defect_config::BashToolConfig;
 use futures::future::BoxFuture;
 use futures::stream;
 use serde::{Deserialize, Serialize};
@@ -32,17 +33,29 @@ const TITLE_TRUNC: usize = 80;
 /// v0 内置 bash 工具。无内部状态——单例 `Arc::new(BashTool::new())` 即可。
 pub struct BashTool {
     schema: ToolSchema,
+    default_timeout_ms: u64,
+    max_timeout_ms: u64,
 }
 
 impl BashTool {
     pub fn new() -> Self {
+        Self::from_config(&BashToolConfig {
+            default_timeout_ms: DEFAULT_TIMEOUT_MS,
+            max_timeout_ms: MAX_TIMEOUT_MS,
+        })
+    }
+
+    pub fn from_config(config: &BashToolConfig) -> Self {
+        let default_timeout_ms = config.default_timeout_ms.max(1);
+        let max_timeout_ms = config.max_timeout_ms.max(default_timeout_ms);
         Self {
             schema: ToolSchema {
                 name: "bash".to_string(),
-                description: "Run a non-interactive shell command. \
-                              Captures stdout and stderr (merged); returns combined output and \
-                              exit code. Times out after `timeout_ms` (default 30000; max 600000)."
-                    .to_string(),
+                description: format!(
+                    "Run a non-interactive shell command. \
+                     Captures stdout and stderr (merged); returns combined output and \
+                     exit code. Times out after `timeout_ms` (default {default_timeout_ms}; max {max_timeout_ms})."
+                ),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -57,13 +70,17 @@ impl BashTool {
                         "timeout_ms": {
                             "type": "integer",
                             "minimum": 1,
-                            "maximum": MAX_TIMEOUT_MS,
-                            "description": "Per-call timeout in milliseconds. Defaults to 30000."
+                            "maximum": max_timeout_ms,
+                            "description": format!(
+                                "Per-call timeout in milliseconds. Defaults to {default_timeout_ms}."
+                            )
                         }
                     },
                     "required": ["command"]
                 }),
             },
+            default_timeout_ms,
+            max_timeout_ms,
         }
     }
 }
@@ -137,7 +154,10 @@ impl Tool for BashTool {
     fn execute(&self, args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream {
         let cwd = ctx.cwd.to_path_buf();
         let cancel = ctx.cancel.clone();
-        let fut = async move { run_bash(args, cwd, cancel).await };
+        let default_timeout_ms = self.default_timeout_ms;
+        let max_timeout_ms = self.max_timeout_ms;
+        let fut =
+            async move { run_bash(args, cwd, cancel, default_timeout_ms, max_timeout_ms).await };
         let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> = Box::pin(stream::once(fut));
         s
     }
@@ -149,6 +169,8 @@ async fn run_bash(
     args: serde_json::Value,
     session_cwd: PathBuf,
     cancel: tokio_util::sync::CancellationToken,
+    default_timeout_ms: u64,
+    max_timeout_ms: u64,
 ) -> ToolEvent {
     let parsed: BashArgs = match serde_json::from_value(args) {
         Ok(v) => v,
@@ -157,8 +179,8 @@ async fn run_bash(
 
     let timeout = parsed
         .timeout_ms
-        .unwrap_or(DEFAULT_TIMEOUT_MS)
-        .min(MAX_TIMEOUT_MS);
+        .unwrap_or(default_timeout_ms)
+        .min(max_timeout_ms);
     if timeout == 0 {
         return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -254,10 +276,7 @@ async fn run_bash(
 
     // 取消 / 超时 / 流提前关闭都可能在这里 child 还没 wait——补一下。
     if wait_status.is_none() {
-        wait_status = match child.wait().await {
-            Ok(s) => Some(s),
-            Err(_) => None,
-        };
+        wait_status = child.wait().await.ok();
     }
 
     let duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;

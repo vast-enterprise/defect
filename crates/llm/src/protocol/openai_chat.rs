@@ -612,21 +612,22 @@ fn handle_chunk(
         if let Some(rc) = raw_delta
             .and_then(|d| d.get("reasoning_content"))
             .and_then(|v| v.as_str())
+            && !rc.is_empty()
         {
-            if !rc.is_empty() {
-                buf.push(Ok(ProviderChunk::ThinkingDelta {
-                    text: rc.to_owned(),
-                }));
-            }
+            buf.push(Ok(ProviderChunk::ThinkingDelta {
+                text: rc.to_owned(),
+            }));
         }
 
         // 文本增量。
-        if let Some(content) = &delta.content {
-            if let wire::ChatCompletionStreamResponseDeltaContent::ChatCompletionStreamResponseDeltaContentVariant0(s) = content {
-                if !s.is_empty() {
-                    buf.push(Ok(ProviderChunk::TextDelta { text: s.clone() }));
-                }
-            }
+        if let Some(
+            wire::ChatCompletionStreamResponseDeltaContent::ChatCompletionStreamResponseDeltaContentVariant0(
+                s,
+            ),
+        ) = &delta.content
+            && !s.is_empty()
+        {
+            buf.push(Ok(ProviderChunk::TextDelta { text: s.clone() }));
         }
 
         // tool_calls：第一次出现某个 index 带 id+name → ToolUseStart；
@@ -640,12 +641,14 @@ fn handle_chunk(
         // refusal：OpenAI 用 delta.refusal 表达安全拒绝。我们当 TextDelta
         // 处理（带可识别的前缀），最终 finish_reason=content_filter 时再
         // 通过 Stop 把语义往上传。
-        if let Some(refusal) = &delta.refusal {
-            if let wire::ChatCompletionStreamResponseDeltaRefusal::ChatCompletionStreamResponseDeltaRefusalVariant0(s) = refusal {
-                if !s.is_empty() {
-                    buf.push(Ok(ProviderChunk::TextDelta { text: s.clone() }));
-                }
-            }
+        if let Some(
+            wire::ChatCompletionStreamResponseDeltaRefusal::ChatCompletionStreamResponseDeltaRefusalVariant0(
+                s,
+            ),
+        ) = &delta.refusal
+            && !s.is_empty()
+        {
+            buf.push(Ok(ProviderChunk::TextDelta { text: s.clone() }));
         }
 
         // finish_reason 是必填字段（OAS 上无 Option）；流中绝大多数 chunk
@@ -721,17 +724,15 @@ fn handle_tool_call_chunk(
         out.push(Ok(ProviderChunk::ToolUseStart { id, name }));
     }
 
-    if let Some(func) = &tc.function {
-        if let Some(args) = &func.arguments {
-            if !args.is_empty() {
-                if let Some(tool) = state.tool_calls.get(&idx) {
-                    out.push(Ok(ProviderChunk::ToolUseArgsDelta {
-                        id: tool.id.clone(),
-                        fragment: args.clone(),
-                    }));
-                }
-            }
-        }
+    if let Some(func) = &tc.function
+        && let Some(args) = &func.arguments
+        && !args.is_empty()
+        && let Some(tool) = state.tool_calls.get(&idx)
+    {
+        out.push(Ok(ProviderChunk::ToolUseArgsDelta {
+            id: tool.id.clone(),
+            fragment: args.clone(),
+        }));
     }
 }
 

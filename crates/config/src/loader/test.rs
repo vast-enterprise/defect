@@ -3,10 +3,11 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use crate::loader::load_config;
-use crate::overrides::parse_cli_override;
+use crate::loader::{dotenv_updates_from_str, load_config};
+use crate::overrides::{merge_toml_values, parse_cli_override};
 use crate::types::{
-    CliOverrides, ConfigWarning, LoadConfigOptions, PROJECT_LOCAL_CONFIG_RELATIVE, ProviderKind,
+    CliOverrides, ConfigError, ConfigWarning, LoadConfigOptions, PROJECT_LOCAL_CONFIG_RELATIVE,
+    ProviderKind,
 };
 
 fn test_options(root: &TempDir) -> LoadConfigOptions {
@@ -58,8 +59,8 @@ model = "local-model"
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
-    assert_eq!(loaded.effective.provider, ProviderKind::Echo);
-    assert_eq!(loaded.effective.model, "local-model");
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
+    assert_eq!(loaded.effective.cli.model, "local-model");
     assert_eq!(loaded.effective.turn.max_llm_retries, 5);
     assert_eq!(loaded.layers.layers.len(), 4);
 }
@@ -83,8 +84,8 @@ model = "local-model"
     opts.cli.model = Some("cli-model".into());
     let loaded = load_config(opts).expect("load config");
 
-    assert_eq!(loaded.effective.provider, ProviderKind::Anthropic);
-    assert_eq!(loaded.effective.model, "cli-model");
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Anthropic);
+    assert_eq!(loaded.effective.cli.model, "cli-model");
 }
 
 #[test]
@@ -105,7 +106,7 @@ base_url = "https://example.invalid/v1"
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
-    assert_eq!(loaded.effective.provider, ProviderKind::Echo);
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
     assert_eq!(loaded.warnings.len(), 2);
     assert!(loaded.warnings.iter().any(|warning| matches!(
         warning,
@@ -132,7 +133,7 @@ base_url = "https://example.invalid/v1"
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
-    assert_eq!(loaded.effective.provider, ProviderKind::Openai);
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Openai);
     assert_eq!(
         loaded.effective.providers.openai.base_url.as_deref(),
         Some("https://example.invalid/v1")
@@ -157,5 +158,129 @@ fn parses_dotted_cli_override_values() {
     assert_eq!(
         loaded.effective.providers.openai.base_url.as_deref(),
         Some("https://localhost:1234/v1")
+    );
+}
+
+#[test]
+fn loads_tools_and_sandbox_sections_into_effective_config() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[tools.bash]
+default_timeout_ms = 1234
+max_timeout_ms = 4321
+
+[tools.fs]
+read_default_limit = 12
+read_max_limit = 34
+
+[sandbox]
+mode = "read-only"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert_eq!(loaded.effective.tools.bash.default_timeout_ms, 1234);
+    assert_eq!(loaded.effective.tools.bash.max_timeout_ms, 4321);
+    assert_eq!(loaded.effective.tools.fs.read_default_limit, 12);
+    assert_eq!(loaded.effective.tools.fs.read_max_limit, 34);
+    assert_eq!(loaded.effective.sandbox.mode.as_str(), "read-only");
+}
+
+#[test]
+fn warns_on_unknown_keys_with_source_path() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    let config_path = tmp.path().join("xdg/defect/config.toml");
+    write(
+        &config_path,
+        r#"
+[default]
+provider = "echo"
+bogus = "value"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert!(loaded.warnings.iter().any(|warning| matches!(
+        warning,
+        ConfigWarning::UnknownKey { path, key }
+            if path == &config_path && key == "default.bogus"
+    )));
+}
+
+#[test]
+fn dotenv_updates_skip_existing_keys_and_invalid_lines() {
+    let updates =
+        dotenv_updates_from_str("A=1\n# comment\nBROKEN\nB='two'\nC = \"three\"\n", &["B"]);
+
+    assert_eq!(
+        updates,
+        vec![
+            ("A".to_string(), "1".to_string()),
+            ("C".to_string(), "three".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn parse_error_reports_source_path() {
+    let tmp = TempDir::new().expect("tmp");
+    let config_path = tmp.path().join("xdg/defect/config.toml");
+    write(
+        &config_path,
+        r#"
+[default
+provider = "echo"
+"#,
+    );
+
+    let err = load_config(test_options(&tmp)).expect_err("parse error");
+
+    match err {
+        ConfigError::Parse { path, .. } => assert_eq!(path, config_path),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn missing_config_files_do_not_error() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert_eq!(loaded.layers.layers.len(), 1);
+    assert!(loaded.warnings.is_empty());
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
+}
+
+#[test]
+fn arrays_replace_instead_of_append() {
+    let mut base = toml::from_str::<toml::Value>(
+        r#"
+items = ["user", "project"]
+"#,
+    )
+    .expect("base");
+    let overlay = toml::from_str::<toml::Value>(
+        r#"
+items = ["cli"]
+"#,
+    )
+    .expect("overlay");
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(
+        base.get("items").and_then(toml::Value::as_array),
+        Some(&vec![toml::Value::String("cli".to_string())])
     );
 }

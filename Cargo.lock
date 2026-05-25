@@ -574,6 +574,7 @@ dependencies = [
  "defect-llm",
  "defect-tools",
  "futures",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -646,6 +647,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "defect-agent",
+ "defect-config",
  "futures",
  "serde",
  "serde_json",

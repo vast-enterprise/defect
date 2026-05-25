@@ -718,10 +718,10 @@ impl TurnState {
     }
 
     fn note_progress(&mut self) {
-        if self.expand_on_progress {
-            if let Some(cap) = self.cap.as_mut() {
-                *cap = cap.saturating_add(1);
-            }
+        if self.expand_on_progress
+            && let Some(cap) = self.cap.as_mut()
+        {
+            *cap = cap.saturating_add(1);
         }
     }
 

@@ -183,10 +183,10 @@ impl SandboxPolicy for AskWritesPolicy {
         if matches!(ctx.safety_hint, SafetyClass::ReadOnly) {
             return PolicyDecision::Allow;
         }
-        if let Ok(table) = self.always_allow.lock() {
-            if table.contains(ctx.tool_name) {
-                return PolicyDecision::Allow;
-            }
+        if let Ok(table) = self.always_allow.lock()
+            && table.contains(ctx.tool_name)
+        {
+            return PolicyDecision::Allow;
         }
         PolicyDecision::Ask(default_ask_options(ctx.tool_name))
     }

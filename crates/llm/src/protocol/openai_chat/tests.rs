@@ -715,9 +715,9 @@ fn decode_finish_reason_variants_map_to_stop_reason() {
         ("content_filter", StopReason::Refusal),
     ];
     for (wire_name, expected) in cases {
-        let chunk1 = format!(
-            r#"{{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{{"index":0,"delta":{{"role":"assistant","content":""}},"finish_reason":null}}]}}"#
-        );
+        let chunk1 =
+            r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}"#
+                .to_string();
         let final_chunk = format!(
             r#"{{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{{"index":0,"delta":{{}},"finish_reason":"{wire_name}"}}]}}"#
         );

@@ -23,3 +23,4 @@ clap.workspace = true
 [dev-dependencies]
 agent-client-protocol.workspace = true
 futures.workspace = true
+serde_json.workspace = true

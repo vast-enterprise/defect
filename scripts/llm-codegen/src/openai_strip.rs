@@ -483,16 +483,16 @@ fn filter_paths(spec: &mut Mapping) -> Result<Vec<(String, Vec<String>)>> {
         // 进一步：每个保留方法里删掉 codegen 用不到的 x-* 扩展（x-oaiMeta
         // 这些含大段 example 字符串，留着只是噪音）。
         for m in *methods {
-            if let Some(op) = item_map.get_mut(Value::String((*m).into())) {
-                if let Some(op_map) = op.as_mapping_mut() {
-                    let drop: Vec<_> = op_map
-                        .iter()
-                        .filter_map(|(k, _)| k.as_str().map(str::to_owned))
-                        .filter(|k| k.starts_with("x-"))
-                        .collect();
-                    for k in drop {
-                        op_map.remove(Value::String(k));
-                    }
+            if let Some(op) = item_map.get_mut(Value::String((*m).into()))
+                && let Some(op_map) = op.as_mapping_mut()
+            {
+                let drop: Vec<_> = op_map
+                    .iter()
+                    .filter_map(|(k, _)| k.as_str().map(str::to_owned))
+                    .filter(|k| k.starts_with("x-"))
+                    .collect();
+                for k in drop {
+                    op_map.remove(Value::String(k));
                 }
             }
         }

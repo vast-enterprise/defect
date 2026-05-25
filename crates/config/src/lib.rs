@@ -7,10 +7,11 @@ mod loader;
 mod overrides;
 mod types;
 
-pub use loader::load_config;
+pub use loader::{load_config, load_dotenv_compat};
 pub use overrides::parse_cli_override;
 pub use types::{
-    AnthropicConfigFile, CliOverrides, ConfigError, ConfigLayerEntry, ConfigLayerStack,
-    ConfigSource, ConfigWarning, DeepSeekConfigFile, EffectiveConfig, LoadConfigOptions,
-    LoadedConfig, OpenAiConfigFile, ProviderConfigs, ProviderKind, TracingConfig,
+    AnthropicConfigFile, BashToolConfig, CliConfig, CliOverrides, ConfigError, ConfigLayerEntry,
+    ConfigLayerStack, ConfigSource, ConfigWarning, DeepSeekConfigFile, EffectiveConfig,
+    FsToolConfig, LoadConfigOptions, LoadedConfig, OpenAiConfigFile, OtlpTracingConfig,
+    ProviderConfigs, ProviderKind, SandboxConfig, SandboxMode, ToolsConfig, TracingConfig,
 };

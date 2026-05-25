@@ -496,14 +496,14 @@ fn handle_event(
         }
         ContentBlockStartEvent(e) => {
             let kind = block_kind_from_wire(&e.content_block);
-            if let BlockKind::ToolUse { id } = &kind {
-                if let Some((tool_id, tool_name)) = tool_use_meta(&e.content_block) {
-                    buf.push(Ok(ProviderChunk::ToolUseStart {
-                        id: tool_id.clone(),
-                        name: tool_name,
-                    }));
-                    debug_assert_eq!(id, &tool_id);
-                }
+            if let BlockKind::ToolUse { id } = &kind
+                && let Some((tool_id, tool_name)) = tool_use_meta(&e.content_block)
+            {
+                buf.push(Ok(ProviderChunk::ToolUseStart {
+                    id: tool_id.clone(),
+                    name: tool_name,
+                }));
+                debug_assert_eq!(id, &tool_id);
             }
             state.blocks.insert(e.index, kind);
         }
@@ -648,7 +648,11 @@ fn stream_error_to_provider(p: &wire::StreamErrorPayload) -> ProviderError {
             status: Some(404),
             hint: Some(p.message.clone()),
         },
-        "api_error" | _ => ProviderErrorKind::ServerError {
+        "api_error" => ProviderErrorKind::ServerError {
+            status: None,
+            hint: Some(p.message.clone()),
+        },
+        _ => ProviderErrorKind::ServerError {
             status: None,
             hint: Some(p.message.clone()),
         },
