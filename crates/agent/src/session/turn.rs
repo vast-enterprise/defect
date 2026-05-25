@@ -20,6 +20,7 @@ use futures::StreamExt;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::event::{AgentEvent, PermissionResolution};
 use crate::llm::{
@@ -243,57 +244,99 @@ impl<'a> TurnRunner<'a> {
         state: &mut TurnState,
     ) -> Result<ProviderStream, TurnError> {
         let max_attempts = self.config.max_llm_retries.saturating_add(1).max(1);
+        let vendor = self.provider.info().vendor.to_string();
         let mut attempt: u32 = 0;
         loop {
             attempt += 1;
             state.request_count = state.request_count.saturating_add(1);
-            self.events
-                .emit(AgentEvent::LlmCallStarted {
-                    model: req.model.clone(),
-                    attempt,
-                })
+            // 一次 attempt = 一个 llm_call span。span 包住"发请求 + 等响应 +
+            // 决定是否重试 + 退避 sleep"四步——失败后进入下一轮重试时
+            // 重新建 span（attempt 字段 +1），便于排障对齐每次实际请求。
+            // 注意：用 .instrument(span).await，**不要** span.enter() 然后 await
+            // ——后者会在 await 时把 entered guard 跨过 await，是 tracing
+            // 文档显式警告的 anti-pattern。
+            let span = tracing::info_span!(
+                "llm_call",
+                vendor = %vendor,
+                model = %req.model,
+                attempt,
+            );
+            let step = self
+                .call_llm_attempt(req, attempt, max_attempts)
+                .instrument(span)
                 .await;
+            match step {
+                LlmAttempt::Done(stream) => return Ok(stream),
+                LlmAttempt::Failed(err) => return Err(TurnError::Provider(err)),
+                LlmAttempt::Cancelled => return Ok(empty_stream()),
+                LlmAttempt::Retry => continue,
+            }
+        }
+    }
 
-            let res = self
-                .provider
-                .complete(req.clone(), self.cancel.clone())
-                .await;
+    /// 一次 llm 调用 attempt：发请求、emit 事件、决定下一步。
+    /// 与 [`Self::call_llm_with_retry`] 拆开是为了让 `info_span!` 通过
+    /// `.instrument(...)` 包住整段 future 而不跨 await 持 entered guard。
+    async fn call_llm_attempt(
+        &self,
+        req: &CompletionRequest,
+        attempt: u32,
+        max_attempts: u32,
+    ) -> LlmAttempt {
+        self.events
+            .emit(AgentEvent::LlmCallStarted {
+                model: req.model.clone(),
+                attempt,
+            })
+            .await;
 
-            match res {
-                Ok(stream) => {
-                    self.events
-                        .emit(AgentEvent::LlmCallFinished {
-                            model: req.model.clone(),
-                            attempt,
-                            usage: Usage::default(),
-                            error: None,
-                        })
-                        .await;
-                    return Ok(stream);
+        match self
+            .provider
+            .complete(req.clone(), self.cancel.clone())
+            .await
+        {
+            Ok(stream) => {
+                self.events
+                    .emit(AgentEvent::LlmCallFinished {
+                        model: req.model.clone(),
+                        attempt,
+                        usage: Usage::default(),
+                        error: None,
+                    })
+                    .await;
+                LlmAttempt::Done(stream)
+            }
+            Err(err) => {
+                let hint = err.retry_hint();
+                let err_text = err.to_string();
+                self.events
+                    .emit(AgentEvent::LlmCallFinished {
+                        model: req.model.clone(),
+                        attempt,
+                        usage: Usage::default(),
+                        error: Some(err_text),
+                    })
+                    .await;
+
+                if attempt >= max_attempts || matches!(hint, RetryHint::No) {
+                    tracing::warn!(error = %err, ?hint, "llm call failed permanently");
+                    return LlmAttempt::Failed(err);
                 }
-                Err(err) => {
-                    let hint = err.retry_hint();
-                    let err_text = err.to_string();
-                    self.events
-                        .emit(AgentEvent::LlmCallFinished {
-                            model: req.model.clone(),
-                            attempt,
-                            usage: Usage::default(),
-                            error: Some(err_text),
-                        })
-                        .await;
-
-                    if attempt >= max_attempts || matches!(hint, RetryHint::No) {
-                        return Err(TurnError::Provider(err));
+                if let Some(delay) = retry_delay(hint) {
+                    tracing::info!(
+                        ?hint,
+                        delay_ms = delay.as_millis() as u64,
+                        "llm call failed, retrying after delay"
+                    );
+                    tokio::select! {
+                        biased;
+                        () = self.cancel.cancelled() => return LlmAttempt::Cancelled,
+                        () = tokio::time::sleep(delay) => {}
                     }
-                    if let Some(delay) = retry_delay(hint) {
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Ok(empty_stream()),
-                            () = tokio::time::sleep(delay) => {}
-                        }
-                    }
+                } else {
+                    tracing::info!(?hint, "llm call failed, retrying immediately");
                 }
+                LlmAttempt::Retry
             }
         }
     }
@@ -550,15 +593,23 @@ impl<'a> TurnRunner<'a> {
                     let cancel = self.cancel.child_token();
                     let events = self.events.clone();
                     let cwd = self.cwd.to_path_buf();
-                    joinset.spawn(drive_tool_stream(
-                        id,
-                        tool_use_id,
-                        tool,
-                        args,
-                        cwd,
-                        cancel,
-                        events,
-                    ));
+                    let span = tracing::info_span!(
+                        "tool_call",
+                        tool = %tool.schema().name,
+                        tool_call_id = %id,
+                    );
+                    joinset.spawn(
+                        drive_tool_stream(
+                            id,
+                            tool_use_id,
+                            tool,
+                            args,
+                            cwd,
+                            cancel,
+                            events,
+                        )
+                        .instrument(span),
+                    );
                 }
                 Approved::Denied { tool_use_id } => {
                     results.push(ToolResult {
@@ -603,6 +654,14 @@ impl<'a> TurnRunner<'a> {
 }
 
 // ----- internal types -----
+
+/// 一次 LLM 调用 attempt 的结果（包给 `.instrument(span).await` 的最小分支）。
+enum LlmAttempt {
+    Done(ProviderStream),
+    Failed(crate::llm::ProviderError),
+    Cancelled,
+    Retry,
+}
 
 struct DrainOutcome {
     stop: LlmStopReason,

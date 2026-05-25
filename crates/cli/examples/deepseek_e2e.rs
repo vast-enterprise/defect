@@ -9,6 +9,8 @@
 //! cargo run -p defect-cli --example deepseek_e2e
 //! ```
 
+mod common;
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +23,6 @@ use defect_acp::serve_on;
 use defect_agent::llm::LlmProvider;
 use defect_agent::session::{AgentCore, DefaultAgentCore, TurnConfig};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
-use tracing_subscriber::EnvFilter;
 
 const PROMPT: &str = "Say hello in one short sentence, then stop.";
 const MODEL: &str = "deepseek-chat";
@@ -60,12 +61,8 @@ impl<R: Role> ConnectTo<R> for ChannelTransport<R> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    load_env_file(Path::new(".env"));
-
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with_writer(std::io::stderr)
-        .init();
+    common::load_env_file(Path::new(".env"));
+    common::init_tracing();
 
     let provider = DeepSeekProvider::new(DeepSeekConfig::from_env())
         .map_err(|e| anyhow::anyhow!("deepseek provider init failed: {e}"))?;
@@ -162,31 +159,3 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 与 `crates/cli/src/main.rs` 同款的极简 `.env` 加载器；examples 不能复用
-/// bin crate 内部 fn，所以这里写成同样的私有 helper。
-fn load_env_file(path: &Path) {
-    let raw = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
-        Err(err) => {
-            eprintln!("warning: failed to read {}: {err}", path.display());
-            return;
-        }
-    };
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            continue;
-        };
-        let k = k.trim();
-        let v = v.trim().trim_matches('"').trim_matches('\'');
-        if k.is_empty() || std::env::var_os(k).is_some() {
-            continue;
-        }
-        // SAFETY: examples 入口未起其他线程。
-        unsafe { std::env::set_var(k, v) };
-    }
-}

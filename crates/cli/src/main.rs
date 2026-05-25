@@ -41,9 +41,16 @@ async fn main() -> anyhow::Result<()> {
     load_env_file(Path::new(".env"));
 
     // 默认到 stderr——stdio ACP 占用 stdout，日志走 stderr 才不会污染线协议。
+    // `toac=warn` 默认 silence——toac wire crate 的 INFO 级 request 事件含
+    // authorization header 明文（详见 docs/outbound/tracing.md §5.2）。
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,toac=warn")),
+        )
         .with_writer(std::io::stderr)
+        .with_target(true)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
     let cli = CliArgs::parse(env::args().skip(1))?;

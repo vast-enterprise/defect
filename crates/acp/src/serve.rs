@@ -189,12 +189,21 @@ where
                 let agent = agent_session_new.clone();
                 async move |req: NewSessionRequest, responder, _cx| {
                     let agent = agent.clone();
+                    let cwd_for_log = req.cwd.clone();
                     match agent.create_session(req.cwd, req.mcp_servers).await {
                         Ok(session) => {
+                            tracing::info!(
+                                session_id = %short_session_id(session.id()),
+                                cwd = %cwd_for_log.display(),
+                                "session created"
+                            );
                             responder.respond(NewSessionResponse::new(session.id().clone()))
                         }
-                        Err(err) => responder
-                            .respond_with_error(AcpError::CreateSession(err).into_wire_error()),
+                        Err(err) => {
+                            let acp_err = AcpError::CreateSession(err);
+                            tracing::warn!(error = %acp_err, "create_session failed");
+                            responder.respond_with_error(acp_err.into_wire_error())
+                        }
                     }
                 }
             },
@@ -247,6 +256,11 @@ where
 
 /// 一次 `session/prompt` 的完整 turn：订阅事件、跑 turn、把事件投射到 wire、
 /// 在 turn 结束时 respond `PromptResponse`。
+#[tracing::instrument(
+    name = "acp_prompt_turn",
+    skip_all,
+    fields(session_id = %short_session_id(&session_id))
+)]
 async fn run_prompt_turn(
     session: Arc<dyn Session>,
     session_id: SessionId,
@@ -292,10 +306,13 @@ async fn run_prompt_turn(
                         stop_reason.get_or_insert(reason);
                     }
                     Ok(Err(err)) => {
+                        let acp_err = AcpError::Turn(err);
+                        tracing::warn!(error = %acp_err, "turn failed; responding with wire error");
                         return responder
-                            .respond_with_error(AcpError::Turn(err).into_wire_error());
+                            .respond_with_error(acp_err.into_wire_error());
                     }
                     Err(_) => {
+                        tracing::warn!("turn task dropped; responding with wire error");
                         return responder
                             .respond_with_error(AcpError::TurnDropped.into_wire_error());
                     }
@@ -320,8 +337,10 @@ async fn run_prompt_turn(
         None => match (&mut turn_rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(err)) => {
+                let acp_err = AcpError::Turn(err);
+                tracing::warn!(error = %acp_err, "turn failed; responding with wire error");
                 return responder
-                    .respond_with_error(AcpError::Turn(err).into_wire_error());
+                    .respond_with_error(acp_err.into_wire_error());
             }
             Err(_) => AcpStopReason::Cancelled,
         },
@@ -343,6 +362,15 @@ fn handle_event(
             Ok(())
         }
         Projection::EndTurn | Projection::Ignore => Ok(()),
+    }
+}
+
+/// 给 tracing span / log 用的 session id 短形：按字符取前 12 个。仅诊断用。
+fn short_session_id(id: &SessionId) -> &str {
+    let s: &str = id.0.as_ref();
+    match s.char_indices().nth(12) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
     }
 }
 

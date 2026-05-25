@@ -32,7 +32,11 @@ use serde_json::json;
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAIL: i32 = 1;
 
-/// 装好 tracing：默认 `info`，环境变量 `RUST_LOG` 覆盖。
+/// 装好 tracing：默认 `info,toac=warn`，环境变量 `RUST_LOG` 整体覆盖。
+///
+/// `toac=warn` 默认 silence——toac wire crate 的 INFO request 事件含
+/// authorization header 明文（详见 `docs/outbound/tracing.md` §5.2）。
+/// 调试 wire 时显式 `RUST_LOG=...,toac=debug`。
 ///
 /// # Panics
 ///
@@ -40,7 +44,8 @@ pub const EXIT_FAIL: i32 = 1;
 pub fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::fmt;
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,toac=warn"));
     fmt().with_env_filter(filter).with_target(true).init();
 }
 

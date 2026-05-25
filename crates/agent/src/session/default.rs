@@ -32,6 +32,7 @@ use agent_client_protocol::schema::{ContentBlock, McpServer, SessionId, StopReas
 use dashmap::DashMap;
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::event::PermissionResolution;
 use crate::llm::LlmProvider;
@@ -198,39 +199,50 @@ impl Session for DefaultSession {
         &self,
         prompt: Vec<ContentBlock>,
     ) -> BoxFuture<'_, Result<StopReason, TurnError>> {
-        Box::pin(async move {
-            let cancel = {
-                let mut slot = self
-                    .turn_state
-                    .lock()
-                    .expect("DefaultSession turn_state mutex poisoned");
-                if slot.cancel.is_some() {
-                    return Err(TurnError::TurnInProgress);
-                }
-                let cancel = CancellationToken::new();
-                slot.cancel = Some(cancel.clone());
-                cancel
-            };
+        // 整个 turn 包在一个 span 里——LLM 调用 / 工具调用 / 权限请求 都
+        // 自动挂成子 span，排障时一棵 trace 走到底。session_id 截短，避免
+        // 输出整段 uuid 噪音。详见 docs/outbound/tracing.md §2.2。
+        let span = tracing::info_span!(
+            "turn",
+            session_id = %short_id(self.id.0.as_ref()),
+            model = %self.config.model,
+        );
+        Box::pin(
+            async move {
+                let cancel = {
+                    let mut slot = self
+                        .turn_state
+                        .lock()
+                        .expect("DefaultSession turn_state mutex poisoned");
+                    if slot.cancel.is_some() {
+                        return Err(TurnError::TurnInProgress);
+                    }
+                    let cancel = CancellationToken::new();
+                    slot.cancel = Some(cancel.clone());
+                    cancel
+                };
 
-            // RAII：函数任意路径退出（含 await 内 panic）都释放 slot
-            let _guard = TurnGuard {
-                state: &self.turn_state,
-            };
+                // RAII：函数任意路径退出（含 await 内 panic）都释放 slot
+                let _guard = TurnGuard {
+                    state: &self.turn_state,
+                };
 
-            let runner = TurnRunner {
-                history: self.history.as_ref(),
-                tools: self.tools.as_ref(),
-                provider: self.provider.as_ref(),
-                policy: self.policy.as_ref(),
-                events: self.events.clone(),
-                permissions: self.permissions.as_ref(),
-                cancel,
-                config: &self.config,
-                cwd: &self.cwd,
-            };
+                let runner = TurnRunner {
+                    history: self.history.as_ref(),
+                    tools: self.tools.as_ref(),
+                    provider: self.provider.as_ref(),
+                    policy: self.policy.as_ref(),
+                    events: self.events.clone(),
+                    permissions: self.permissions.as_ref(),
+                    cancel,
+                    config: &self.config,
+                    cwd: &self.cwd,
+                };
 
-            runner.run(prompt).await
-        })
+                runner.run(prompt).await
+            }
+            .instrument(span),
+        )
     }
 
     fn cancel_turn(&self) {
@@ -262,4 +274,12 @@ fn uuid_like() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("session-{ts:x}-{n:x}")
+}
+
+/// 给 tracing span 用的 session id 短形：按字符取前 12 个。仅诊断用。
+fn short_id(s: &str) -> &str {
+    match s.char_indices().nth(12) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
 }
