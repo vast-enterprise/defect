@@ -31,7 +31,7 @@ use crate::tool::SafetyClass;
 /// 主循环不再为 [`PermissionOptionKind::AllowOnce`] / `RejectOnce` 等
 /// 推断"是不是放行"——那是 policy 的语义。
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PolicyDecision {
     /// 直接放行，不打扰用户。
@@ -44,7 +44,7 @@ pub enum PolicyDecision {
 }
 
 /// `Ask` 的选项装填载荷。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ask {
     /// 给客户端展示的选项列表。**空向量等价于 [`PolicyDecision::Deny`]**。
     pub options: Vec<AskOption>,
@@ -55,7 +55,7 @@ pub struct Ask {
 /// `kind` 是 ACP 的 UI 提示；`allows` 才是策略层面的"放行 / 拒绝"判定。
 /// 二者通常一致（`AllowOnce` / `AllowAlways` → `allows = true`），但解耦
 /// 让未来出现"AllowReadOnly"这类部分允许选项时不破坏现有形状。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AskOption {
     pub id: PermissionOptionId,
     pub name: String,
@@ -70,7 +70,7 @@ pub struct AskOption {
 /// [`AskOption`]；主循环按 `option_id` 查表后再回喂——避免 policy 二次
 /// 解析自己刚发出去的选项 id。
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordedOutcome {
     Selected {
         option_id: PermissionOptionId,

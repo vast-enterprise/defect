@@ -233,6 +233,7 @@ pub enum TurnError {
 - **session 持久化**：jsonl 持久化由 `defect-storage` 订阅事件流实现，与 Session trait 无关；resume 时由 `AgentCore` 实现回放事件流重建 `History` + `ToolRegistry`，trait 不动。
 - **session/load**：trait 上加 `load_session(id) -> Result<Arc<dyn Session>, _>`；v0 不实现。
 - **session/fork**：trait 上加 `fork_session(parent_id, ...) -> ...`；v0 不实现。
+- **rewind / 回滚改动**：先不纳入本期 session 设计。它更像独立的 workspace snapshot / patch 回放能力，后续单独设计，不和 session 持久化混在一起。
 - **远程 session**（gRPC 后的 `AgentCore` 实现）：trait 已经是 trait object，零改动。
 
 ## 9. 落地节奏

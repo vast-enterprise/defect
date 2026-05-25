@@ -32,7 +32,7 @@ use crate::policy::PolicyDecision;
 /// 事件——`defect-acp` 看到它即停止推 `session/update` 并 respond
 /// `PromptResponse`。
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     // ---------- turn 边界 ----------
@@ -116,7 +116,7 @@ pub enum AgentEvent {
 
 /// 用户对 `Ask` 的应答。
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionResolution {
     /// 用户选择了某个选项；`option_id` 由 ACP `PermissionOption` 携带。
