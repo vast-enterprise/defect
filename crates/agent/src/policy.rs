@@ -246,7 +246,12 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    fn ctx<'a>(name: &'a str, hint: SafetyClass, args: &'a serde_json::Value, cwd: &'a Path) -> PolicyCtx<'a> {
+    fn ctx<'a>(
+        name: &'a str,
+        hint: SafetyClass,
+        args: &'a serde_json::Value,
+        cwd: &'a Path,
+    ) -> PolicyCtx<'a> {
         PolicyCtx::new(name, hint, args, cwd)
     }
 
@@ -304,13 +309,14 @@ mod tests {
         let PolicyDecision::Ask(ask) = dec else {
             panic!("expected Ask, got {dec:?}");
         };
-        let ids: Vec<_> = ask.options.iter().map(|o| o.id.0.as_ref().to_string()).collect();
+        let ids: Vec<_> = ask
+            .options
+            .iter()
+            .map(|o| o.id.0.as_ref().to_string())
+            .collect();
         assert_eq!(ids, vec!["allow_once", "allow_always", "reject_once"]);
         assert_eq!(
-            ask.options
-                .iter()
-                .map(|o| o.allows)
-                .collect::<Vec<_>>(),
+            ask.options.iter().map(|o| o.allows).collect::<Vec<_>>(),
             vec![true, true, false]
         );
     }

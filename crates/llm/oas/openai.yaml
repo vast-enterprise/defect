@@ -1807,6 +1807,10 @@ components:
             - arguments
             - name
           - type: 'null'
+        reasoning_content:
+          type: string
+          nullable: true
+          description: 兼容厂商扩展（DeepSeek-v4-pro 等）：上一轮 assistant 的思考链文本，thinking 模式下必须回放给服务端。OpenAI 官方忽略此字段。
       required:
       - role
     ChatCompletionRequestAssistantMessageContentPart:

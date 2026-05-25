@@ -10,17 +10,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use agent_client_protocol::schema::SessionId;
 use agent_client_protocol::schema::{
     ContentBlock, PermissionOptionId, StopReason, TextContent, ToolCallUpdateFields,
 };
 use defect_agent::event::{AgentEvent, PermissionResolution};
+use defect_agent::fs::{FsBackend, NoopFsBackend};
 use defect_agent::llm::{
-    Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelInfo, ProviderChunk,
-    ProviderError, ProviderInfo, ProviderStream, ProtocolId, StopReason as LlmStopReason,
+    Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelInfo, ProtocolId,
+    ProviderChunk, ProviderError, ProviderInfo, ProviderStream, StopReason as LlmStopReason,
+    ThinkingEcho,
 };
 use defect_agent::policy::{AskWritesPolicy, OpenPolicy, SandboxPolicy};
 use defect_agent::session::{
-    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig,
+    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig, uuid_like,
 };
 use defect_agent::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolEvent, ToolSchema, ToolStream,
@@ -37,6 +40,7 @@ fn unsupported_caps() -> Capabilities {
         thinking: FeatureSupport::Unsupported,
         vision: FeatureSupport::Unsupported,
         prompt_cache: FeatureSupport::Unsupported,
+        thinking_echo: ThinkingEcho::Forbidden,
     }
 }
 
@@ -122,8 +126,9 @@ impl LlmProvider for ScriptedProvider {
                     }),
                 ],
             };
-            let s: Pin<Box<dyn futures::Stream<Item = Result<ProviderChunk, ProviderError>> + Send>> =
-                Box::pin(stream::iter(chunks));
+            let s: Pin<
+                Box<dyn futures::Stream<Item = Result<ProviderChunk, ProviderError>> + Send>,
+            > = Box::pin(stream::iter(chunks));
             Ok(s)
         })
     }
@@ -161,10 +166,16 @@ impl Tool for EchoTool {
         SafetyClass::ReadOnly
     }
 
-    fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
-        let mut fields = ToolCallUpdateFields::default();
-        fields.title = Some("echo".to_string());
-        ToolCallDescription { fields }
+    fn describe<'a>(
+        &'a self,
+        _args: &'a serde_json::Value,
+        _ctx: ToolContext<'a>,
+    ) -> BoxFuture<'a, ToolCallDescription> {
+        Box::pin(async {
+            let mut fields = ToolCallUpdateFields::default();
+            fields.title = Some("echo".to_string());
+            ToolCallDescription { fields }
+        })
     }
 
     fn execute(&self, args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
@@ -179,9 +190,8 @@ impl Tool for EchoTool {
                 agent_client_protocol::schema::Content::new(text),
             ),
         ]);
-        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> = Box::pin(stream::iter(
-            vec![ToolEvent::Completed(completed)],
-        ));
+        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
+            Box::pin(stream::iter(vec![ToolEvent::Completed(completed)]));
         s
     }
 }
@@ -206,7 +216,12 @@ async fn full_turn_with_one_tool_call() {
 
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
-        .create_session(cwd, vec![])
+        .create_session(
+            SessionId::new(uuid_like()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+        )
         .await
         .expect("create session");
 
@@ -292,7 +307,12 @@ async fn second_run_turn_while_first_in_flight_returns_in_progress() {
         .build();
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
-        .create_session(cwd, vec![])
+        .create_session(
+            SessionId::new(uuid_like()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+        )
         .await
         .expect("session");
 
@@ -313,7 +333,10 @@ async fn second_run_turn_while_first_in_flight_returns_in_progress() {
     // 收尾：取消 h1
     session.cancel_turn();
     let r1 = h1.await.expect("join h1");
-    assert!(matches!(r1, Ok(StopReason::Cancelled) | Ok(StopReason::EndTurn)));
+    assert!(matches!(
+        r1,
+        Ok(StopReason::Cancelled) | Ok(StopReason::EndTurn)
+    ));
 }
 
 /// 用 `AskWritesPolicy`（默认）+ Mutating 工具走 Ask 路径。
@@ -331,10 +354,16 @@ async fn ask_writes_policy_runs_after_allow_once() {
         fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
             SafetyClass::Mutating
         }
-        fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
-            let mut fields = ToolCallUpdateFields::default();
-            fields.title = Some("write".to_string());
-            ToolCallDescription { fields }
+        fn describe<'a>(
+            &'a self,
+            _args: &'a serde_json::Value,
+            _ctx: ToolContext<'a>,
+        ) -> BoxFuture<'a, ToolCallDescription> {
+            Box::pin(async {
+                let mut fields = ToolCallUpdateFields::default();
+                fields.title = Some("write".to_string());
+                ToolCallDescription { fields }
+            })
         }
         fn execute(&self, args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
             let text = args
@@ -379,7 +408,12 @@ async fn ask_writes_policy_runs_after_allow_once() {
 
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
-        .create_session(cwd, vec![])
+        .create_session(
+            SessionId::new(uuid_like()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+        )
         .await
         .expect("create session");
     let mut events = session.subscribe();
@@ -430,10 +464,16 @@ async fn ask_writes_policy_cancel_during_ask_returns_cancelled() {
         fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
             SafetyClass::Destructive
         }
-        fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
-            ToolCallDescription {
-                fields: ToolCallUpdateFields::default(),
-            }
+        fn describe<'a>(
+            &'a self,
+            _args: &'a serde_json::Value,
+            _ctx: ToolContext<'a>,
+        ) -> BoxFuture<'a, ToolCallDescription> {
+            Box::pin(async {
+                ToolCallDescription {
+                    fields: ToolCallUpdateFields::default(),
+                }
+            })
         }
         fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
             let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
@@ -465,7 +505,15 @@ async fn ask_writes_policy_cancel_during_ask_returns_cancelled() {
         .build();
 
     let cwd = std::env::current_dir().expect("cwd");
-    let session = core.create_session(cwd, vec![]).await.expect("session");
+    let session = core
+        .create_session(
+            SessionId::new(uuid_like()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+        )
+        .await
+        .expect("session");
     let mut events = session.subscribe();
 
     let s_clone: Arc<dyn Session> = session.clone();
@@ -508,10 +556,16 @@ async fn deny_during_ask_completes_cleanly() {
         fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
             SafetyClass::Destructive
         }
-        fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
-            let mut fields = ToolCallUpdateFields::default();
-            fields.title = Some("$ ls".to_string());
-            ToolCallDescription { fields }
+        fn describe<'a>(
+            &'a self,
+            _args: &'a serde_json::Value,
+            _ctx: ToolContext<'a>,
+        ) -> BoxFuture<'a, ToolCallDescription> {
+            Box::pin(async {
+                let mut fields = ToolCallUpdateFields::default();
+                fields.title = Some("$ ls".to_string());
+                ToolCallDescription { fields }
+            })
         }
         fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
             // 拒绝后不应被 execute——若被调说明决策路径出错。
@@ -544,7 +598,15 @@ async fn deny_during_ask_completes_cleanly() {
         .build();
 
     let cwd = std::env::current_dir().expect("cwd");
-    let session = core.create_session(cwd, vec![]).await.expect("session");
+    let session = core
+        .create_session(
+            SessionId::new(uuid_like()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+        )
+        .await
+        .expect("session");
     let mut events = session.subscribe();
 
     let s_clone: Arc<dyn Session> = session.clone();

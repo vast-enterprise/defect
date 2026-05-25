@@ -18,7 +18,8 @@ use std::task::{Context, Poll};
 use defect_agent::error::BoxError;
 use defect_agent::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderError,
-    ProviderErrorKind, Role, StopReason, ThinkingConfig, ToolChoice, ToolResultBody, Usage,
+    ProviderErrorKind, Role, StopReason, ThinkingConfig, ThinkingEcho, ToolChoice, ToolResultBody,
+    Usage,
 };
 use defect_agent::tool::ToolSchema;
 use futures::Stream;
@@ -53,12 +54,26 @@ use crate::wire::openai::components as wire;
 ///   `max_completion_tokens`。一律走新字段，且**不**像 Anthropic 那样
 ///   兜底默认值 —— OpenAI 不强制（不传时由模型决定）。
 pub fn encode_request(req: &CompletionRequest) -> wire::CreateChatCompletionRequest {
+    encode_request_with_echo(req, ThinkingEcho::Forbidden)
+}
+
+/// 与 [`encode_request`] 同形态，但显式接收 thinking 回放策略。
+///
+/// `echo_mode` 由 provider 层从 [`defect_agent::llm::Capabilities`] 读取
+/// 并传入：`Required` 时 assistant message 上的
+/// [`MessageContent::Thinking`] 文本会被写到 wire 的非标
+/// `reasoning_content` 字段（详见 `docs/internal/thinking-roundtrip.md` §4.2）；
+/// `Forbidden`（含未配置）一律不写。
+pub fn encode_request_with_echo(
+    req: &CompletionRequest,
+    echo_mode: ThinkingEcho,
+) -> wire::CreateChatCompletionRequest {
     let mut messages = Vec::with_capacity(req.messages.len() + 1);
     if let Some(sys) = req.system.as_ref() {
         messages.push(encode_system_message(sys));
     }
     for m in &req.messages {
-        encode_message_into(m, &mut messages);
+        encode_message_into(m, echo_mode, &mut messages);
     }
 
     #[allow(deprecated)]
@@ -143,10 +158,14 @@ fn encode_system_message(text: &str) -> wire::ChatCompletionRequestMessage {
 ///   message；
 /// - assistant 的 [`MessageContent::ToolUse`] 抽到顶层 `tool_calls` 字段，
 ///   而不是 content。
-fn encode_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionRequestMessage>) {
+fn encode_message_into(
+    m: &Message,
+    echo_mode: ThinkingEcho,
+    out: &mut Vec<wire::ChatCompletionRequestMessage>,
+) {
     match m.role {
         Role::User => encode_user_message_into(m, out),
-        Role::Assistant => encode_assistant_message_into(m, out),
+        Role::Assistant => encode_assistant_message_into(m, echo_mode, out),
     }
 }
 
@@ -235,13 +254,23 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
     }
 }
 
-fn encode_assistant_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionRequestMessage>) {
+fn encode_assistant_message_into(
+    m: &Message,
+    echo_mode: ThinkingEcho,
+    out: &mut Vec<wire::ChatCompletionRequestMessage>,
+) {
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<wire::ChatCompletionMessageToolCallsItem> = Vec::new();
+    let mut reasoning_text = String::new();
 
     for c in &m.content {
         match c {
             MessageContent::Text { text } => text_parts.push(text.clone()),
+            MessageContent::Thinking { text, .. } => {
+                // signature 字段在 OpenAI 路径上无意义（DeepSeek 不要、
+                // OpenAI 自己也不要），只取文本。
+                reasoning_text.push_str(text);
+            }
             MessageContent::ToolUse { id, name, args } => {
                 tool_calls.push(
                     wire::ChatCompletionMessageToolCallsItem::ChatCompletionMessageToolCall(
@@ -274,6 +303,15 @@ fn encode_assistant_message_into(m: &Message, out: &mut Vec<wire::ChatCompletion
         ))
     };
 
+    let reasoning_content = match (echo_mode, reasoning_text.is_empty()) {
+        (ThinkingEcho::Required, false) => Some(reasoning_text),
+        // Optional 也按 Required 处理：服务端容忍多发的场景下回放更
+        // 安全（DeepSeek-v4-pro 文档把它列为 must、其它 Optional 厂商
+        // 多发也不报错）。
+        (ThinkingEcho::Optional, false) => Some(reasoning_text),
+        _ => None,
+    };
+
     #[allow(deprecated)]
     out.push(
         wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(
@@ -289,6 +327,7 @@ fn encode_assistant_message_into(m: &Message, out: &mut Vec<wire::ChatCompletion
                     Some(tool_calls)
                 },
                 function_call: None,
+                reasoning_content,
             },
         ),
     );

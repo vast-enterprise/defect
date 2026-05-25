@@ -17,14 +17,17 @@
 
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use agent_client_protocol::schema::ToolCallUpdateFields;
 use futures::Stream;
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::BoxError;
+use crate::fs::FsBackend;
 
 /// 工具的"对外名片"：只描述参数形状，不带任何执行能力。
 ///
@@ -117,14 +120,24 @@ pub struct ToolContext<'a> {
     /// 工具实现应在长循环 / await 点检查 `cancel.is_cancelled()` 并尽快
     /// 退出。
     pub cancel: CancellationToken,
+    /// 文件系统后端。fs 工具家族（`read_file` / `write_file` /
+    /// `edit_file`）通过它读写文件；装配时由 `defect-acp` 按客户端
+    /// 协商的 [`FileSystemCapabilities`] 选择 `LocalFsBackend` 或
+    /// `AcpFsBackend`，工具实现完全不感知。
+    ///
+    /// 用 [`Arc`] 而非借用：`Tool::execute` 返回 `'static` future / stream，
+    /// 工具内部通常 `clone` 一份 fs 进入异步任务。借用形式无法跨过 await。
+    ///
+    /// [`FileSystemCapabilities`]: agent_client_protocol::schema::FileSystemCapabilities
+    pub fs: Arc<dyn FsBackend>,
 }
 
 impl<'a> ToolContext<'a> {
     /// 构造一个最小 `ToolContext`。`#[non_exhaustive]` 让外部 crate 不能直接
     /// 用结构体字面量构造——这个构造函数是 cross-crate 唯一入口。新增字段时
     /// 给签名加默认值或新构造函数，不破坏现有调用点。
-    pub fn new(cwd: &'a Path, cancel: CancellationToken) -> Self {
-        Self { cwd, cancel }
+    pub fn new(cwd: &'a Path, cancel: CancellationToken, fs: Arc<dyn FsBackend>) -> Self {
+        Self { cwd, cancel, fs }
     }
 }
 
@@ -146,10 +159,20 @@ pub trait Tool: Send + Sync {
 
     /// 在执行前生成一份"自描述"，用于推送给 ACP 客户端展示。
     ///
-    /// 实现应当快速返回（不做 IO），仅基于 args 决定 title / kind /
-    /// locations 等字段。具体由谁填什么字段见 [`ToolCallDescription`]
-    /// 的字段约定。
-    fn describe(&self, args: &serde_json::Value) -> ToolCallDescription;
+    /// 异步签名 + [`ToolContext`] 注入：实现可以在 describe 阶段做轻量
+    /// IO（典型用例：`write_file` 在请求授权前先读旧内容，给客户端画
+    /// 精确 old↔new diff——比"全新内容"更利于审查）。
+    ///
+    /// 性能约束：describe 在每次 ACP `ToolCall` 推送前都会跑一次，
+    /// 实现仍应保持快速且对失败 graceful（IO 失败时降级返回基础字段，
+    /// 不要让 describe 自己抛错——签名也没给错误通道）。
+    ///
+    /// 具体由谁填什么字段见 [`ToolCallDescription`] 的字段约定。
+    fn describe<'a>(
+        &'a self,
+        args: &'a serde_json::Value,
+        ctx: ToolContext<'a>,
+    ) -> BoxFuture<'a, ToolCallDescription>;
 
     /// 启动一次工具调用，返回事件流。
     ///

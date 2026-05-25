@@ -100,10 +100,7 @@ async fn main() -> anyhow::Result<()> {
     let (channel_a, channel_b) = Channel::duplex();
 
     // 把 server task spawn 出去；client driver 跑完后让它自然退出。
-    let server_handle = tokio::spawn(serve_on(
-        agent,
-        ChannelTransport::<Agent>::new(channel_b),
-    ));
+    let server_handle = tokio::spawn(serve_on(agent, ChannelTransport::<Agent>::new(channel_b)));
 
     let updates: Arc<Mutex<Vec<SessionUpdate>>> = Arc::new(Mutex::new(Vec::new()));
     let updates_for_handler = updates.clone();
@@ -193,4 +190,3 @@ async fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
-

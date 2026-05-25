@@ -18,8 +18,7 @@
 //! 避免重新发明字段。
 
 use agent_client_protocol::schema::{
-    ContentBlock, PermissionOptionId, StopReason as AcpStopReason, ToolCallId,
-    ToolCallUpdateFields,
+    ContentBlock, PermissionOptionId, StopReason as AcpStopReason, ToolCallId, ToolCallUpdateFields,
 };
 use serde::{Deserialize, Serialize};
 

@@ -9,14 +9,15 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    Content, ContentBlock, TextContent, ToolCallContent, ToolCallLocation,
-    ToolCallUpdateFields, ToolKind,
+    Content, ContentBlock, TextContent, ToolCallContent, ToolCallLocation, ToolCallUpdateFields,
+    ToolKind,
 };
 use defect_agent::error::BoxError;
 use defect_agent::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolError, ToolEvent, ToolSchema,
     ToolStream,
 };
+use futures::future::BoxFuture;
 use futures::stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -106,33 +107,38 @@ impl Tool for BashTool {
         SafetyClass::Destructive
     }
 
-    fn describe(&self, args: &serde_json::Value) -> ToolCallDescription {
-        let command = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let workdir = args
-            .get("workdir")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+    fn describe<'a>(
+        &'a self,
+        args: &'a serde_json::Value,
+        _ctx: ToolContext<'a>,
+    ) -> BoxFuture<'a, ToolCallDescription> {
+        Box::pin(async move {
+            let command = args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let workdir = args
+                .get("workdir")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-        let title = format!("$ {}", truncate_title(&command));
-        let mut fields = ToolCallUpdateFields::default();
-        fields.title = Some(title);
-        fields.kind = Some(ToolKind::Execute);
-        if let Some(dir) = workdir {
-            fields.locations = Some(vec![ToolCallLocation::new(PathBuf::from(dir))]);
-        }
-        ToolCallDescription { fields }
+            let title = format!("$ {}", truncate_title(&command));
+            let mut fields = ToolCallUpdateFields::default();
+            fields.title = Some(title);
+            fields.kind = Some(ToolKind::Execute);
+            if let Some(dir) = workdir {
+                fields.locations = Some(vec![ToolCallLocation::new(PathBuf::from(dir))]);
+            }
+            ToolCallDescription { fields }
+        })
     }
 
     fn execute(&self, args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream {
         let cwd = ctx.cwd.to_path_buf();
         let cancel = ctx.cancel.clone();
         let fut = async move { run_bash(args, cwd, cancel).await };
-        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
-            Box::pin(stream::once(fut));
+        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> = Box::pin(stream::once(fut));
         s
     }
 }
@@ -332,8 +338,8 @@ fn resolve_workdir(session_cwd: &Path, requested: Option<&str>) -> Result<PathBu
         }
     };
 
-    let canon_target = std::fs::canonicalize(&target)
-        .map_err(|e| ToolError::InvalidArgs(BoxError::new(e)))?;
+    let canon_target =
+        std::fs::canonicalize(&target).map_err(|e| ToolError::InvalidArgs(BoxError::new(e)))?;
     let canon_cwd =
         std::fs::canonicalize(session_cwd).unwrap_or_else(|_| session_cwd.to_path_buf());
 

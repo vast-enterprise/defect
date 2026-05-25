@@ -11,7 +11,7 @@ pub(crate) mod model;
 pub(crate) mod provider;
 pub(crate) mod request;
 
-pub use capability::{Capabilities, FeatureSupport, ModelCapabilityOverrides};
+pub use capability::{Capabilities, FeatureSupport, ModelCapabilityOverrides, ThinkingEcho};
 pub use chunk::{ProviderChunk, StopReason, Usage};
 pub use error::{
     ProviderError, ProviderErrorKind, RateLimitScope, RetryAction, RetryHint, TimeoutPhase,

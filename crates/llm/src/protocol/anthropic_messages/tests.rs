@@ -241,6 +241,64 @@ fn encode_request_tool_uses_and_results() {
     assert_eq!(tr.is_error, Some(false));
 }
 
+// ---------- thinking round-trip (signature gating) ---------------------
+
+/// 编码一条带 [`MessageContent::Thinking`] 的 assistant message，返回
+/// content blocks 列表用于断言 ThinkingBlockParam 的存在/缺失。
+fn encode_with_thinking(text: &str, signature: Option<&str>) -> Vec<wire::ContentBlockParam> {
+    let req = CompletionRequest {
+        model: "claude-opus-4-7".into(),
+        system: None,
+        messages: vec![Message {
+            role: Role::Assistant,
+            content: vec![
+                MessageContent::Thinking {
+                    text: text.to_owned(),
+                    signature: signature.map(str::to_owned),
+                },
+                MessageContent::Text {
+                    text: "answer".into(),
+                },
+            ],
+        }],
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+    };
+    let w = encode_request(&req);
+    let wire::MessageParamContent::MessageParamContentVariant1(blocks) =
+        w.messages[0].content.clone()
+    else {
+        panic!("expected list content");
+    };
+    blocks
+}
+
+#[test]
+fn encode_thinking_with_signature_emits_thinking_block_param() {
+    let blocks = encode_with_thinking("step 1", Some("sig-abc"));
+    // 期望两个 block：thinking + text。
+    assert_eq!(blocks.len(), 2);
+    let wire::ContentBlockParam::ThinkingBlockParam(t) = &blocks[0] else {
+        panic!("expected thinking block first, got {:?}", blocks[0]);
+    };
+    assert_eq!(t.thinking, "step 1");
+    assert_eq!(t.signature, "sig-abc");
+}
+
+#[test]
+fn encode_thinking_without_signature_skips_thinking_block_param() {
+    // 跨 provider 切回 Anthropic：上一轮是 OpenAI/DeepSeek 出的 thinking
+    // 文本，没有 signature。Anthropic wire 上 signature 是 required，
+    // 整块跳过——只保留 text。
+    let blocks = encode_with_thinking("step 1", None);
+    assert_eq!(blocks.len(), 1);
+    assert!(matches!(
+        &blocks[0],
+        wire::ContentBlockParam::TextBlockParam(t) if t.text == "answer"
+    ));
+}
+
 // ---------- decode_stream / state machine -------------------------------
 
 const MODEL_START: &str = r#"{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-opus-4-7","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":42,"output_tokens":1}}}"#;

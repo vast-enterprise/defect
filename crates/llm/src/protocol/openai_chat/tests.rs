@@ -17,7 +17,7 @@
 
 use defect_agent::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderErrorKind, Role,
-    SamplingParams, StopReason, ThinkingConfig, ToolChoice, ToolResultBody,
+    SamplingParams, StopReason, ThinkingConfig, ThinkingEcho, ToolChoice, ToolResultBody,
 };
 use defect_agent::tool::ToolSchema;
 use futures::StreamExt;
@@ -370,6 +370,133 @@ fn encode_request_image_base64_and_url() {
         panic!("expected image part");
     };
     assert_eq!(img1.image_url.url, "https://example.com/x.jpg");
+}
+
+// ---------- thinking round-trip (Required vs Forbidden) ----------------
+
+/// 给定一条带 [`MessageContent::Thinking`] 的 assistant message，按
+/// `echo_mode` 调 `encode_request_with_echo` 并返回 wire 上 assistant
+/// message 的 `reasoning_content`。
+fn encode_with_thinking(
+    text: &str,
+    signature: Option<&str>,
+    echo_mode: ThinkingEcho,
+) -> Option<String> {
+    let req = CompletionRequest {
+        model: "deepseek-v4-pro".into(),
+        system: None,
+        messages: vec![Message {
+            role: Role::Assistant,
+            content: vec![
+                MessageContent::Thinking {
+                    text: text.to_owned(),
+                    signature: signature.map(str::to_owned),
+                },
+                MessageContent::Text {
+                    text: "answer".into(),
+                },
+            ],
+        }],
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+    };
+    let w = encode_request_with_echo(&req, echo_mode);
+    let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
+        &w.messages[0]
+    else {
+        panic!("expected assistant message");
+    };
+    asst.reasoning_content.clone()
+}
+
+#[test]
+fn encode_thinking_required_writes_reasoning_content() {
+    let rc = encode_with_thinking("step 1\nstep 2", None, ThinkingEcho::Required);
+    assert_eq!(rc.as_deref(), Some("step 1\nstep 2"));
+}
+
+#[test]
+fn encode_thinking_forbidden_drops_reasoning_content() {
+    // Forbidden 不写——OpenAI 官方与 deepseek-reasoner/R1 都按这条走。
+    let rc = encode_with_thinking("step 1", None, ThinkingEcho::Forbidden);
+    assert!(rc.is_none(), "Forbidden must not emit reasoning_content");
+}
+
+#[test]
+fn encode_thinking_optional_writes_reasoning_content() {
+    let rc = encode_with_thinking("step 1", None, ThinkingEcho::Optional);
+    assert_eq!(rc.as_deref(), Some("step 1"));
+}
+
+#[test]
+fn encode_thinking_required_but_empty_text_is_none() {
+    // 空 buf —— 没东西可回放，不要硬塞空字符串触发服务端 invalid_request。
+    let rc = encode_with_thinking("", None, ThinkingEcho::Required);
+    assert!(rc.is_none());
+}
+
+#[test]
+fn encode_thinking_concatenates_multiple_thinking_blocks() {
+    let req = CompletionRequest {
+        model: "deepseek-v4-pro".into(),
+        system: None,
+        messages: vec![Message {
+            role: Role::Assistant,
+            content: vec![
+                MessageContent::Thinking {
+                    text: "a".into(),
+                    signature: None,
+                },
+                MessageContent::Thinking {
+                    text: "b".into(),
+                    signature: None,
+                },
+                MessageContent::Text { text: "ok".into() },
+            ],
+        }],
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+    };
+    let w = encode_request_with_echo(&req, ThinkingEcho::Required);
+    let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
+        &w.messages[0]
+    else {
+        panic!();
+    };
+    assert_eq!(asst.reasoning_content.as_deref(), Some("ab"));
+}
+
+#[test]
+fn encode_request_default_forbids_thinking_echo() {
+    // 默认 `encode_request` (无 echo arg) 等价于 Forbidden —— 防止
+    // 通过该入口绕过 capability 矩阵把 reasoning_content 漏到
+    // 不该收的厂商上。
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        system: None,
+        messages: vec![Message {
+            role: Role::Assistant,
+            content: vec![
+                MessageContent::Thinking {
+                    text: "leak?".into(),
+                    signature: None,
+                },
+                MessageContent::Text { text: "ok".into() },
+            ],
+        }],
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+    };
+    let w = encode_request(&req);
+    let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
+        &w.messages[0]
+    else {
+        panic!();
+    };
+    assert!(asst.reasoning_content.is_none());
 }
 
 // ---------- decode_stream / state machine -------------------------------

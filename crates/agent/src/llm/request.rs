@@ -43,6 +43,15 @@ pub enum MessageContent {
     Text {
         text: String,
     },
+    /// 上一轮模型产出的思考链。仅出现在 [`Role::Assistant`] 消息里。
+    ///
+    /// `signature` 是 Anthropic extended thinking 的防伪签名：必须与
+    /// 文本同进同出。DeepSeek-v4-pro 等纯文本 echo 的 provider 这里
+    /// 为 [`None`]。
+    Thinking {
+        text: String,
+        signature: Option<String>,
+    },
     /// 历史轮次的工具调用：发出请求时把上一轮 tool_use 与 tool_result
     /// 都放在 messages 里，让 provider 重建上下文。
     ToolUse {

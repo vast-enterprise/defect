@@ -14,7 +14,7 @@ use defect_agent::error::BoxError;
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
     ModelInfo, ProtocolId, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
-    RateLimitScope,
+    RateLimitScope, ThinkingEcho,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -154,6 +154,9 @@ fn default_openai_capabilities() -> Capabilities {
         thinking: FeatureSupport::Unsupported,
         vision: FeatureSupport::Supported,
         prompt_cache: FeatureSupport::Supported,
+        // OpenAI 官方 o1 / o3 不通过 wire 暴露 thinking 文本，无可回放；
+        // 兼容厂商（DeepSeek 等）单独覆盖。
+        thinking_echo: ThinkingEcho::Forbidden,
     }
 }
 
@@ -251,7 +254,8 @@ impl LlmProvider for OpenAiProvider {
         cancel: CancellationToken,
     ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
         async move {
-            let body = openai_chat::encode_request(&req);
+            let echo_mode = self.thinking_echo_for_model(&req.model);
+            let body = openai_chat::encode_request_with_echo(&req, echo_mode);
             let op = self
                 .with_openai_headers(chat_completions::post::Request { body })
                 .with_accept(HeaderValue::from_static("text/event-stream"));
@@ -337,6 +341,15 @@ impl OpenAiProvider {
             organization: self.organization.clone(),
             project: self.project.clone(),
         }
+    }
+
+    /// 解析当前请求的 thinking 回放策略：先看 per-model override，再 fallback
+    /// 到 provider-level capability。详见
+    /// `docs/internal/thinking-roundtrip.md` §4.2。
+    fn thinking_echo_for_model(&self, model_id: &str) -> ThinkingEcho {
+        self.model_info(model_id)
+            .and_then(|m| m.capabilities_overrides.thinking_echo)
+            .unwrap_or(self.capabilities.thinking_echo)
     }
 }
 
@@ -593,6 +606,7 @@ fn hardcoded_models() -> &'static [HardcodedModel] {
                 vision: None,
                 prompt_cache: None,
                 parallel_tool_calls: Some(FeatureSupport::Unsupported),
+                thinking_echo: None,
             }),
         },
         HardcodedModel {
@@ -605,6 +619,7 @@ fn hardcoded_models() -> &'static [HardcodedModel] {
                 vision: None,
                 prompt_cache: None,
                 parallel_tool_calls: Some(FeatureSupport::Unsupported),
+                thinking_echo: None,
             }),
         },
         HardcodedModel {
@@ -617,6 +632,7 @@ fn hardcoded_models() -> &'static [HardcodedModel] {
                 vision: None,
                 prompt_cache: None,
                 parallel_tool_calls: Some(FeatureSupport::Unsupported),
+                thinking_echo: None,
             }),
         },
         HardcodedModel {
@@ -629,6 +645,7 @@ fn hardcoded_models() -> &'static [HardcodedModel] {
                 vision: None,
                 prompt_cache: None,
                 parallel_tool_calls: Some(FeatureSupport::Unsupported),
+                thinking_echo: None,
             }),
         },
         HardcodedModel {
@@ -648,6 +665,23 @@ fn hardcoded_models() -> &'static [HardcodedModel] {
                 vision: None,
                 prompt_cache: None,
                 parallel_tool_calls: None,
+                // R1 系列禁止回放 reasoning_content，按文档说会 400。
+                thinking_echo: Some(ThinkingEcho::Forbidden),
+            }),
+        },
+        HardcodedModel {
+            id: "deepseek-v4-pro",
+            display_name: Some("DeepSeek v4 Pro"),
+            context_window: Some(64_000),
+            max_output_tokens: Some(8_192),
+            overrides: Some(ModelCapabilityOverrides {
+                thinking: Some(FeatureSupport::Supported),
+                vision: None,
+                prompt_cache: None,
+                parallel_tool_calls: None,
+                // v4-pro thinking 模式必须把上一轮 reasoning_content 回放
+                // 回去，否则 400 "must be passed back to the API"。
+                thinking_echo: Some(ThinkingEcho::Required),
             }),
         },
     ]
@@ -707,6 +741,7 @@ fn merge_with_hardcoded(upstream: Vec<ModelInfo>) -> Vec<ModelInfo> {
                 vision: cur.vision.or(overrides.vision),
                 prompt_cache: cur.prompt_cache.or(overrides.prompt_cache),
                 parallel_tool_calls: cur.parallel_tool_calls.or(overrides.parallel_tool_calls),
+                thinking_echo: cur.thinking_echo.or(overrides.thinking_echo),
             };
         }
     }

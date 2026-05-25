@@ -1,14 +1,18 @@
 //! BashTool 单元测试。覆盖 docs/internal/tools-bash.md §7 的 #1–#9。
 //! #10（真 LLM e2e）不在这里跑。
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
+use defect_agent::fs::FsBackend;
 use defect_agent::tool::{SafetyClass, Tool, ToolContext, ToolError, ToolEvent};
 use futures::StreamExt;
 use serde_json::json;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
+
+use crate::fs::LocalFsBackend;
 
 use super::BashTool;
 
@@ -18,7 +22,8 @@ async fn drive(stream: defect_agent::tool::ToolStream) -> Vec<ToolEvent> {
 }
 
 fn ctx_with(cwd: &std::path::Path, cancel: CancellationToken) -> ToolContext<'_> {
-    ToolContext::new(cwd, cancel)
+    let fs: Arc<dyn FsBackend> = Arc::new(LocalFsBackend::new(cwd.to_path_buf()));
+    ToolContext::new(cwd, cancel, fs)
 }
 
 fn extract_text(event: &ToolEvent) -> String {
@@ -55,20 +60,26 @@ fn schema_smoke() {
     assert!(matches!(safety, SafetyClass::Destructive));
 }
 
-#[test]
-fn describe_renders_command_in_title() {
+#[tokio::test]
+async fn describe_renders_command_in_title() {
+    let dir = tempdir().unwrap();
     let tool = BashTool::new();
-    let desc = tool.describe(&json!({"command": "echo hello"}));
+    let args = json!({"command": "echo hello"});
+    let ctx = ctx_with(dir.path(), CancellationToken::new());
+    let desc = tool.describe(&args, ctx).await;
     let title = desc.fields.title.as_deref().unwrap_or("");
     assert!(title.starts_with("$ "));
     assert!(title.contains("echo hello"));
 }
 
-#[test]
-fn describe_truncates_long_command() {
+#[tokio::test]
+async fn describe_truncates_long_command() {
+    let dir = tempdir().unwrap();
     let tool = BashTool::new();
     let long = "x".repeat(200);
-    let desc = tool.describe(&json!({"command": long}));
+    let args = json!({"command": long});
+    let ctx = ctx_with(dir.path(), CancellationToken::new());
+    let desc = tool.describe(&args, ctx).await;
     let title = desc.fields.title.as_deref().unwrap_or("");
     assert!(title.chars().count() <= 100, "title was {title:?}");
     assert!(title.ends_with('…'));
@@ -93,11 +104,7 @@ async fn case2_nonzero_exit_is_completed_with_exit_code_marker() {
     let dir = tempdir().unwrap();
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
-    let events = drive(tool.execute(
-        json!({"command": "echo err >&2; exit 3"}),
-        ctx,
-    ))
-    .await;
+    let events = drive(tool.execute(json!({"command": "echo err >&2; exit 3"}), ctx)).await;
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], ToolEvent::Completed(_)));
     let text = extract_text(&events[0]);
@@ -112,11 +119,7 @@ async fn case3_timeout_marks_timed_out() {
     let dir = tempdir().unwrap();
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
-    let events = drive(tool.execute(
-        json!({"command": "sleep 5", "timeout_ms": 100}),
-        ctx,
-    ))
-    .await;
+    let events = drive(tool.execute(json!({"command": "sleep 5", "timeout_ms": 100}), ctx)).await;
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], ToolEvent::Completed(_)));
     let text = extract_text(&events[0]);
@@ -158,11 +161,7 @@ async fn case5_huge_output_is_truncated() {
     let ctx = ctx_with(dir.path(), CancellationToken::new());
     // 写 ~2 MiB 数据，cap 1 MiB
     let cmd = "yes a | head -c 2097152";
-    let events = drive(tool.execute(
-        json!({"command": cmd, "timeout_ms": 30000}),
-        ctx,
-    ))
-    .await;
+    let events = drive(tool.execute(json!({"command": cmd, "timeout_ms": 30000}), ctx)).await;
     assert_eq!(events.len(), 1);
     let text = extract_text(&events[0]);
     assert!(
@@ -180,11 +179,8 @@ async fn case6_workdir_escape_is_invalid_args() {
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
     // /tmp 是 dir 的祖先节点的姐妹（dir 在 /tmp/xxxxx 下），".." 跳出 = escape
-    let events = drive(tool.execute(
-        json!({"command": "pwd", "workdir": "../../../etc"}),
-        ctx,
-    ))
-    .await;
+    let events =
+        drive(tool.execute(json!({"command": "pwd", "workdir": "../../../etc"}), ctx)).await;
     assert_eq!(events.len(), 1);
     assert!(
         matches!(events[0], ToolEvent::Failed(ToolError::InvalidArgs(_))),
@@ -200,11 +196,7 @@ async fn case7_workdir_subdir_resolves() {
     std::fs::create_dir(&sub).unwrap();
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
-    let events = drive(tool.execute(
-        json!({"command": "pwd", "workdir": "sub"}),
-        ctx,
-    ))
-    .await;
+    let events = drive(tool.execute(json!({"command": "pwd", "workdir": "sub"}), ctx)).await;
     assert_eq!(events.len(), 1);
     let text = extract_text(&events[0]);
     // canonicalize 后应包含 sub 目录路径
@@ -217,11 +209,7 @@ async fn case9_stdin_null_does_not_hang() {
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
     // cat 从 stdin 读；stdin = null 应当立刻 EOF，cat 退出 0
-    let events = drive(tool.execute(
-        json!({"command": "cat", "timeout_ms": 5000}),
-        ctx,
-    ))
-    .await;
+    let events = drive(tool.execute(json!({"command": "cat", "timeout_ms": 5000}), ctx)).await;
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], ToolEvent::Completed(_)));
     let raw = extract_raw(&events[0]);
@@ -236,7 +224,10 @@ async fn invalid_args_missing_command() {
     let ctx = ctx_with(dir.path(), CancellationToken::new());
     let events = drive(tool.execute(json!({}), ctx)).await;
     assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], ToolEvent::Failed(ToolError::InvalidArgs(_))));
+    assert!(matches!(
+        events[0],
+        ToolEvent::Failed(ToolError::InvalidArgs(_))
+    ));
 }
 
 #[tokio::test]
@@ -244,11 +235,10 @@ async fn invalid_args_zero_timeout() {
     let dir = tempdir().unwrap();
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
-    let events = drive(tool.execute(
-        json!({"command": "echo x", "timeout_ms": 0}),
-        ctx,
-    ))
-    .await;
+    let events = drive(tool.execute(json!({"command": "echo x", "timeout_ms": 0}), ctx)).await;
     assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], ToolEvent::Failed(ToolError::InvalidArgs(_))));
+    assert!(matches!(
+        events[0],
+        ToolEvent::Failed(ToolError::InvalidArgs(_))
+    ));
 }

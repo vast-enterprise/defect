@@ -12,18 +12,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::{
-    Content, ContentBlock, StopReason as AcpStopReason, TextContent, ToolCallContent,
+    Content, ContentBlock, SessionId, StopReason as AcpStopReason, TextContent, ToolCallContent,
     ToolCallUpdateFields,
 };
 use defect_agent::event::AgentEvent;
+use defect_agent::fs::{FsBackend, NoopFsBackend};
 use defect_agent::llm::{LlmProvider, SamplingParams, ThinkingConfig};
 use defect_agent::policy::{OpenPolicy, SandboxPolicy};
 use defect_agent::session::{
-    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig,
+    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig, uuid_like,
 };
 use defect_agent::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolEvent, ToolSchema, ToolStream,
 };
+use futures::future::BoxFuture;
 use futures::{StreamExt, stream};
 use serde_json::json;
 
@@ -44,8 +46,8 @@ pub const EXIT_FAIL: i32 = 1;
 pub fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::fmt;
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,toac=warn"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,toac=warn"));
     fmt().with_env_filter(filter).with_target(true).init();
 }
 
@@ -88,10 +90,16 @@ impl Tool for EchoTool {
         SafetyClass::ReadOnly
     }
 
-    fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
-        let mut fields = ToolCallUpdateFields::default();
-        fields.title = Some("echo".to_string());
-        ToolCallDescription { fields }
+    fn describe<'a>(
+        &'a self,
+        _args: &'a serde_json::Value,
+        _ctx: ToolContext<'a>,
+    ) -> BoxFuture<'a, ToolCallDescription> {
+        Box::pin(async {
+            let mut fields = ToolCallUpdateFields::default();
+            fields.title = Some("echo".to_string());
+            ToolCallDescription { fields }
+        })
     }
 
     fn execute(&self, args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
@@ -131,9 +139,14 @@ pub async fn build_session(
         })
         .build();
     let cwd = std::env::current_dir().expect("cwd");
-    core.create_session(cwd, vec![])
-        .await
-        .expect("create session")
+    core.create_session(
+        SessionId::new(uuid_like()),
+        cwd,
+        vec![],
+        Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+    )
+    .await
+    .expect("create session")
 }
 
 /// 跑一个 turn，把 emit 的事件实时打到 stdout，最后回 (stop_reason, 文本拼接)。

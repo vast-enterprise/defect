@@ -6,8 +6,10 @@
 //! 设计详见 `docs/inbound/acp-bridge.md`。
 
 mod echo_provider;
+pub mod fs;
 mod project;
 mod serve;
 
 pub use echo_provider::EchoProvider;
-pub use serve::{serve, serve_on, AcpError};
+pub use fs::AcpFsBackend;
+pub use serve::{AcpError, serve, serve_on};

@@ -5,21 +5,46 @@
 //!
 //! 设计详见 `docs/inbound/acp-bridge.md`。
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use agent_client_protocol::schema::{
-    AgentCapabilities, AuthenticateRequest, CancelNotification, InitializeRequest,
-    InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionId, StopReason as AcpStopReason,
+    AgentCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities,
+    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
+    StopReason as AcpStopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
+use defect_agent::fs::FsBackend;
 use defect_agent::llm::ProviderError;
-use defect_agent::session::{AgentCore, AgentError, Session, TurnError};
+use defect_agent::session::{AgentCore, AgentError, Session, TurnError, uuid_like};
+use defect_tools::LocalFsBackend;
 use futures::StreamExt;
 use serde_json::json;
 
-use crate::project::{project, PermissionAsk, Projection};
+use crate::fs::AcpFsBackend;
+use crate::project::{PermissionAsk, Projection, project};
+
+/// 客户端 fs 能力协商结果（连接级）。
+///
+/// 在 `initialize` handler 里读 [`ClientCapabilities::fs`] 后写入，
+/// `session/new` handler 据此选 [`AcpFsBackend`] / [`LocalFsBackend`]。
+/// 设计详见 `docs/inbound/acp-fs.md` §1。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FsMode {
+    /// 客户端同时声明 `read_text_file` 与 `write_text_file`：完全委托。
+    Delegated,
+    /// 任一能力缺失或 fs 字段未声明：整组退回本地（不混用，§1.2 决策表）。
+    Local,
+}
+
+fn decide_fs_mode(client_caps: &ClientCapabilities) -> FsMode {
+    if client_caps.fs.read_text_file && client_caps.fs.write_text_file {
+        FsMode::Delegated
+    } else {
+        FsMode::Local
+    }
+}
 
 /// `defect-acp` 公共错误类型。
 ///
@@ -184,12 +209,29 @@ where
     let agent_prompt = agent.clone();
     let agent_cancel = agent.clone();
 
+    // 连接级 fs 协商结果。`initialize` 写入，`session/new` 读取。
+    // 客户端按 ACP 规范应当先 initialize 再 session/new，此处用 RwLock 保护
+    // 读多写少（一次 init 写一次、之后所有 session/new 都读）。Default = Local
+    // 是回归保守值——initialize 还没到时就 session/new 是协议违规，但即便如此
+    // 我们也宁可走本地盘也不裸调反向请求。
+    let fs_mode: Arc<RwLock<FsMode>> = Arc::new(RwLock::new(FsMode::Local));
+    let fs_mode_init = fs_mode.clone();
+    let fs_mode_new = fs_mode.clone();
+
     Agent
         .builder()
         .name("defect-agent")
         .on_receive_request(
             async move |req: InitializeRequest, responder, _cx| {
-                tracing::debug!(version = ?req.protocol_version, "initialize");
+                let mode = decide_fs_mode(&req.client_capabilities);
+                tracing::debug!(
+                    version = ?req.protocol_version,
+                    fs_mode = ?mode,
+                    "initialize"
+                );
+                if let Ok(mut guard) = fs_mode_init.write() {
+                    *guard = mode;
+                }
                 let _ = &agent_init;
                 responder.respond(
                     InitializeResponse::new(req.protocol_version)
@@ -208,10 +250,25 @@ where
         .on_receive_request(
             {
                 let agent = agent_session_new.clone();
-                async move |req: NewSessionRequest, responder, _cx| {
+                let fs_mode = fs_mode_new.clone();
+                async move |req: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
                     let agent = agent.clone();
                     let cwd_for_log = req.cwd.clone();
-                    match agent.create_session(req.cwd, req.mcp_servers).await {
+                    let session_id = SessionId::new(uuid_like());
+                    // 边界清理：在 connection 级 fs_mode 与 session 级 cwd 之间组装后端。
+                    let mode = fs_mode.read().map(|g| *g).unwrap_or(FsMode::Local);
+                    let fs: Arc<dyn FsBackend> = match mode {
+                        FsMode::Delegated => Arc::new(AcpFsBackend::new(
+                            cx.clone(),
+                            session_id.clone(),
+                            req.cwd.clone(),
+                        )),
+                        FsMode::Local => Arc::new(LocalFsBackend::new(req.cwd.clone())),
+                    };
+                    match agent
+                        .create_session(session_id, req.cwd, req.mcp_servers, fs)
+                        .await
+                    {
                         Ok(session) => {
                             tracing::info!(
                                 session_id = %short_session_id(session.id()),
@@ -293,7 +350,8 @@ async fn run_prompt_turn(
     let mut events = session.subscribe();
 
     // 把 turn future spawn 到独立任务，stop_reason 通过 oneshot 回流。
-    let (turn_tx, mut turn_rx) = tokio::sync::oneshot::channel::<Result<AcpStopReason, TurnError>>();
+    let (turn_tx, mut turn_rx) =
+        tokio::sync::oneshot::channel::<Result<AcpStopReason, TurnError>>();
     let session_for_turn = session.clone();
     tokio::spawn(async move {
         let result = session_for_turn.run_turn(prompt).await;
@@ -360,8 +418,7 @@ async fn run_prompt_turn(
             Ok(Err(err)) => {
                 let acp_err = AcpError::Turn(err);
                 tracing::warn!(error = %acp_err, "turn failed; responding with wire error");
-                return responder
-                    .respond_with_error(acp_err.into_wire_error());
+                return responder.respond_with_error(acp_err.into_wire_error());
             }
             Err(_) => AcpStopReason::Cancelled,
         },
@@ -450,8 +507,7 @@ mod tests {
 
         assert_eq!(wire.code, ErrorCode::InternalError);
         assert!(
-            wire.message.contains("model not found")
-                && wire.message.contains("deepseek-v4-pro"),
+            wire.message.contains("model not found") && wire.message.contains("deepseek-v4-pro"),
             "expected provider Display text in wire message, got: {:?}",
             wire.message
         );
@@ -481,5 +537,39 @@ mod tests {
         let wire = acp_err.into_wire_error();
         assert_eq!(wire.code, ErrorCode::InvalidRequest);
         assert!(wire.message.contains("turn already in progress"));
+    }
+
+    use agent_client_protocol::schema::FileSystemCapabilities;
+
+    /// `docs/inbound/acp-fs.md` §1.2 的决策表回归——
+    /// 任一 fs 能力位 false → 整组退回本地，不混用。
+    #[test]
+    fn decide_fs_mode_full_caps_is_delegated() {
+        let caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
+            .read_text_file(true)
+            .write_text_file(true));
+        assert_eq!(decide_fs_mode(&caps), FsMode::Delegated);
+    }
+
+    #[test]
+    fn decide_fs_mode_read_only_falls_back_to_local() {
+        let caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
+            .read_text_file(true)
+            .write_text_file(false));
+        assert_eq!(decide_fs_mode(&caps), FsMode::Local);
+    }
+
+    #[test]
+    fn decide_fs_mode_write_only_falls_back_to_local() {
+        let caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
+            .read_text_file(false)
+            .write_text_file(true));
+        assert_eq!(decide_fs_mode(&caps), FsMode::Local);
+    }
+
+    #[test]
+    fn decide_fs_mode_default_caps_is_local() {
+        let caps = ClientCapabilities::new();
+        assert_eq!(decide_fs_mode(&caps), FsMode::Local);
     }
 }

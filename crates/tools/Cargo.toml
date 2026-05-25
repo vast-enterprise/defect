@@ -17,4 +17,4 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "io-util", "time", "macros", "sync", "rt", "rt-multi-thread", "test-util"] }
-tempfile = "3"
+tempfile.workspace = true

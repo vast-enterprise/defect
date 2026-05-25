@@ -39,30 +39,24 @@ pub(crate) fn project(session_id: &SessionId, event: AgentEvent) -> Projection {
         AgentEvent::TurnStarted => Projection::Ignore,
         AgentEvent::TurnEnded { .. } => Projection::EndTurn,
 
-        AgentEvent::AssistantText { content } => {
-            Projection::Update(notification(
-                session_id,
-                SessionUpdate::AgentMessageChunk(ContentChunk::new(content)),
-            ))
-        }
-        AgentEvent::AssistantThought { content } => {
-            Projection::Update(notification(
-                session_id,
-                SessionUpdate::AgentThoughtChunk(ContentChunk::new(content)),
-            ))
-        }
+        AgentEvent::AssistantText { content } => Projection::Update(notification(
+            session_id,
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(content)),
+        )),
+        AgentEvent::AssistantThought { content } => Projection::Update(notification(
+            session_id,
+            SessionUpdate::AgentThoughtChunk(ContentChunk::new(content)),
+        )),
 
         AgentEvent::ToolCallStarted { id, fields } => {
             let tool_call = tool_call_from_fields(id, fields);
             Projection::Update(notification(session_id, SessionUpdate::ToolCall(tool_call)))
         }
         AgentEvent::ToolCallProgress { id, fields }
-        | AgentEvent::ToolCallFinished { id, fields } => {
-            Projection::Update(notification(
-                session_id,
-                SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id, fields)),
-            ))
-        }
+        | AgentEvent::ToolCallFinished { id, fields } => Projection::Update(notification(
+            session_id,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id, fields)),
+        )),
 
         AgentEvent::PolicyDecision { id, decision } => match decision {
             PolicyDecision::Ask(ask) => {
@@ -106,4 +100,3 @@ fn tool_call_from_fields(id: ToolCallId, fields: ToolCallUpdateFields) -> ToolCa
     call.update(fields);
     call
 }
-

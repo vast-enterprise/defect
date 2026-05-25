@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    Content as AcpContent, ContentBlock, StopReason as AcpStopReason, TextContent,
-    ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdateFields,
+    Content as AcpContent, ContentBlock, StopReason as AcpStopReason, TextContent, ToolCallContent,
+    ToolCallId, ToolCallStatus, ToolCallUpdateFields,
 };
 use futures::StreamExt;
 use serde_json::Value as JsonValue;
@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::event::{AgentEvent, PermissionResolution};
+use crate::fs::FsBackend;
 use crate::llm::{
     CompletionRequest, LlmProvider, Message, MessageContent, ProviderChunk, ProviderStream,
     RetryHint, Role, SamplingParams, StopReason as LlmStopReason, ToolChoice, ToolResultBody,
@@ -113,14 +114,12 @@ pub struct TurnRunner<'a> {
     pub cancel: CancellationToken,
     pub config: &'a TurnConfig,
     pub cwd: &'a std::path::Path,
+    pub fs: Arc<dyn FsBackend>,
 }
 
 impl<'a> TurnRunner<'a> {
     /// 跑完一次 turn。
-    pub async fn run(
-        &self,
-        prompt: Vec<ContentBlock>,
-    ) -> Result<AcpStopReason, TurnError> {
+    pub async fn run(&self, prompt: Vec<ContentBlock>) -> Result<AcpStopReason, TurnError> {
         self.history.append(Message {
             role: Role::User,
             content: prompt
@@ -159,9 +158,7 @@ impl<'a> TurnRunner<'a> {
             let req = self.build_request();
             let mut stream = self.call_llm_with_retry(&req, &mut state).await?;
 
-            let outcome = self
-                .drain_provider_stream(&mut stream, &mut state)
-                .await?;
+            let outcome = self.drain_provider_stream(&mut stream, &mut state).await?;
 
             if outcome.cancelled {
                 return Ok(AcpStopReason::Cancelled);
@@ -187,9 +184,7 @@ impl<'a> TurnRunner<'a> {
                 DecisionFlow::Cancelled => return Ok(AcpStopReason::Cancelled),
             };
 
-            let progressed = approved
-                .iter()
-                .any(|a| matches!(a, Approved::Run { .. }));
+            let progressed = approved.iter().any(|a| matches!(a, Approved::Run { .. }));
             if progressed {
                 state.note_progress();
             }
@@ -224,11 +219,7 @@ impl<'a> TurnRunner<'a> {
         if estimate < threshold {
             return Ok(());
         }
-        let report = self
-            .history
-            .compact()
-            .await
-            .map_err(TurnError::Internal)?;
+        let report = self.history.compact().await.map_err(TurnError::Internal)?;
         self.events
             .emit(AgentEvent::ContextCompressed {
                 tokens_before: report.tokens_before,
@@ -463,7 +454,8 @@ impl<'a> TurnRunner<'a> {
                 }
             };
 
-            let description = tool.describe(&args);
+            let describe_ctx = ToolContext::new(self.cwd, self.cancel.clone(), self.fs.clone());
+            let description = tool.describe(&args, describe_ctx).await;
             self.events
                 .emit(AgentEvent::ToolCallStarted {
                     id: id.clone(),
@@ -472,12 +464,9 @@ impl<'a> TurnRunner<'a> {
                 .await;
 
             let safety_hint = tool.safety_hint(&args);
-            let decision = self.policy.classify(PolicyCtx::new(
-                &tu.name,
-                safety_hint,
-                &args,
-                self.cwd,
-            ));
+            let decision =
+                self.policy
+                    .classify(PolicyCtx::new(&tu.name, safety_hint, &args, self.cwd));
             self.events
                 .emit(AgentEvent::PolicyDecision {
                     id: id.clone(),
@@ -493,7 +482,8 @@ impl<'a> TurnRunner<'a> {
                     args,
                 }),
                 PolicyDecision::Deny => {
-                    self.emit_tool_failed(&id, "denied by policy".to_string()).await;
+                    self.emit_tool_failed(&id, "denied by policy".to_string())
+                        .await;
                     approved.push(Approved::Denied {
                         tool_use_id: tu.id.clone(),
                     });
@@ -501,16 +491,14 @@ impl<'a> TurnRunner<'a> {
                 PolicyDecision::Ask(ask) => {
                     if ask.options.is_empty() {
                         // 空 options 等价 Deny（见 sandbox-policy.md §2）
-                        self.emit_tool_failed(&id, "denied by policy".to_string()).await;
+                        self.emit_tool_failed(&id, "denied by policy".to_string())
+                            .await;
                         approved.push(Approved::Denied {
                             tool_use_id: tu.id.clone(),
                         });
                         continue;
                     }
-                    let outcome = self
-                        .permissions
-                        .wait(id.clone(), self.cancel.clone())
-                        .await;
+                    let outcome = self.permissions.wait(id.clone(), self.cancel.clone()).await;
                     self.events
                         .emit(AgentEvent::PermissionResolved {
                             id: id.clone(),
@@ -527,10 +515,7 @@ impl<'a> TurnRunner<'a> {
                                 .unwrap_or(false);
                             self.policy.record(
                                 PolicyCtx::new(&tu.name, safety_hint, &args, self.cwd),
-                                RecordedOutcome::Selected {
-                                    option_id,
-                                    allows,
-                                },
+                                RecordedOutcome::Selected { option_id, allows },
                             );
                             if allows {
                                 approved.push(Approved::Run {
@@ -593,22 +578,15 @@ impl<'a> TurnRunner<'a> {
                     let cancel = self.cancel.child_token();
                     let events = self.events.clone();
                     let cwd = self.cwd.to_path_buf();
+                    let fs = self.fs.clone();
                     let span = tracing::info_span!(
                         "tool_call",
                         tool = %tool.schema().name,
                         tool_call_id = %id,
                     );
                     joinset.spawn(
-                        drive_tool_stream(
-                            id,
-                            tool_use_id,
-                            tool,
-                            args,
-                            cwd,
-                            cancel,
-                            events,
-                        )
-                        .instrument(span),
+                        drive_tool_stream(id, tool_use_id, tool, args, cwd, cancel, events, fs)
+                            .instrument(span),
                     );
                 }
                 Approved::Denied { tool_use_id } => {
@@ -769,14 +747,22 @@ fn content_block_to_message_content(cb: ContentBlock) -> MessageContent {
 
 fn assistant_message(outcome: &DrainOutcome) -> Message {
     let mut content: Vec<MessageContent> = Vec::new();
+    // Thinking 必须排在 Text / ToolUse 之前 —— Anthropic wire 顺序约定
+    // 是 thinking → text → tool_use，错位会被服务端拒；OpenAI 兼容侧
+    // reasoning_content 是 message 顶级字段不在乎顺序，统一形态便于阅读。
+    if !outcome.thinking_buf.is_empty() || outcome.thinking_signature.is_some() {
+        content.push(MessageContent::Thinking {
+            text: outcome.thinking_buf.clone(),
+            signature: outcome.thinking_signature.clone(),
+        });
+    }
     if !outcome.text_buf.is_empty() {
         content.push(MessageContent::Text {
             text: outcome.text_buf.clone(),
         });
     }
     for tu in &outcome.tool_uses {
-        let args =
-            parse_args(&tu.args_buf).unwrap_or(JsonValue::Object(Default::default()));
+        let args = parse_args(&tu.args_buf).unwrap_or(JsonValue::Object(Default::default()));
         content.push(MessageContent::ToolUse {
             id: tu.id.clone(),
             name: tu.name.clone(),
@@ -814,10 +800,7 @@ fn add_usage(a: Usage, b: Usage) -> Usage {
     Usage {
         input_tokens: add_opt(a.input_tokens, b.input_tokens),
         output_tokens: add_opt(a.output_tokens, b.output_tokens),
-        cache_read_input_tokens: add_opt(
-            a.cache_read_input_tokens,
-            b.cache_read_input_tokens,
-        ),
+        cache_read_input_tokens: add_opt(a.cache_read_input_tokens, b.cache_read_input_tokens),
         cache_creation_input_tokens: add_opt(
             a.cache_creation_input_tokens,
             b.cache_creation_input_tokens,
@@ -873,6 +856,7 @@ fn extract_text(fields: &ToolCallUpdateFields) -> Option<String> {
 
 /// 单个工具流的驱动 task。把 [`ToolEvent`] 转发为 [`AgentEvent`]，最后产出
 /// [`ToolResult`] 喂回 LLM。
+#[allow(clippy::too_many_arguments)]
 async fn drive_tool_stream(
     id: ToolCallId,
     tool_use_id: String,
@@ -881,11 +865,9 @@ async fn drive_tool_stream(
     cwd: std::path::PathBuf,
     cancel: CancellationToken,
     events: Arc<EventEmitter>,
+    fs: Arc<dyn FsBackend>,
 ) -> ToolResult {
-    let ctx = ToolContext {
-        cwd: &cwd,
-        cancel: cancel.clone(),
-    };
+    let ctx = ToolContext::new(&cwd, cancel.clone(), fs.clone());
     let mut stream = tool.execute(args, ctx);
 
     let mut last_text: Option<String> = None;

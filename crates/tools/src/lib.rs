@@ -4,5 +4,7 @@
 //! 文本检索等基础能力。每个工具放在独立子模块中，后续按需启用。
 
 pub mod bash;
+pub mod fs;
 
 pub use bash::BashTool;
+pub use fs::{EditFileTool, LocalFsBackend, ReadFileTool, WriteFileTool};

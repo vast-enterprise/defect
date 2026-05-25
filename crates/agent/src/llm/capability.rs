@@ -20,6 +20,8 @@ pub struct Capabilities {
     pub vision: FeatureSupport,
     /// prompt cache。
     pub prompt_cache: FeatureSupport,
+    /// thinking 内容回放策略。详见 [`ThinkingEcho`]。
+    pub thinking_echo: ThinkingEcho,
 }
 
 /// 模型级覆写。`None` 表示沿用 provider 级 [`Capabilities`] 字段。
@@ -32,6 +34,23 @@ pub struct ModelCapabilityOverrides {
     pub vision: Option<FeatureSupport>,
     pub prompt_cache: Option<FeatureSupport>,
     pub parallel_tool_calls: Option<FeatureSupport>,
+    pub thinking_echo: Option<ThinkingEcho>,
+}
+
+/// thinking 内容回放策略。
+///
+/// `Required` —— 上一轮 assistant 的 thinking 必须出现在下一轮请求里
+/// （Anthropic extended thinking、DeepSeek-v4-pro）。`Forbidden` ——
+/// 回放会被服务端拒（DeepSeek-R1、OpenAI o1 / o3 官方）。`Optional`
+/// —— 服务端容忍两种行为。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingEcho {
+    #[default]
+    Forbidden,
+    Required,
+    Optional,
 }
 
 /// 三态特性支持声明。

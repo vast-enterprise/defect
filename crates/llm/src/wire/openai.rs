@@ -4534,6 +4534,9 @@ pub mod components {
         pub tool_calls: Option<ChatCompletionMessageToolCalls>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub function_call: Option<ChatCompletionRequestAssistantMessageFunctionCall>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        /// 兼容厂商扩展（DeepSeek-v4-pro 等）：上一轮 assistant 的思考链文本，thinking 模式下必须回放给服务端。OpenAI 官方忽略此字段。
+        pub reasoning_content: Option<String>,
     }
     /// The role of the messages author, in this case `tool`.
     #[derive(

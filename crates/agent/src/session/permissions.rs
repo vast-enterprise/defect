@@ -35,11 +35,7 @@ impl PermissionGate {
     /// 如果同一 `id` 已经有等待者，旧 sender 被丢弃（旧 wait 会收到
     /// [`PermissionResolution::Cancelled`]，避免悬挂）。这条路径理论上
     /// 不应触发——主循环对每个 tool_use 只 wait 一次。
-    pub async fn wait(
-        &self,
-        id: ToolCallId,
-        cancel: CancellationToken,
-    ) -> PermissionResolution {
+    pub async fn wait(&self, id: ToolCallId, cancel: CancellationToken) -> PermissionResolution {
         let (tx, rx) = oneshot::channel();
         if let Some(prev) = self.waiters.insert(id.clone(), tx) {
             // 不应该发生：同一 id 多次 wait。把旧 waiter 唤醒为 Cancelled，

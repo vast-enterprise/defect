@@ -28,8 +28,18 @@ use toac_build::{BuildOptions, build_with};
 
 const TARGETS: &[(&str, &str, &str, &str)] = &[
     // (name,        oas relative path,            output relative path,            root_path)
-    ("anthropic", "crates/llm/oas/anthropic.yaml", "crates/llm/src/wire/anthropic.rs", "crate::wire::anthropic"),
-    ("openai",    "crates/llm/oas/openai.yaml",    "crates/llm/src/wire/openai.rs",    "crate::wire::openai"),
+    (
+        "anthropic",
+        "crates/llm/oas/anthropic.yaml",
+        "crates/llm/src/wire/anthropic.rs",
+        "crate::wire::anthropic",
+    ),
+    (
+        "openai",
+        "crates/llm/oas/openai.yaml",
+        "crates/llm/src/wire/openai.rs",
+        "crate::wire::openai",
+    ),
 ];
 
 const HEADER: &str = "\
@@ -104,16 +114,16 @@ fn run() -> Result<()> {
 
 /// 生成单个 target 的完整 Rust 文件内容（含 header）。
 fn generate(name: &str, oas_path: &Path, root_path: &str) -> Result<String> {
-    let raw = fs::read_to_string(oas_path)
-        .with_context(|| format!("read {}", oas_path.display()))?;
+    let raw =
+        fs::read_to_string(oas_path).with_context(|| format!("read {}", oas_path.display()))?;
     let spec = parse_spec(oas_path, &raw)?;
     let mut options = BuildOptions::default();
     options.root_path = syn::parse_str(root_path)
         .with_context(|| format!("parse root_path {root_path:?} for {name}"))?;
-    let tokens = build_with(&spec, options)
-        .with_context(|| format!("toac_build::build_with({name})"))?;
-    let parsed: syn::File = syn::parse_file(&tokens.to_string())
-        .with_context(|| format!("syn::parse_file({name})"))?;
+    let tokens =
+        build_with(&spec, options).with_context(|| format!("toac_build::build_with({name})"))?;
+    let parsed: syn::File =
+        syn::parse_file(&tokens.to_string()).with_context(|| format!("syn::parse_file({name})"))?;
     let body = prettyplease::unparse(&parsed);
     let oas_rel = oas_path
         .strip_prefix(workspace_root()?)
@@ -122,9 +132,7 @@ fn generate(name: &str, oas_path: &Path, root_path: &str) -> Result<String> {
     let mut out = String::with_capacity(body.len() + 256);
     out.push_str(HEADER);
     out.push_str(&oas_rel.display().to_string());
-    out.push_str(
-        "\n// Re-run via `cargo run -p defect-llm-codegen -- ",
-    );
+    out.push_str("\n// Re-run via `cargo run -p defect-llm-codegen -- ");
     out.push_str(name);
     out.push_str("`.\n#![allow(\n    clippy::manual_async_fn,\n    clippy::needless_return,\n    clippy::single_match,\n    clippy::match_single_binding,\n    clippy::too_many_arguments,\n    clippy::large_enum_variant,\n    clippy::enum_variant_names,\n    dead_code,\n    unused_imports,\n)]\n\n");
     out.push_str(&body);
@@ -137,10 +145,12 @@ fn parse_spec(path: &Path, raw: &str) -> Result<oas3::Spec> {
         .and_then(|s| s.to_str())
         .map(str::to_ascii_lowercase);
     match ext.as_deref() {
-        Some("yaml" | "yml") => oas3::from_yaml(raw)
-            .with_context(|| format!("parse YAML spec {}", path.display())),
-        Some("json") => oas3::from_json(raw)
-            .with_context(|| format!("parse JSON spec {}", path.display())),
+        Some("yaml" | "yml") => {
+            oas3::from_yaml(raw).with_context(|| format!("parse YAML spec {}", path.display()))
+        }
+        Some("json") => {
+            oas3::from_json(raw).with_context(|| format!("parse JSON spec {}", path.display()))
+        }
         _ => bail!("unrecognised spec extension on {}", path.display()),
     }
 }

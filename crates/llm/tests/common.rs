@@ -6,16 +6,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::{
-    Content, ContentBlock, TextContent, ToolCallContent, ToolCallUpdateFields,
+    Content, ContentBlock, SessionId, TextContent, ToolCallContent, ToolCallUpdateFields,
 };
+use defect_agent::fs::{FsBackend, NoopFsBackend};
 use defect_agent::llm::LlmProvider;
 use defect_agent::policy::{OpenPolicy, SandboxPolicy};
 use defect_agent::session::{
-    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig,
+    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig, uuid_like,
 };
 use defect_agent::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolEvent, ToolSchema, ToolStream,
 };
+use futures::future::BoxFuture;
 use futures::stream;
 use serde_json::json;
 use wiremock::MockServer;
@@ -87,10 +89,16 @@ impl Tool for EchoTool {
         SafetyClass::ReadOnly
     }
 
-    fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
-        let mut fields = ToolCallUpdateFields::default();
-        fields.title = Some("echo".to_string());
-        ToolCallDescription { fields }
+    fn describe<'a>(
+        &'a self,
+        _args: &'a serde_json::Value,
+        _ctx: ToolContext<'a>,
+    ) -> BoxFuture<'a, ToolCallDescription> {
+        Box::pin(async {
+            let mut fields = ToolCallUpdateFields::default();
+            fields.title = Some("echo".to_string());
+            ToolCallDescription { fields }
+        })
     }
 
     fn execute(&self, args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
@@ -126,9 +134,14 @@ pub async fn build_session(provider: Arc<dyn LlmProvider>, model: &str) -> Arc<d
         })
         .build();
     let cwd = std::env::current_dir().expect("cwd");
-    core.create_session(cwd, vec![])
-        .await
-        .expect("create session")
+    core.create_session(
+        SessionId::new(uuid_like()),
+        cwd,
+        vec![],
+        Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+    )
+    .await
+    .expect("create session")
 }
 
 pub fn user_prompt(text: &str) -> Vec<ContentBlock> {

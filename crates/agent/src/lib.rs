@@ -10,6 +10,7 @@
 
 pub mod error;
 pub mod event;
+pub mod fs;
 pub mod llm;
 pub mod policy;
 pub mod session;

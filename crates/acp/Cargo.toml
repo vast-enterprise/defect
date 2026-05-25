@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 defect-agent.workspace = true
+defect-tools.workspace = true
 agent-client-protocol.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -16,3 +17,5 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+serde_json.workspace = true

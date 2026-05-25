@@ -113,6 +113,7 @@ mod tests {
     use std::pin::Pin;
 
     use futures::Stream;
+    use futures::future::BoxFuture;
     use serde_json::json;
 
     use crate::tool::{
@@ -144,14 +145,21 @@ mod tests {
             SafetyClass::ReadOnly
         }
 
-        fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
-            ToolCallDescription {
-                fields: Default::default(),
-            }
+        fn describe<'a>(
+            &'a self,
+            _args: &'a serde_json::Value,
+            _ctx: ToolContext<'a>,
+        ) -> BoxFuture<'a, ToolCallDescription> {
+            Box::pin(async {
+                ToolCallDescription {
+                    fields: Default::default(),
+                }
+            })
         }
 
         fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
-            let stream: Pin<Box<dyn Stream<Item = ToolEvent> + Send>> = Box::pin(futures::stream::empty());
+            let stream: Pin<Box<dyn Stream<Item = ToolEvent> + Send>> =
+                Box::pin(futures::stream::empty());
             stream
         }
     }

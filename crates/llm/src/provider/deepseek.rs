@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelInfo, ProtocolId,
-    ProviderError, ProviderInfo, ProviderStream,
+    ProviderError, ProviderInfo, ProviderStream, ThinkingEcho,
 };
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
@@ -115,6 +115,11 @@ fn default_deepseek_capabilities() -> Capabilities {
         thinking: FeatureSupport::Supported,
         vision: FeatureSupport::Unsupported,
         prompt_cache: FeatureSupport::Supported,
+        // DeepSeek 各模型行为不一致：R1 系列禁止回放 reasoning_content，
+        // v4-pro 必须回放。provider 默认走保守 Forbidden，模型级覆盖走
+        // [`ModelCapabilityOverrides::thinking_echo`]（见 provider/openai.rs
+        // 硬编码表）。
+        thinking_echo: ThinkingEcho::Forbidden,
     }
 }
 

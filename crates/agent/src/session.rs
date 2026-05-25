@@ -16,13 +16,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
-    ContentBlock, McpServer, SessionId, StopReason, ToolCallId,
-};
+use agent_client_protocol::schema::{ContentBlock, McpServer, SessionId, StopReason, ToolCallId};
 use futures::future::BoxFuture;
 
 use crate::error::BoxError;
 use crate::event::{AgentEvent, PermissionResolution};
+use crate::fs::FsBackend;
 use crate::llm::{Message, ProviderError};
 use crate::tool::{Tool, ToolSchema};
 
@@ -33,7 +32,7 @@ mod permissions;
 mod tool_registry;
 mod turn;
 
-pub use default::{DefaultAgentCore, DefaultAgentCoreBuilder, DefaultSession};
+pub use default::{DefaultAgentCore, DefaultAgentCoreBuilder, DefaultSession, uuid_like};
 pub use events::EventEmitter;
 pub use history::VecHistory;
 pub use permissions::PermissionGate;
@@ -52,17 +51,30 @@ pub use turn::{TurnConfig, TurnRequestLimit, TurnRunner};
 pub trait AgentCore: Send + Sync {
     /// 创建一个新 session。
     ///
+    /// `id` 由调用方（`defect-acp` 的 `session/new` handler）生成并传入——
+    /// fs 后端在 [`AgentCore::create_session`] 之外构造时已经需要 SessionId
+    /// 了（见 `docs/inbound/acp-fs.md` §3.2）。具体实现把它当作外部权威 id
+    /// 用，重复时返回 [`AgentError::DuplicateSessionId`]。
+    ///
     /// `mcp_servers` 是 `session/new` 请求里携带的 per-session MCP server
     /// 列表；具体实现在初始化阶段拉起子进程 / 建立 SSE 连接，把每个 MCP
     /// 工具包装成 [`Tool`] 加入会话工具表。
     ///
+    /// `fs` 是 session 级文件系统后端——`defect-acp` 装配时按客户端的
+    /// [`FileSystemCapabilities`] 选择 `LocalFsBackend` 或 `AcpFsBackend`。
+    /// session 持有它的 `Arc`，所有 fs 工具调用都走它。
+    ///
     /// # Errors
     ///
-    /// MCP 启动失败、cwd 不存在等。具体错误类型由实现确定。
+    /// MCP 启动失败、cwd 不存在、id 重复等。
+    ///
+    /// [`FileSystemCapabilities`]: agent_client_protocol::schema::FileSystemCapabilities
     fn create_session(
         &self,
+        id: SessionId,
         cwd: PathBuf,
         mcp_servers: Vec<McpServer>,
+        fs: Arc<dyn FsBackend>,
     ) -> BoxFuture<'_, Result<Arc<dyn Session>, AgentError>>;
 
     /// 按 id 查找已存在的 session。
@@ -95,10 +107,7 @@ pub trait Session: Send + Sync {
     ///
     /// 同一 session 同时只能有一个进行中的 turn；并发调用返回
     /// [`TurnError::TurnInProgress`]。
-    fn run_turn(
-        &self,
-        prompt: Vec<ContentBlock>,
-    ) -> BoxFuture<'_, Result<StopReason, TurnError>>;
+    fn run_turn(&self, prompt: Vec<ContentBlock>) -> BoxFuture<'_, Result<StopReason, TurnError>>;
 
     /// 取消当前 turn。幂等：没有 turn 在跑时是 no-op。
     fn cancel_turn(&self);
@@ -152,6 +161,11 @@ pub enum AgentError {
         #[source]
         source: BoxError,
     },
+
+    /// 调用方传入的 [`SessionId`] 已经存在于 session 表中。
+    /// 单调递增 + 时间戳的 id 生成器理论上不会冲突；这是安全网。
+    #[error("session id already in use: {0}")]
+    DuplicateSessionId(SessionId),
 
     #[error(transparent)]
     Other(#[from] BoxError),

@@ -29,10 +29,7 @@ use serde_yaml::{Mapping, Value};
 use crate::workspace_root;
 
 /// 仅保留这两条端点 + 各自 `$ref` 闭包。新增 LLM 接口前先在这里挂。
-const KEEP_PATHS: &[(&str, &[&str])] = &[
-    ("/chat/completions", &["post"]),
-    ("/models", &["get"]),
-];
+const KEEP_PATHS: &[(&str, &[&str])] = &[("/chat/completions", &["post"]), ("/models", &["get"])];
 
 /// 上游 spec 把 seed 字段写成 `9223372036854776000`，超过 `i64::MAX` 193，
 /// `oas3` parser 拒收。下行就把字面量替换成 `i64::MAX`。
@@ -48,38 +45,28 @@ pub fn run(args: &[String]) -> Result<()> {
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--upstream" => {
-                let p = iter
-                    .next()
-                    .context("--upstream requires a path argument")?;
+                let p = iter.next().context("--upstream requires a path argument")?;
                 upstream = Some(PathBuf::from(p));
             }
             other => bail!("unknown argument {other:?} for openai-strip"),
         }
     }
-    let upstream = upstream.context(
-        "missing --upstream <path-to-openai-openapi/openapi.yaml>",
-    )?;
+    let upstream = upstream.context("missing --upstream <path-to-openai-openapi/openapi.yaml>")?;
 
     let workspace_root = workspace_root()?;
     let raw = fs::read_to_string(&upstream)
         .with_context(|| format!("read upstream spec {}", upstream.display()))?;
 
-    let stripped = strip_and_patch(&raw)
-        .with_context(|| format!("strip + patch {}", upstream.display()))?;
+    let stripped =
+        strip_and_patch(&raw).with_context(|| format!("strip + patch {}", upstream.display()))?;
 
     let out = workspace_root.join("crates/llm/oas/openai.yaml");
     if let Some(parent) = out.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("create_dir_all {}", parent.display())
-        })?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all {}", parent.display()))?;
     }
-    fs::write(&out, stripped)
-        .with_context(|| format!("write {}", out.display()))?;
-    println!(
-        "[strip] {} → {}",
-        upstream.display(),
-        out.display(),
-    );
+    fs::write(&out, stripped).with_context(|| format!("write {}", out.display()))?;
+    println!("[strip] {} → {}", upstream.display(), out.display(),);
     Ok(())
 }
 
@@ -97,8 +84,7 @@ pub fn strip_and_patch(raw: &str) -> Result<String> {
         t == "exclusiveMinimum: true" || t == "exclusiveMaximum: true"
     });
 
-    let mut spec: Value =
-        serde_yaml::from_str(&raw).context("parse upstream YAML")?;
+    let mut spec: Value = serde_yaml::from_str(&raw).context("parse upstream YAML")?;
     let map = spec.as_mapping_mut().context("spec is not a mapping")?;
 
     // 2. 裁 paths 到我们要的 KEEP_PATHS 子集。
@@ -154,9 +140,17 @@ pub fn strip_and_patch(raw: &str) -> Result<String> {
         ]],
     )?;
 
-    // 9. 序列化回 YAML。
-    let out =
-        serde_yaml::to_string(&spec).context("serialize stripped spec")?;
+    // 9. 给 `ChatCompletionRequestAssistantMessage` 挂一个非标 `reasoning_content`
+    //    字段。OpenAI 官方 wire schema 没有这个字段，但 DeepSeek-v4-pro 等
+    //    兼容厂商在 thinking 模式下要求把上一轮 reasoning 文本回放回去，
+    //    否则 400 "reasoning_content must be passed back to the API"。我们
+    //    把它作为可选 nullable string 注入 schema，protocol 层根据
+    //    `Capabilities.thinking_echo` 决定是否填值。OpenAI 官方收到额外
+    //    字段会忽略，不会破坏现有路径。
+    inject_assistant_reasoning_content(map)?;
+
+    // 10. 序列化回 YAML。
+    let out = serde_yaml::to_string(&spec).context("serialize stripped spec")?;
     Ok(out)
 }
 
@@ -208,7 +202,10 @@ fn inject_error_schema(spec: &mut Mapping) -> Result<()> {
     error_obj.insert(Value::String("type".into()), Value::String("object".into()));
     error_obj.insert(
         Value::String("required".into()),
-        Value::Sequence(vec![Value::String("message".into()), Value::String("type".into())]),
+        Value::Sequence(vec![
+            Value::String("message".into()),
+            Value::String("type".into()),
+        ]),
     );
     error_obj.insert(
         Value::String("properties".into()),
@@ -231,8 +228,7 @@ fn inject_error_schema(spec: &mut Mapping) -> Result<()> {
     top.insert(
         Value::String("description".into()),
         Value::String(
-            "OpenAI 4xx/5xx 错误响应。`error.code` / `param` 在不同错误类型上可能缺省。"
-                .into(),
+            "OpenAI 4xx/5xx 错误响应。`error.code` / `param` 在不同错误类型上可能缺省。".into(),
         ),
     );
 
@@ -261,8 +257,7 @@ fn inject_error_responses(spec: &mut Mapping) -> Result<()> {
         ("502", "Bad Gateway — 上游网关异常。"),
         ("503", "Service Unavailable — 上游过载或维护中。"),
     ];
-    let desc_lookup: std::collections::HashMap<&str, &str> =
-        descriptions.iter().copied().collect();
+    let desc_lookup: std::collections::HashMap<&str, &str> = descriptions.iter().copied().collect();
 
     let paths = spec
         .get_mut(Value::String("paths".into()))
@@ -288,9 +283,7 @@ fn inject_error_responses(spec: &mut Mapping) -> Result<()> {
                 .entry(Value::String("responses".into()))
                 .or_insert_with(|| Value::Mapping(Mapping::new()))
                 .as_mapping_mut()
-                .with_context(|| {
-                    format!("paths[{path}].{m}.responses is not a mapping")
-                })?;
+                .with_context(|| format!("paths[{path}].{m}.responses is not a mapping"))?;
             for status in STATUSES {
                 let key = Value::String((*status).to_string());
                 if responses.contains_key(&key) {
@@ -344,6 +337,38 @@ fn relax_stream_finish_reason(spec: &mut Mapping) -> Result<()> {
         return Ok(());
     };
     required.retain(|v| v.as_str() != Some("finish_reason"));
+    Ok(())
+}
+
+/// 在 `ChatCompletionRequestAssistantMessage.properties` 上挂一个
+/// `reasoning_content`（nullable string，optional）。详见 §1.2 / §6.1。
+fn inject_assistant_reasoning_content(spec: &mut Mapping) -> Result<()> {
+    let Some(props) = spec
+        .get_mut(Value::String("components".into()))
+        .and_then(Value::as_mapping_mut)
+        .and_then(|m| m.get_mut(Value::String("schemas".into())))
+        .and_then(Value::as_mapping_mut)
+        .and_then(|m| {
+            m.get_mut(Value::String(
+                "ChatCompletionRequestAssistantMessage".into(),
+            ))
+        })
+        .and_then(Value::as_mapping_mut)
+        .and_then(|m| m.get_mut(Value::String("properties".into())))
+        .and_then(Value::as_mapping_mut)
+    else {
+        return Ok(());
+    };
+    if props.contains_key(Value::String("reasoning_content".into())) {
+        return Ok(());
+    }
+    props.insert(
+        Value::String("reasoning_content".into()),
+        yaml_nullable_string_schema(
+            "兼容厂商扩展（DeepSeek-v4-pro 等）：上一轮 assistant 的思考链文本，\
+             thinking 模式下必须回放给服务端。OpenAI 官方忽略此字段。",
+        ),
+    );
     Ok(())
 }
 
@@ -436,9 +461,7 @@ fn filter_paths(spec: &mut Mapping) -> Result<Vec<(String, Vec<String>)>> {
 
     let mut kept = Vec::new();
     for (path, methods) in KEEP_PATHS {
-        let Some(item) =
-            paths.get_mut(Value::String((*path).into()))
-        else {
+        let Some(item) = paths.get_mut(Value::String((*path).into())) else {
             continue;
         };
         let item_map = item
@@ -460,9 +483,7 @@ fn filter_paths(spec: &mut Mapping) -> Result<Vec<(String, Vec<String>)>> {
         // 进一步：每个保留方法里删掉 codegen 用不到的 x-* 扩展（x-oaiMeta
         // 这些含大段 example 字符串，留着只是噪音）。
         for m in *methods {
-            if let Some(op) =
-                item_map.get_mut(Value::String((*m).into()))
-            {
+            if let Some(op) = item_map.get_mut(Value::String((*m).into())) {
                 if let Some(op_map) = op.as_mapping_mut() {
                     let drop: Vec<_> = op_map
                         .iter()
@@ -477,10 +498,7 @@ fn filter_paths(spec: &mut Mapping) -> Result<Vec<(String, Vec<String>)>> {
         }
         let kept_methods: Vec<String> = methods
             .iter()
-            .filter(|m| {
-                item_map
-                    .contains_key(Value::String((**m).into()))
-            })
+            .filter(|m| item_map.contains_key(Value::String((**m).into())))
             .map(|m| (*m).to_owned())
             .collect();
         kept.push(((*path).to_owned(), kept_methods));
@@ -577,10 +595,7 @@ fn parse_components_ref(r: &str) -> Option<(String, String)> {
 }
 
 /// 重写 components.<kind>，只保留闭包里出现过的项。
-fn filter_components(
-    spec: &mut Mapping,
-    closure: &BTreeSet<(String, String)>,
-) -> Result<()> {
+fn filter_components(spec: &mut Mapping, closure: &BTreeSet<(String, String)>) -> Result<()> {
     let components = spec
         .get_mut(Value::String("components".into()))
         .context("spec.components missing")?
@@ -589,8 +604,7 @@ fn filter_components(
 
     // securitySchemes 不通过 ref 引用，只通过顶层 security: [{ ApiKeyAuth: [] }]
     // 触发——保留全表（一般也很小）。
-    let preserve_kinds: BTreeSet<&str> =
-        ["securitySchemes"].into_iter().collect();
+    let preserve_kinds: BTreeSet<&str> = ["securitySchemes"].into_iter().collect();
 
     let kinds: Vec<String> = components
         .iter()
@@ -600,9 +614,7 @@ fn filter_components(
         if preserve_kinds.contains(kind.as_str()) {
             continue;
         }
-        let Some(submap_value) =
-            components.get_mut(Value::String(kind.clone()))
-        else {
+        let Some(submap_value) = components.get_mut(Value::String(kind.clone())) else {
             continue;
         };
         let Some(submap) = submap_value.as_mapping_mut() else {

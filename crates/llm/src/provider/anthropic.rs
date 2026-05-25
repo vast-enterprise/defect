@@ -11,7 +11,7 @@ use defect_agent::error::BoxError;
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
     ModelInfo, ProtocolId, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
-    RateLimitScope,
+    RateLimitScope, ThinkingEcho,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -111,6 +111,7 @@ impl AnthropicProvider {
                 thinking: FeatureSupport::Supported,
                 vision: FeatureSupport::Supported,
                 prompt_cache: FeatureSupport::Supported,
+                thinking_echo: ThinkingEcho::Required,
             },
             models: Arc::default(),
         })

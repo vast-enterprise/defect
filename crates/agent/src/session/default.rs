@@ -35,13 +35,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::event::PermissionResolution;
+use crate::fs::FsBackend;
 use crate::llm::LlmProvider;
 use crate::policy::{AskWritesPolicy, SandboxPolicy};
 use crate::session::events::EventEmitter;
 use crate::session::permissions::PermissionGate;
 use crate::session::tool_registry::{CompositeRegistry, StaticToolRegistry};
 use crate::session::turn::{TurnConfig, TurnRunner};
-use crate::session::{AgentCore, AgentError, EventStream, History, Session, ToolRegistry, TurnError, VecHistory};
+use crate::session::{
+    AgentCore, AgentError, EventStream, History, Session, ToolRegistry, TurnError, VecHistory,
+};
 
 /// 默认 [`AgentCore`]。
 pub struct DefaultAgentCore {
@@ -107,8 +110,10 @@ impl DefaultAgentCoreBuilder {
 impl AgentCore for DefaultAgentCore {
     fn create_session(
         &self,
+        id: SessionId,
         cwd: PathBuf,
         mcp_servers: Vec<McpServer>,
+        fs: Arc<dyn FsBackend>,
     ) -> BoxFuture<'_, Result<Arc<dyn Session>, AgentError>> {
         Box::pin(async move {
             if !cwd.is_absolute() || !cwd.exists() {
@@ -123,7 +128,10 @@ impl AgentCore for DefaultAgentCore {
                 );
             }
 
-            let id = SessionId::new(uuid_like());
+            if self.sessions.contains_key(&id) {
+                return Err(AgentError::DuplicateSessionId(id));
+            }
+
             let session_tools: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::empty());
             let composite: Arc<dyn ToolRegistry> = Arc::new(CompositeRegistry::new(
                 session_tools,
@@ -141,6 +149,7 @@ impl AgentCore for DefaultAgentCore {
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
                 config: self.config.clone(),
+                fs,
             }) as Arc<dyn Session>;
 
             self.sessions.insert(id, session.clone());
@@ -166,6 +175,9 @@ pub struct DefaultSession {
     /// `None` 表示空闲。`std::sync::Mutex` 仅短暂持锁、不跨 await。
     turn_state: Mutex<TurnSlot>,
     config: TurnConfig,
+    /// session 级 fs 后端。由 [`AgentCore::create_session`] 注入；
+    /// `TurnRunner` 把 `&dyn FsBackend` 借到 [`crate::tool::ToolContext`] 传给工具。
+    fs: Arc<dyn FsBackend>,
 }
 
 #[derive(Default)]
@@ -195,10 +207,7 @@ impl Session for DefaultSession {
         self.events.subscribe()
     }
 
-    fn run_turn(
-        &self,
-        prompt: Vec<ContentBlock>,
-    ) -> BoxFuture<'_, Result<StopReason, TurnError>> {
+    fn run_turn(&self, prompt: Vec<ContentBlock>) -> BoxFuture<'_, Result<StopReason, TurnError>> {
         // 整个 turn 包在一个 span 里——LLM 调用 / 工具调用 / 权限请求 都
         // 自动挂成子 span，排障时一棵 trace 走到底。session_id 截短，避免
         // 输出整段 uuid 噪音。详见 docs/outbound/tracing.md §2.2。
@@ -237,6 +246,7 @@ impl Session for DefaultSession {
                     cancel,
                     config: &self.config,
                     cwd: &self.cwd,
+                    fs: self.fs.clone(),
                 };
 
                 runner.run(prompt).await
@@ -265,7 +275,12 @@ impl Session for DefaultSession {
 }
 
 /// v0 的 session id 生成：进程内单调递增 + 时间戳。引入 uuid crate 时再换。
-fn uuid_like() -> String {
+///
+/// `defect-acp` 的 `session/new` handler 在调用
+/// [`AgentCore::create_session`] 之前需要 `SessionId`（用于构造
+/// `AcpFsBackend`，详见 `docs/inbound/acp-fs.md` §3.2）；这个函数对外公开，
+/// 让 acp / 测试都能拿到一致格式的 id。
+pub fn uuid_like() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);

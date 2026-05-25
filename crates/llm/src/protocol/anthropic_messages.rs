@@ -84,22 +84,35 @@ fn encode_message(m: &Message) -> wire::MessageParam {
             Role::Assistant => wire::MessageParamRole::Assistant,
         },
         content: wire::MessageParamContent::MessageParamContentVariant1(
-            m.content.iter().map(encode_content).collect(),
+            m.content.iter().filter_map(encode_content).collect(),
         ),
     }
 }
 
-fn encode_content(c: &MessageContent) -> wire::ContentBlockParam {
+fn encode_content(c: &MessageContent) -> Option<wire::ContentBlockParam> {
     match c {
-        MessageContent::Text { text } => {
-            wire::ContentBlockParam::TextBlockParam(wire::TextBlockParam {
+        MessageContent::Text { text } => Some(wire::ContentBlockParam::TextBlockParam(
+            wire::TextBlockParam {
                 text: text.clone(),
                 r#type: wire::TextBlockParamType::Text,
                 cache_control: None,
                 citations: None,
-            })
+            },
+        )),
+        MessageContent::Thinking { text, signature } => {
+            // Anthropic wire 上 `signature` 是 required —— 缺失等价于
+            // 伪造，服务端拒。OpenAI / DeepSeek 兼容路径不会带 signature；
+            // 跨 provider 切回 Anthropic 时 thinking 块没法回放，整块跳过。
+            let signature = signature.as_ref()?;
+            Some(wire::ContentBlockParam::ThinkingBlockParam(
+                wire::ThinkingBlockParam {
+                    signature: signature.clone(),
+                    thinking: text.clone(),
+                    r#type: wire::ThinkingBlockParamType::Thinking,
+                },
+            ))
         }
-        MessageContent::ToolUse { id, name, args } => {
+        MessageContent::ToolUse { id, name, args } => Some(
             wire::ContentBlockParam::ToolUseBlockParam(wire::ToolUseBlockParam {
                 id: id.clone(),
                 input: json_value_to_object(args),
@@ -107,28 +120,30 @@ fn encode_content(c: &MessageContent) -> wire::ContentBlockParam {
                 r#type: wire::ToolUseBlockParamType::ToolUse,
                 cache_control: None,
                 caller: None,
-            })
-        }
+            }),
+        ),
         MessageContent::ToolResult {
             tool_use_id,
             output,
             is_error,
-        } => encode_tool_result(tool_use_id, output, *is_error),
-        MessageContent::Image { mime, data } => {
-            wire::ContentBlockParam::ImageBlockParam(wire::ImageBlockParam {
+        } => Some(encode_tool_result(tool_use_id, output, *is_error)),
+        MessageContent::Image { mime, data } => Some(wire::ContentBlockParam::ImageBlockParam(
+            wire::ImageBlockParam {
                 source: encode_image_source(mime, data),
                 r#type: wire::ImageBlockParamType::Image,
                 cache_control: None,
-            })
-        }
+            },
+        )),
         // 内部枚举是 non_exhaustive；新增 variant 时落到此处的回退是
         // 一段空文本——明显的 placeholder，方便 grep 出来补真正的映射。
-        _ => wire::ContentBlockParam::TextBlockParam(wire::TextBlockParam {
-            text: String::new(),
-            r#type: wire::TextBlockParamType::Text,
-            cache_control: None,
-            citations: None,
-        }),
+        _ => Some(wire::ContentBlockParam::TextBlockParam(
+            wire::TextBlockParam {
+                text: String::new(),
+                r#type: wire::TextBlockParamType::Text,
+                cache_control: None,
+                citations: None,
+            },
+        )),
     }
 }
 

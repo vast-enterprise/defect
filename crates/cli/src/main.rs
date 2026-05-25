@@ -26,7 +26,7 @@ use defect_agent::session::{
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
 use defect_llm::provider::openai::{OpenAiConfig, OpenAiProvider};
-use defect_tools::BashTool;
+use defect_tools::{BashTool, EditFileTool, ReadFileTool, WriteFileTool};
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
@@ -45,8 +45,7 @@ async fn main() -> anyhow::Result<()> {
     // authorization header 明文（详见 docs/outbound/tracing.md §5.2）。
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,toac=warn")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,toac=warn")),
         )
         .with_writer(std::io::stderr)
         .with_target(true)
@@ -69,6 +68,9 @@ async fn main() -> anyhow::Result<()> {
     let tools: Arc<dyn ToolRegistry> = Arc::new(
         StaticToolRegistry::builder()
             .insert(Arc::new(BashTool::new()))
+            .insert(Arc::new(ReadFileTool::new()))
+            .insert(Arc::new(WriteFileTool::new()))
+            .insert(Arc::new(EditFileTool::new()))
             .build(),
     );
     let agent = DefaultAgentCore::builder()
@@ -144,7 +146,6 @@ fn build_provider(cli: &CliArgs) -> anyhow::Result<(Arc<dyn LlmProvider>, String
         }
     }
 }
-
 
 /// 极简 `.env` 加载器：`KEY=VALUE` 一行一条，`#` 开头注释、空行跳过；
 /// 支持外层 `"..."` / `'...'` 包裹去除。**已在进程 env 里的变量保留原值**，

@@ -16,8 +16,8 @@
 
 use std::sync::Mutex;
 
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -67,7 +67,10 @@ impl EventEmitter {
     pub async fn emit(&self, event: AgentEvent) {
         // 取快照，避免在 await 期间持锁。
         let snapshot: Vec<SubscriberHandle> = {
-            let guard = self.senders.lock().expect("EventEmitter senders mutex poisoned");
+            let guard = self
+                .senders
+                .lock()
+                .expect("EventEmitter senders mutex poisoned");
             guard.clone()
         };
 
@@ -85,7 +88,10 @@ impl EventEmitter {
 
     /// 清理已经 drop 的 receiver 对应的 sender。
     fn prune(&self, snapshot: &[SubscriberHandle], dead_indices: &[usize]) {
-        let mut guard = self.senders.lock().expect("EventEmitter senders mutex poisoned");
+        let mut guard = self
+            .senders
+            .lock()
+            .expect("EventEmitter senders mutex poisoned");
         // snapshot 与 *guard 可能由于其他 subscribe 调用而长度不一致；
         // 我们按"指针相等"判断，避免删错。
         guard.retain(|tx| {
@@ -155,11 +161,7 @@ mod tests {
         let mut alive = bus.subscribe();
 
         bus.emit(AgentEvent::TurnStarted).await;
-        let count = bus
-            .senders
-            .lock()
-            .expect("mutex poisoned")
-            .len();
+        let count = bus.senders.lock().expect("mutex poisoned").len();
         // 第一次 emit 后死链已被清掉，只剩 alive
         assert_eq!(count, 1);
         let _ = alive.next().await;

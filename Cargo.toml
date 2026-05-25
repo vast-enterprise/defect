@@ -63,3 +63,4 @@ serde_yaml = "0.9"
 
 # 测试基础设施
 wiremock = "0.6"
+tempfile = "3"

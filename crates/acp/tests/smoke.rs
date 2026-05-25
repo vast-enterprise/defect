@@ -14,7 +14,7 @@ use agent_client_protocol::schema::{
     SessionNotification, SessionUpdate, StopReason as AcpStopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectTo, Role};
-use defect_acp::{serve_on, EchoProvider};
+use defect_acp::{EchoProvider, serve_on};
 use defect_agent::session::{AgentCore, DefaultAgentCore, TurnConfig};
 
 /// `Channel` 实现的是 `ConnectTo<R>` for 任意 R，但 `serve_on` 需要
@@ -106,7 +106,9 @@ async fn echo_round_trip() {
                 let prompt_resp = cx
                     .send_request(PromptRequest::new(
                         new_session.session_id,
-                        vec![ContentBlock::Text(TextContent::new(prompt_text.to_string()))],
+                        vec![ContentBlock::Text(TextContent::new(
+                            prompt_text.to_string(),
+                        ))],
                     ))
                     .block_task()
                     .await?;

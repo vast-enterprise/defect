@@ -7,7 +7,7 @@ use std::pin::Pin;
 
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelInfo, ProtocolId,
-    ProviderChunk, ProviderError, ProviderInfo, ProviderStream, StopReason,
+    ProviderChunk, ProviderError, ProviderInfo, ProviderStream, StopReason, ThinkingEcho,
 };
 use futures::future::BoxFuture;
 use futures::stream;
@@ -44,6 +44,7 @@ impl LlmProvider for EchoProvider {
             thinking: FeatureSupport::Unsupported,
             vision: FeatureSupport::Unsupported,
             prompt_cache: FeatureSupport::Unsupported,
+            thinking_echo: ThinkingEcho::Forbidden,
         }
     }
 
@@ -75,8 +76,9 @@ impl LlmProvider for EchoProvider {
                     reason: StopReason::EndTurn,
                 }),
             ];
-            let s: Pin<Box<dyn futures::Stream<Item = Result<ProviderChunk, ProviderError>> + Send>> =
-                Box::pin(stream::iter(chunks));
+            let s: Pin<
+                Box<dyn futures::Stream<Item = Result<ProviderChunk, ProviderError>> + Send>,
+            > = Box::pin(stream::iter(chunks));
             Ok(s)
         })
     }
