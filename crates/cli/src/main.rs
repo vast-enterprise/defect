@@ -17,6 +17,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use clap::{Parser, ValueEnum};
 use defect_acp::EchoProvider;
 use defect_agent::llm::LlmProvider;
 use defect_agent::session::{
@@ -32,10 +33,6 @@ const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
 const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
 const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-chat";
 const DEFAULT_ECHO_MODEL: &str = "echo";
-
-const PROVIDER_ENV: &str = "DEFECT_PROVIDER";
-const MODEL_ENV: &str = "DEFECT_MODEL";
-const DEFAULT_PROVIDER: &str = "echo";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
-    let cli = CliArgs::parse(env::args().skip(1))?;
+    let cli = CliArgs::parse();
     let (provider, model) = build_provider(&cli)?;
 
     tracing::info!(
@@ -85,83 +82,43 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Default)]
+/// Headless agent over ACP/stdio.
+#[derive(Debug, Parser)]
+#[command(
+    name = "defect",
+    about = "Headless agent over ACP/stdio",
+    long_about = "defect — headless agent over ACP/stdio.\n\n\
+                  Auth env: ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY \
+                  (consumed by the chosen provider, not used to pick one).\n\
+                  Logging: RUST_LOG controls tracing-subscriber EnvFilter (default: info)."
+)]
 struct CliArgs {
-    provider: Option<String>,
+    /// LLM provider to use. CLI flag wins over DEFECT_PROVIDER env.
+    #[arg(long, value_enum, env = "DEFECT_PROVIDER", default_value_t = ProviderKind::Echo)]
+    provider: ProviderKind,
+
+    /// Override the default model id. CLI flag wins over DEFECT_MODEL env.
+    #[arg(long, env = "DEFECT_MODEL")]
     model: Option<String>,
 }
 
-impl CliArgs {
-    fn parse<I: IntoIterator<Item = String>>(args: I) -> anyhow::Result<Self> {
-        let mut out = CliArgs::default();
-        let mut iter = args.into_iter();
-        while let Some(arg) = iter.next() {
-            match arg.as_str() {
-                "--provider" => {
-                    out.provider = Some(iter.next().ok_or_else(|| {
-                        anyhow::anyhow!("--provider requires a value (echo|anthropic|openai|deepseek)")
-                    })?);
-                }
-                s if s.starts_with("--provider=") => {
-                    out.provider = Some(s["--provider=".len()..].to_string());
-                }
-                "--model" => {
-                    out.model = Some(
-                        iter.next()
-                            .ok_or_else(|| anyhow::anyhow!("--model requires a value"))?,
-                    );
-                }
-                s if s.starts_with("--model=") => {
-                    out.model = Some(s["--model=".len()..].to_string());
-                }
-                "-h" | "--help" => {
-                    print_help();
-                    std::process::exit(0);
-                }
-                other => {
-                    anyhow::bail!("unknown argument: {other}");
-                }
-            }
-        }
-        Ok(out)
-    }
-}
-
-fn print_help() {
-    eprintln!(
-        "defect — headless agent over ACP/stdio\n\n\
-         Usage: defect [OPTIONS]\n\n\
-         Options:\n\
-           --provider <name>   echo | anthropic | openai | deepseek (default: echo)\n\
-                               Also configurable via DEFECT_PROVIDER env var.\n\
-           --model <id>        Override the default model id\n\
-                               Also configurable via DEFECT_MODEL env var.\n\
-           -h, --help          Show this help\n\n\
-         Environment:\n\
-           DEFECT_PROVIDER     Same as --provider; CLI flag wins\n\
-           DEFECT_MODEL        Same as --model; CLI flag wins\n\
-           ANTHROPIC_API_KEY   Auth for the anthropic provider\n\
-           OPENAI_API_KEY      Auth for the openai provider\n\
-           DEEPSEEK_API_KEY    Auth for the deepseek provider\n\
-           RUST_LOG            tracing-subscriber EnvFilter (default: info)"
-    );
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ProviderKind {
+    Echo,
+    Anthropic,
+    Openai,
+    Deepseek,
 }
 
 fn build_provider(cli: &CliArgs) -> anyhow::Result<(Arc<dyn LlmProvider>, String)> {
-    let kind = cli
-        .provider
-        .clone()
-        .or_else(|| env_nonempty(PROVIDER_ENV))
-        .unwrap_or_else(|| DEFAULT_PROVIDER.to_string());
+    let model_override = cli.model.clone();
 
-    let model_override = cli.model.clone().or_else(|| env_nonempty(MODEL_ENV));
-
-    match kind.as_str() {
-        "echo" => Ok((
+    match cli.provider {
+        ProviderKind::Echo => Ok((
             Arc::new(EchoProvider::new()) as Arc<dyn LlmProvider>,
             model_override.unwrap_or_else(|| DEFAULT_ECHO_MODEL.to_string()),
         )),
-        "anthropic" => {
+        ProviderKind::Anthropic => {
             let provider = AnthropicProvider::new(AnthropicConfig::from_env())
                 .map_err(|e| anyhow::anyhow!("anthropic provider init failed: {e}"))?;
             Ok((
@@ -169,7 +126,7 @@ fn build_provider(cli: &CliArgs) -> anyhow::Result<(Arc<dyn LlmProvider>, String
                 model_override.unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string()),
             ))
         }
-        "openai" => {
+        ProviderKind::Openai => {
             let provider = OpenAiProvider::new(OpenAiConfig::from_env())
                 .map_err(|e| anyhow::anyhow!("openai provider init failed: {e}"))?;
             Ok((
@@ -177,7 +134,7 @@ fn build_provider(cli: &CliArgs) -> anyhow::Result<(Arc<dyn LlmProvider>, String
                 model_override.unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string()),
             ))
         }
-        "deepseek" => {
+        ProviderKind::Deepseek => {
             let provider = DeepSeekProvider::new(DeepSeekConfig::from_env())
                 .map_err(|e| anyhow::anyhow!("deepseek provider init failed: {e}"))?;
             Ok((
@@ -185,15 +142,9 @@ fn build_provider(cli: &CliArgs) -> anyhow::Result<(Arc<dyn LlmProvider>, String
                 model_override.unwrap_or_else(|| DEFAULT_DEEPSEEK_MODEL.to_string()),
             ))
         }
-        other => anyhow::bail!(
-            "unknown provider {other:?}; expected one of echo|anthropic|openai|deepseek"
-        ),
     }
 }
 
-fn env_nonempty(name: &str) -> Option<String> {
-    env::var(name).ok().filter(|v| !v.is_empty())
-}
 
 /// 极简 `.env` 加载器：`KEY=VALUE` 一行一条，`#` 开头注释、空行跳过；
 /// 支持外层 `"..."` / `'...'` 包裹去除。**已在进程 env 里的变量保留原值**，

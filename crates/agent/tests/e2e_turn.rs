@@ -493,6 +493,90 @@ async fn ask_writes_policy_cancel_during_ask_returns_cancelled() {
     );
 }
 
+/// 用户拒绝 → 主循环把 tool_result(is_error=true) 喂回 LLM、再发一轮请求；
+/// 若 provider 在第二轮返回 EndTurn，整体 turn 应当 Ok(EndTurn) 而非
+/// `TurnError::Internal`（acp 桥接层会把它投影成 wire `Internal error`）。
+#[tokio::test]
+async fn deny_during_ask_completes_cleanly() {
+    struct DestructiveTool {
+        schema: ToolSchema,
+    }
+    impl Tool for DestructiveTool {
+        fn schema(&self) -> &ToolSchema {
+            &self.schema
+        }
+        fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
+            SafetyClass::Destructive
+        }
+        fn describe(&self, _args: &serde_json::Value) -> ToolCallDescription {
+            let mut fields = ToolCallUpdateFields::default();
+            fields.title = Some("$ ls".to_string());
+            ToolCallDescription { fields }
+        }
+        fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
+            // 拒绝后不应被 execute——若被调说明决策路径出错。
+            let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
+                Box::pin(stream::iter(Vec::<ToolEvent>::new()));
+            s
+        }
+    }
+
+    let provider = Arc::new(ScriptedProvider::new()) as Arc<dyn LlmProvider>;
+    let tools: Arc<dyn ToolRegistry> = Arc::new(
+        StaticToolRegistry::builder()
+            .insert(Arc::new(DestructiveTool {
+                schema: ToolSchema {
+                    name: "echo".to_string(),
+                    description: "destructive echo".to_string(),
+                    input_schema: json!({"type":"object"}),
+                },
+            }))
+            .build(),
+    );
+    let core = DefaultAgentCore::builder()
+        .provider(provider)
+        .process_tools(tools)
+        .policy(Arc::new(AskWritesPolicy::new()) as Arc<dyn SandboxPolicy>)
+        .config(TurnConfig {
+            model: "scripted-001".to_string(),
+            ..TurnConfig::default()
+        })
+        .build();
+
+    let cwd = std::env::current_dir().expect("cwd");
+    let session = core.create_session(cwd, vec![]).await.expect("session");
+    let mut events = session.subscribe();
+
+    let s_clone: Arc<dyn Session> = session.clone();
+    let turn = tokio::spawn(async move {
+        s_clone
+            .run_turn(vec![ContentBlock::Text(TextContent::new("hello"))])
+            .await
+    });
+
+    // 等到 Ask 事件出现 → resolve 为 reject_once
+    while let Some(ev) = events.next().await {
+        match ev {
+            AgentEvent::PolicyDecision { id, decision } => {
+                use defect_agent::policy::PolicyDecision;
+                if matches!(decision, PolicyDecision::Ask(_)) {
+                    session.resolve_permission(
+                        id,
+                        PermissionResolution::Selected {
+                            option_id: PermissionOptionId::new("reject_once"),
+                        },
+                    );
+                }
+            }
+            AgentEvent::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+
+    let stop = turn.await.expect("join").expect("turn ok");
+    assert!(matches!(stop, StopReason::EndTurn), "got {stop:?}");
+}
+
 // 让编译期看到我们用到了 OpenPolicy（避免之后引用断裂）
 #[allow(dead_code)]
 fn _types_in_use() -> Arc<dyn SandboxPolicy> {

@@ -74,6 +74,7 @@ impl AcpError {
     /// `format!`，让客户端能稳定 match `code` / 读 `data.kind` 而非解析字符串。
     pub fn into_wire_error(self) -> agent_client_protocol::Error {
         use agent_client_protocol::Error as Wire;
+        use agent_client_protocol::schema::ErrorCode;
         match self {
             AcpError::Transport(err) => err,
 
@@ -84,15 +85,35 @@ impl AcpError {
             }
 
             AcpError::CreateSession(err) => {
-                Wire::internal_error().data(json!({
+                // 把内层 Display 放到 wire `message`——客户端 UI（acpx 等）
+                // 渲染时直接读 message，默认占位 "Internal error" 把诊断信息
+                // 全埋在 `data` 里，导致用户只看见 "RUNTIME: Internal error"。
+                Wire::new(ErrorCode::InternalError.into(), err.to_string()).data(json!({
                     "kind": "create_session_failed",
                     "message": err.to_string(),
                 }))
             }
 
-            AcpError::Turn(err) => Wire::internal_error().data(turn_error_data(&err)),
+            AcpError::Turn(err) => {
+                // 把内层 Display 灌进 wire `message`——客户端 UI 默认只读
+                // message 字段；占位 "Internal error" 把实际信息埋在 `data` 里
+                // 会让用户只看见 "RUNTIME: Internal error" 这种无意义占位。
+                // 注意：code 选择有坑——acpx 把 -32001/-32002 映射成 NO_SESSION
+                // （会议会话误判），所以 Provider 也走 InternalError，由 message
+                // 自身的文本（"rate limit" / "model not found"）让 acpx 的
+                // text-error-rules 命中合适的 hint。
+                let code = match &err {
+                    TurnError::TurnInProgress => ErrorCode::InvalidRequest,
+                    _ => ErrorCode::InternalError,
+                };
+                Wire::new(code.into(), err.to_string()).data(turn_error_data(&err))
+            }
 
-            AcpError::TurnDropped => Wire::internal_error().data(json!({
+            AcpError::TurnDropped => Wire::new(
+                ErrorCode::InternalError.into(),
+                "turn task dropped before completion",
+            )
+            .data(json!({
                 "kind": "turn_task_dropped",
                 "message": "turn task dropped before completion",
             })),
@@ -406,4 +427,59 @@ fn spawn_permission_request(
         session.resolve_permission(tool_call_id, outcome);
         Ok(())
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::schema::ErrorCode;
+    use defect_agent::error::BoxError;
+    use defect_agent::llm::{ProviderError, ProviderErrorKind};
+
+    /// `TurnError::Provider` 必须把内层 Display 灌进 wire `message`。
+    /// 之前的实现用 [`Wire::internal_error()`]，message 永远是字面量
+    /// "Internal error"——客户端 UI 拿不到任何辨识信息，acpx 显示成
+    /// `RUNTIME: Internal error`。
+    #[test]
+    fn turn_provider_error_carries_message_on_wire() {
+        let provider_err = ProviderError::new(ProviderErrorKind::ModelNotFound {
+            model: "deepseek-v4-pro".into(),
+        });
+        let acp_err = AcpError::Turn(TurnError::Provider(provider_err));
+        let wire = acp_err.into_wire_error();
+
+        assert_eq!(wire.code, ErrorCode::InternalError);
+        assert!(
+            wire.message.contains("model not found")
+                && wire.message.contains("deepseek-v4-pro"),
+            "expected provider Display text in wire message, got: {:?}",
+            wire.message
+        );
+        // data.kind 仍然区分 provider vs internal，方便 verbose 模式排障。
+        let data = wire.data.expect("wire data");
+        assert_eq!(data.get("kind").and_then(|v| v.as_str()), Some("provider"));
+    }
+
+    #[test]
+    fn turn_internal_error_carries_message_on_wire() {
+        let acp_err = AcpError::Turn(TurnError::Internal(BoxError::new(std::io::Error::other(
+            "history backend exploded",
+        ))));
+        let wire = acp_err.into_wire_error();
+
+        assert_eq!(wire.code, ErrorCode::InternalError);
+        assert!(
+            wire.message.contains("history backend exploded"),
+            "expected inner io Display in wire message, got: {:?}",
+            wire.message
+        );
+    }
+
+    #[test]
+    fn turn_in_progress_uses_invalid_request_code() {
+        let acp_err = AcpError::Turn(TurnError::TurnInProgress);
+        let wire = acp_err.into_wire_error();
+        assert_eq!(wire.code, ErrorCode::InvalidRequest);
+        assert!(wire.message.contains("turn already in progress"));
+    }
 }

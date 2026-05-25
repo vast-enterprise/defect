@@ -34,6 +34,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
 # 并发数据结构
 dashmap = "6"
 

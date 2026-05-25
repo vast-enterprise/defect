@@ -275,6 +275,22 @@ ACP 客户端 / CLI 自己根据 enum variant 自己映射。
 不允许返回 `anyhow::Error`**——它们是 lib 层。本文 §1 的第 1 条铁律就是
 管这事的。
 
+## 7.1 ACP wire 投影：message 字段必须有信息量
+
+`AcpError::into_wire_error` 把内部错误投到 wire 的两条铁律：
+
+1. **wire `message` 字段填内层 `Display`**——不要直接用
+   `Wire::internal_error()`（其 message 永远是字面量 `"Internal error"`）。
+   客户端 UI（acpx 等）默认只渲染 `message`，把诊断信息埋在 `data` 里
+   会让用户只看见 `RUNTIME: Internal error` 这种无意义占位。
+2. **`code` 选择避开 ACP 自定义码段的语义陷阱**：acpx 把 `-32001` /
+   `-32002` 视为 "resource not found / NO_SESSION"，把 `-32000` 视为
+   `auth_required`。Provider error / Internal error 即使想给个独立
+   code 也不要落到这些值上——会让客户端误判成会话丢失或要登录。
+   v0 简单粗暴：除 `TurnInProgress` 走 `InvalidRequest` 外，其它都
+   `InternalError`，靠 message 文本携带信息让客户端的 text-rule
+   命中（"rate limit" / "model not found" 等）。
+
 ## 8. 与 tracing 的衔接
 
 错误形状要让 tracing instrumentation 不用"再造一份字段"：
