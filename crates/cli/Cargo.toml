@@ -13,6 +13,7 @@ defect-acp.workspace = true
 defect-agent.workspace = true
 defect-config.workspace = true
 defect-llm.workspace = true
+defect-mcp.workspace = true
 defect-storage.workspace = true
 defect-tools.workspace = true
 tokio.workspace = true

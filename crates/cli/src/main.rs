@@ -32,6 +32,7 @@ use defect_config::{
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
 use defect_llm::provider::openai::{OpenAiConfig, OpenAiProvider};
+use defect_mcp::McpToolFactory;
 use defect_storage::StorageObserver;
 use defect_tools::{BashTool, EditFileTool, ReadFileTool, WriteFileTool};
 use tracing_subscriber::EnvFilter;
@@ -81,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
         .policy(build_policy(config.effective.sandbox.mode))
         .observe_session(storage.clone())
         .session_loader(storage)
+        .session_tool_factory(Arc::new(McpToolFactory::new()))
         .config(turn_config)
         .build();
     let agent: Arc<dyn AgentCore> = Arc::new(agent);

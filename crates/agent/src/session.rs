@@ -104,6 +104,23 @@ pub trait SessionLoader: Send + Sync {
     fn load_session(&self, id: SessionId) -> BoxFuture<'_, Result<LoadedSession, BoxError>>;
 }
 
+/// 为单个 session 构建附加工具表的抽象。
+///
+/// 典型实现来自 `defect-mcp`：按 `session/new` 或 `session/load` 提供的
+/// MCP server 列表建立连接，并把远端工具包装成 [`ToolRegistry`]。
+pub trait SessionToolFactory: Send + Sync {
+    /// 为当前 session 构建一份会话级工具表。
+    ///
+    /// # Errors
+    ///
+    /// 外部工具源初始化失败、远端 inventory 拉取失败、或配置不受支持。
+    fn build_registry(
+        &self,
+        cwd: PathBuf,
+        mcp_servers: Vec<McpServer>,
+    ) -> BoxFuture<'_, Result<Arc<dyn ToolRegistry>, BoxError>>;
+}
+
 /// `AgentCore::create_session` 成功后的观察器。
 ///
 /// 典型用途：

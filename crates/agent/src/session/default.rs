@@ -44,7 +44,7 @@ use crate::session::tool_registry::{CompositeRegistry, StaticToolRegistry};
 use crate::session::turn::{TurnConfig, TurnRunner};
 use crate::session::{
     AgentCore, AgentError, EventStream, History, Session, SessionCreateInfo, SessionLoader,
-    SessionObserver, ToolRegistry, TurnError, VecHistory,
+    SessionObserver, SessionToolFactory, ToolRegistry, TurnError, VecHistory,
 };
 
 /// 默认 [`AgentCore`]。
@@ -54,6 +54,7 @@ pub struct DefaultAgentCore {
     policy: Arc<dyn SandboxPolicy>,
     config: TurnConfig,
     loader: Option<Arc<dyn SessionLoader>>,
+    session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
     sessions: DashMap<SessionId, Arc<dyn Session>>,
 }
@@ -70,6 +71,7 @@ pub struct DefaultAgentCoreBuilder {
     process_tools: Option<Arc<dyn ToolRegistry>>,
     policy: Option<Arc<dyn SandboxPolicy>>,
     loader: Option<Arc<dyn SessionLoader>>,
+    session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
     config: TurnConfig,
 }
@@ -95,6 +97,11 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
+    pub fn session_tool_factory(mut self, factory: Arc<dyn SessionToolFactory>) -> Self {
+        self.session_tools = Some(factory);
+        self
+    }
+
     pub fn observe_session(mut self, observer: Arc<dyn SessionObserver>) -> Self {
         self.observers.push(observer);
         self
@@ -117,6 +124,7 @@ impl DefaultAgentCoreBuilder {
                 .policy
                 .unwrap_or_else(|| Arc::new(AskWritesPolicy::new()) as Arc<dyn SandboxPolicy>),
             loader: self.loader,
+            session_tools: self.session_tools,
             observers: self.observers,
             config: self.config,
             sessions: DashMap::new(),
@@ -137,20 +145,20 @@ impl AgentCore for DefaultAgentCore {
                 return Err(AgentError::InvalidCwd(cwd));
             }
             let session_cwd = cwd.clone();
-            // v0 不实际拉起 MCP server——defect-mcp 接入后这里会变成
-            // "为每个 server 起 client、把它的工具注册成 per-session"。
-            if !mcp_servers.is_empty() {
-                tracing::warn!(
-                    count = mcp_servers.len(),
-                    "DefaultAgentCore: MCP servers requested but mcp adapter not wired; ignoring"
-                );
-            }
-
             if self.sessions.contains_key(&id) {
                 return Err(AgentError::DuplicateSessionId(id));
             }
 
-            let session_tools: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::empty());
+            let session_tools = match &self.session_tools {
+                Some(factory) => factory
+                    .build_registry(cwd.clone(), mcp_servers.clone())
+                    .await
+                    .map_err(|source| AgentError::McpStartup {
+                        server: "session_tools".to_string(),
+                        source,
+                    })?,
+                None => Arc::new(StaticToolRegistry::empty()) as Arc<dyn ToolRegistry>,
+            };
             let composite: Arc<dyn ToolRegistry> = Arc::new(CompositeRegistry::new(
                 session_tools,
                 self.process_tools.clone(),
@@ -204,13 +212,20 @@ impl AgentCore for DefaultAgentCore {
                 .load_session(id.clone())
                 .await
                 .map_err(AgentError::Restore)?;
+            let session_tools = match &self.session_tools {
+                Some(factory) => factory
+                    .build_registry(loaded.info.cwd.clone(), loaded.info.mcp_servers.clone())
+                    .await
+                    .map_err(AgentError::Restore)?,
+                None => Arc::new(StaticToolRegistry::empty()) as Arc<dyn ToolRegistry>,
+            };
 
             let session = Arc::new(DefaultSession {
                 id: loaded.info.id.clone(),
                 cwd: loaded.info.cwd.clone(),
                 history: Box::new(VecHistory::from_messages(loaded.history)),
                 tools: Arc::new(CompositeRegistry::new(
-                    Arc::new(StaticToolRegistry::empty()),
+                    session_tools,
                     self.process_tools.clone(),
                 )),
                 provider: self.provider.clone(),
