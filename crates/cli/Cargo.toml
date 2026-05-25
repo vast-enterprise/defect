@@ -8,6 +8,14 @@ license.workspace = true
 name = "defect"
 path = "src/main.rs"
 
+[[bin]]
+name = "defect-mcp-test-server"
+path = "src/bin/mcp_test_server.rs"
+
+[[bin]]
+name = "defect-mcp-streamable-http-test-server"
+path = "src/bin/mcp_streamable_http_test_server.rs"
+
 [dependencies]
 defect-acp.workspace = true
 defect-agent.workspace = true
@@ -21,8 +29,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+serde.workspace = true
+serde_json.workspace = true
+axum = "0.8"
 
 [dev-dependencies]
 agent-client-protocol.workspace = true
 futures.workspace = true
 serde_json.workspace = true
+wiremock.workspace = true
+tempfile.workspace = true

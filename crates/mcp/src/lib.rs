@@ -6,6 +6,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use std::collections::HashMap;
+
 use agent_client_protocol::schema::{Content as AcpContent, McpServer, McpServerStdio};
 use agent_client_protocol::schema::{ToolCallContent, ToolCallUpdateFields};
 use defect_agent::error::BoxError;
@@ -15,9 +17,13 @@ use defect_agent::tool::{
 };
 use futures::future::BoxFuture;
 use futures::stream;
+use http::{HeaderName, HeaderValue};
 use rmcp::model::{CallToolRequestParams, RawContent, Tool as McpTool};
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::child_process::TokioChildProcess;
+use rmcp::transport::{
+    StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
+};
 use rmcp::{ClientHandler, ServiceExt};
 use serde_json::Value;
 use thiserror::Error;
@@ -77,6 +83,10 @@ async fn load_server_tools(
 ) -> Result<Vec<Arc<dyn Tool>>, BoxError> {
     match server {
         McpServer::Stdio(stdio) => load_stdio_server_tools(cwd, stdio).await,
+        McpServer::Http(http) => {
+            load_streamable_http_server_tools(cwd, http.url, http.headers).await
+        }
+        McpServer::Sse(sse) => load_streamable_http_server_tools(cwd, sse.url, sse.headers).await,
         other => Err(BoxError::new(McpAdapterError::UnsupportedTransport(
             format!("{other:?}"),
         ))),
@@ -104,6 +114,30 @@ async fn load_stdio_server_tools(
 
     let transport = TokioChildProcess::new(command)
         .map_err(|source| BoxError::new(McpAdapterError::Initialize(source)))?;
+    let client = EmptyClient.serve(transport).await.map_err(service_error)?;
+    let peer = client.peer().clone();
+    let connection = Arc::new(McpConnection::new(peer.clone(), client));
+    let tools = peer.list_all_tools().await.map_err(service_error)?;
+
+    Ok(tools
+        .into_iter()
+        .map(|tool| Arc::new(McpToolAdapter::new(connection.clone(), tool)) as Arc<dyn Tool>)
+        .collect())
+}
+
+/// 连接一个 HTTP/SSE MCP server，并把其工具包装为本地工具。
+///
+/// # Errors
+///
+/// 当 header 非法、rmcp 初始化失败、或工具列表请求失败时返回错误。
+async fn load_streamable_http_server_tools(
+    _cwd: PathBuf,
+    url: String,
+    headers: Vec<agent_client_protocol::schema::HttpHeader>,
+) -> Result<Vec<Arc<dyn Tool>>, BoxError> {
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(url).custom_headers(http_headers(headers)?),
+    );
     let client = EmptyClient.serve(transport).await.map_err(service_error)?;
     let peer = client.peer().clone();
     let connection = Arc::new(McpConnection::new(peer.clone(), client));
@@ -276,6 +310,29 @@ where
     BoxError::new(McpAdapterError::Request(std::io::Error::other(
         err.to_string(),
     )))
+}
+
+fn http_headers(
+    headers: Vec<agent_client_protocol::schema::HttpHeader>,
+) -> Result<HashMap<HeaderName, HeaderValue>, BoxError> {
+    headers
+        .into_iter()
+        .map(|header| {
+            let name = HeaderName::try_from(header.name.as_str()).map_err(|err| {
+                BoxError::new(McpAdapterError::Initialize(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid MCP HTTP header name '{}': {err}", header.name),
+                )))
+            })?;
+            let value = HeaderValue::from_str(&header.value).map_err(|err| {
+                BoxError::new(McpAdapterError::Initialize(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid MCP HTTP header value for '{}': {err}", header.name),
+                )))
+            })?;
+            Ok((name, value))
+        })
+        .collect()
 }
 
 #[cfg(test)]

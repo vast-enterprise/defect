@@ -259,6 +259,8 @@ fn encode_assistant_message_into(
     echo_mode: ThinkingEcho,
     out: &mut Vec<wire::ChatCompletionRequestMessage>,
 ) {
+    const EMPTY_ASSISTANT_CONTENT: &str = "";
+
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<wire::ChatCompletionMessageToolCallsItem> = Vec::new();
     let mut reasoning_text = String::new();
@@ -291,18 +293,6 @@ fn encode_assistant_message_into(
         }
     }
 
-    let content = if text_parts.is_empty() {
-        // OpenAI 要求 assistant message 必须有 content **或** tool_calls；
-        // 我们这里若没有 text 就走 None，依赖 tool_calls 撑场。
-        None
-    } else {
-        Some(wire::ChatCompletionRequestAssistantMessageContent::ChatCompletionRequestAssistantMessageContentVariant0(
-            wire::ChatCompletionRequestAssistantMessageContentVariant0::ChatCompletionRequestAssistantMessageContentVariant0Variant0(
-                text_parts.join(""),
-            ),
-        ))
-    };
-
     let reasoning_content = match (echo_mode, reasoning_text.is_empty()) {
         (ThinkingEcho::Required, false) => Some(reasoning_text),
         // Optional 也按 Required 处理：服务端容忍多发的场景下回放更
@@ -310,6 +300,25 @@ fn encode_assistant_message_into(
         // 多发也不报错）。
         (ThinkingEcho::Optional, false) => Some(reasoning_text),
         _ => None,
+    };
+    let content = if text_parts.is_empty() {
+        if tool_calls.is_empty() && reasoning_content.is_some() {
+            // DeepSeek v4 系列会校验 assistant message 至少带 content 或
+            // tool_calls；thinking-only 的历史回放要补一个空 content。
+            Some(wire::ChatCompletionRequestAssistantMessageContent::ChatCompletionRequestAssistantMessageContentVariant0(
+                wire::ChatCompletionRequestAssistantMessageContentVariant0::ChatCompletionRequestAssistantMessageContentVariant0Variant0(
+                    EMPTY_ASSISTANT_CONTENT.to_owned(),
+                ),
+            ))
+        } else {
+            None
+        }
+    } else {
+        Some(wire::ChatCompletionRequestAssistantMessageContent::ChatCompletionRequestAssistantMessageContentVariant0(
+            wire::ChatCompletionRequestAssistantMessageContentVariant0::ChatCompletionRequestAssistantMessageContentVariant0Variant0(
+                text_parts.join(""),
+            ),
+        ))
     };
 
     #[allow(deprecated)]

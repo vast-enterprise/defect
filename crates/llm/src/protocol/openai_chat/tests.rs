@@ -469,6 +469,65 @@ fn encode_thinking_concatenates_multiple_thinking_blocks() {
 }
 
 #[test]
+fn encode_thinking_only_required_adds_empty_content() {
+    let req = CompletionRequest {
+        model: "deepseek-v4-pro".into(),
+        system: None,
+        messages: vec![Message {
+            role: Role::Assistant,
+            content: vec![MessageContent::Thinking {
+                text: "step 1".into(),
+                signature: None,
+            }],
+        }],
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+    };
+    let w = encode_request_with_echo(&req, ThinkingEcho::Required);
+    let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
+        &w.messages[0]
+    else {
+        panic!("expected assistant message");
+    };
+    assert_eq!(asst.reasoning_content.as_deref(), Some("step 1"));
+    assert!(matches!(
+        asst.content,
+        Some(
+            wire::ChatCompletionRequestAssistantMessageContent::ChatCompletionRequestAssistantMessageContentVariant0(
+                wire::ChatCompletionRequestAssistantMessageContentVariant0::ChatCompletionRequestAssistantMessageContentVariant0Variant0(ref text)
+            )
+        ) if text.is_empty()
+    ));
+}
+
+#[test]
+fn encode_thinking_only_forbidden_keeps_content_none() {
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        system: None,
+        messages: vec![Message {
+            role: Role::Assistant,
+            content: vec![MessageContent::Thinking {
+                text: "step 1".into(),
+                signature: None,
+            }],
+        }],
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+    };
+    let w = encode_request_with_echo(&req, ThinkingEcho::Forbidden);
+    let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
+        &w.messages[0]
+    else {
+        panic!("expected assistant message");
+    };
+    assert!(asst.reasoning_content.is_none());
+    assert!(asst.content.is_none());
+}
+
+#[test]
 fn encode_request_default_forbids_thinking_echo() {
     // 默认 `encode_request` (无 echo arg) 等价于 Forbidden —— 防止
     // 通过该入口绕过 capability 矩阵把 reasoning_content 漏到

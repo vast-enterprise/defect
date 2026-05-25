@@ -169,7 +169,10 @@ impl<'a> TurnRunner<'a> {
                 return Ok(AcpStopReason::Cancelled);
             }
 
-            self.history.append(assistant_message(&outcome));
+            let assistant = assistant_message(&outcome);
+            if !assistant.content.is_empty() {
+                self.history.append(assistant);
+            }
 
             match outcome.stop {
                 LlmStopReason::EndTurn | LlmStopReason::StopSequence => {

@@ -15,10 +15,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion,
-    SessionNotification, SessionUpdate, TextContent,
+    ContentBlock, InitializeRequest, ProtocolVersion, SessionNotification, SessionUpdate,
 };
-use agent_client_protocol::{Agent, Channel, Client, ConnectTo, Role};
+use agent_client_protocol::{Channel, Client, SessionMessage};
 use defect_acp::serve_on;
 use defect_agent::llm::LlmProvider;
 use defect_agent::policy::{OpenPolicy, SandboxPolicy};
@@ -36,38 +35,6 @@ fn prompt_text() -> String {
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| DEFAULT_PROMPT.to_string())
-}
-
-struct ChannelTransport<R: Role> {
-    inner: Channel,
-    _marker: std::marker::PhantomData<R>,
-}
-
-impl<R: Role> ChannelTransport<R> {
-    fn new(inner: Channel) -> Self {
-        Self {
-            inner,
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<R: Role> ConnectTo<R> for ChannelTransport<R> {
-    async fn connect_to(
-        self,
-        client: impl ConnectTo<R::Counterpart>,
-    ) -> Result<(), agent_client_protocol::Error> {
-        <Channel as ConnectTo<R>>::connect_to(self.inner, client).await
-    }
-
-    fn into_channel_and_future(
-        self,
-    ) -> (
-        Channel,
-        agent_client_protocol::BoxFuture<'static, Result<(), agent_client_protocol::Error>>,
-    ) {
-        <Channel as ConnectTo<R>>::into_channel_and_future(self.inner)
-    }
 }
 
 #[tokio::main]
@@ -100,11 +67,10 @@ async fn main() -> anyhow::Result<()> {
     let (channel_a, channel_b) = Channel::duplex();
 
     // 把 server task spawn 出去；client driver 跑完后让它自然退出。
-    let server_handle = tokio::spawn(serve_on(agent, ChannelTransport::<Agent>::new(channel_b)));
+    let server_handle = tokio::spawn(serve_on(agent, channel_b));
 
     let updates: Arc<Mutex<Vec<SessionUpdate>>> = Arc::new(Mutex::new(Vec::new()));
     let updates_for_handler = updates.clone();
-    let cwd = std::env::current_dir()?;
 
     let stop_reason = Client
         .builder()
@@ -142,29 +108,24 @@ async fn main() -> anyhow::Result<()> {
             },
             agent_client_protocol::on_receive_notification!(),
         )
-        .connect_with(
-            ChannelTransport::<Client>::new(channel_a),
-            async move |cx| {
-                cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
-                    .block_task()
-                    .await?;
+        .connect_with(channel_a, async move |cx| {
+            cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                .block_task()
+                .await?;
 
-                let session = cx
-                    .send_request(NewSessionRequest::new(cwd))
-                    .block_task()
-                    .await?;
+            let cwd = std::env::current_dir()
+                .map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
+            let mut session = cx.build_session(cwd).block_task().start_session().await?;
 
-                let resp = cx
-                    .send_request(PromptRequest::new(
-                        session.session_id,
-                        vec![ContentBlock::Text(TextContent::new(prompt_text()))],
-                    ))
-                    .block_task()
-                    .await?;
-
-                Ok(resp.stop_reason)
-            },
-        )
+            session.send_prompt(prompt_text())?;
+            loop {
+                match session.read_update().await? {
+                    SessionMessage::SessionMessage(_) => {}
+                    SessionMessage::StopReason(stop_reason) => break Ok(stop_reason),
+                    _ => {}
+                }
+            }
+        })
         .await
         .map_err(|e| anyhow::anyhow!("client connection failed: {e}"))?;
 
