@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::types::{
@@ -13,7 +14,7 @@ pub(crate) fn resolve_mcp_config(path: &Path, section: McpSection) -> Result<Mcp
         .map(|(name, server)| {
             resolve_mcp_server_config(path, &name, server).map(|server| (name, server))
         })
-        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let enabled_servers = section.enabled_servers.unwrap_or_default();
 
     for name in &enabled_servers {

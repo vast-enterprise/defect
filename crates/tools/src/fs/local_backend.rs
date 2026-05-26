@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::fs;
 
 use defect_agent::error::BoxError;
 use defect_agent::fs::{Fingerprint, FsBackend, FsError, resolve_workspace_path};
@@ -52,12 +53,10 @@ impl FsBackend for LocalFsBackend {
         Box::pin(async move {
             let abs = resolve_workspace_path(&self.workspace_root, &path)?;
 
-            let metadata = tokio::fs::metadata(&abs)
-                .await
-                .map_err(|e| match e.kind() {
-                    io::ErrorKind::NotFound => FsError::NotFound(abs.clone()),
-                    _ => FsError::Backend(BoxError::new(e)),
-                })?;
+            let metadata = fs::metadata(&abs).await.map_err(|e| match e.kind() {
+                io::ErrorKind::NotFound => FsError::NotFound(abs.clone()),
+                _ => FsError::Backend(BoxError::new(e)),
+            })?;
 
             // 全文读：硬上限阻挡。窗口读（line / limit 任一为 Some）：
             // 走 chunked-read 路径——逐行流式扫描，只缓冲请求窗口。
@@ -75,7 +74,7 @@ impl FsBackend for LocalFsBackend {
                 return read_window_streaming(&abs, line, limit).await;
             }
 
-            let bytes = tokio::fs::read(&abs).await.map_err(|e| match e.kind() {
+            let bytes = fs::read(&abs).await.map_err(|e| match e.kind() {
                 io::ErrorKind::NotFound => FsError::NotFound(abs.clone()),
                 _ => FsError::Backend(BoxError::new(e)),
             })?;
@@ -100,12 +99,10 @@ impl FsBackend for LocalFsBackend {
     fn fingerprint(&self, path: PathBuf) -> BoxFuture<'_, Result<Fingerprint, FsError>> {
         Box::pin(async move {
             let abs = resolve_workspace_path(&self.workspace_root, &path)?;
-            let metadata = tokio::fs::metadata(&abs)
-                .await
-                .map_err(|e| match e.kind() {
-                    io::ErrorKind::NotFound => FsError::NotFound(abs.clone()),
-                    _ => FsError::Backend(BoxError::new(e)),
-                })?;
+            let metadata = fs::metadata(&abs).await.map_err(|e| match e.kind() {
+                io::ErrorKind::NotFound => FsError::NotFound(abs.clone()),
+                _ => FsError::Backend(BoxError::new(e)),
+            })?;
 
             let size = metadata.len();
             let mtime_nanos = metadata
@@ -264,7 +261,7 @@ fn normalize(content: &str, target: LineEnding) -> Cow<'_, str> {
 
 /// 以 `\0` 出现 / 高比例非可打印字节作为二进制启发式。仅扫前 8 KiB。
 fn looks_binary(bytes: &[u8]) -> bool {
-    let head = &bytes[..bytes.len().min(8 * 1024)];
+    let head = bytes.get(..8 * 1024).unwrap_or(bytes);
     if head.is_empty() {
         return false;
     }

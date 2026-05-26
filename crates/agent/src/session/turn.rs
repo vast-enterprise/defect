@@ -9,12 +9,14 @@
 //! - [`EventEmitter`]：事件发布（`Arc` 共享，使工具 task 也能 emit）
 //! - [`PermissionGate`]：权限请求等待
 
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    Content as AcpContent, ContentBlock, StopReason as AcpStopReason, TextContent, ToolCallContent,
+    Content as AcpContent, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
+    ResourceLink, StopReason as AcpStopReason, TextContent, TextResourceContents, ToolCallContent,
     ToolCallId, ToolCallStatus, ToolCallUpdateFields,
 };
 use futures::StreamExt;
@@ -23,6 +25,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::error::BoxError;
 use crate::event::{AgentEvent, PermissionResolution};
 use crate::fs::FsBackend;
 use crate::llm::{
@@ -165,6 +168,9 @@ impl<'a> TurnRunner<'a> {
             content: prompt
                 .into_iter()
                 .map(content_block_to_message_content)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
                 .collect(),
         });
 
@@ -780,14 +786,92 @@ impl TurnState {
 
 // ----- helpers -----
 
-fn content_block_to_message_content(cb: ContentBlock) -> MessageContent {
+fn content_block_to_message_content(cb: ContentBlock) -> Result<Vec<MessageContent>, TurnError> {
     match cb {
-        ContentBlock::Text(t) => MessageContent::Text { text: t.text },
-        // 其它类型 v0 占位为空文本——实际翻译策略由 acp-prompt.md 后续定
-        _ => MessageContent::Text {
-            text: String::new(),
-        },
+        ContentBlock::Text(TextContent { text, .. }) => Ok(vec![MessageContent::Text { text }]),
+        ContentBlock::Image(image) => Ok(vec![image_content_to_message_content(image)?]),
+        ContentBlock::ResourceLink(link) => Ok(vec![MessageContent::Text {
+            text: resource_link_to_text(link),
+        }]),
+        ContentBlock::Resource(resource) => resource_to_message_content(resource),
+        ContentBlock::Audio(_) => Err(invalid_prompt_content(
+            "ACP audio content is not supported yet",
+        )),
+        _ => Err(invalid_prompt_content(
+            "unsupported ACP content block variant",
+        )),
     }
+}
+
+fn image_content_to_message_content(image: ImageContent) -> Result<MessageContent, TurnError> {
+    let data = if image.data.is_empty() {
+        let Some(uri) = image.uri else {
+            return Err(invalid_prompt_content(
+                "ACP image content must include data or uri",
+            ));
+        };
+        crate::llm::ImageData::Url { url: uri }
+    } else {
+        crate::llm::ImageData::Base64 {
+            encoded: image.data,
+        }
+    };
+
+    Ok(MessageContent::Image {
+        mime: image.mime_type,
+        data,
+    })
+}
+
+fn resource_to_message_content(
+    resource: EmbeddedResource,
+) -> Result<Vec<MessageContent>, TurnError> {
+    match resource.resource {
+        EmbeddedResourceResource::TextResourceContents(text) => Ok(vec![MessageContent::Text {
+            text: text_resource_to_text(text),
+        }]),
+        EmbeddedResourceResource::BlobResourceContents(blob) => {
+            Err(invalid_prompt_content(&format!(
+                "embedded binary resource is not supported yet: {}",
+                blob.uri
+            )))
+        }
+        _ => Err(invalid_prompt_content(
+            "unsupported embedded resource variant",
+        )),
+    }
+}
+
+fn resource_link_to_text(link: ResourceLink) -> String {
+    let mut lines = vec![format!("resource: {}", link.name)];
+    if let Some(title) = link.title {
+        lines.push(format!("title: {title}"));
+    }
+    if let Some(description) = link.description {
+        lines.push(format!("description: {description}"));
+    }
+    if let Some(mime_type) = link.mime_type {
+        lines.push(format!("mime_type: {mime_type}"));
+    }
+    if let Some(size) = link.size {
+        lines.push(format!("size: {size}"));
+    }
+    lines.push(format!("uri: {}", link.uri));
+    lines.join("\n")
+}
+
+fn text_resource_to_text(resource: TextResourceContents) -> String {
+    let mut text = format!("resource: {}", resource.uri);
+    if let Some(mime_type) = resource.mime_type {
+        text.push_str(&format!("\nmime_type: {mime_type}"));
+    }
+    text.push_str("\n\n");
+    text.push_str(&resource.text);
+    text
+}
+
+fn invalid_prompt_content(message: &str) -> TurnError {
+    TurnError::Internal(BoxError::new(io::Error::other(message)))
 }
 
 fn assistant_message(outcome: &DrainOutcome) -> Message {
@@ -886,6 +970,9 @@ fn retry_delay(hint: RetryHint) -> Option<Duration> {
 fn empty_stream() -> ProviderStream {
     Box::pin(futures::stream::empty())
 }
+
+#[cfg(test)]
+mod test;
 
 /// 把第一段文本从 [`ToolCallUpdateFields::content`] 抽出来当 tool_result。
 fn extract_text(fields: &ToolCallUpdateFields) -> Option<String> {

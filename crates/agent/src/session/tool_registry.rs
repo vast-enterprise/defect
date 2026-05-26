@@ -6,7 +6,7 @@
 //! - [`CompositeRegistry`]：把两份串起来，主循环只看到一个统一接口
 //!   （`get` 时先查会话级、再查进程级；schemas 拼接两份）
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::session::ToolRegistry;
@@ -58,7 +58,9 @@ impl StaticToolRegistryBuilder {
     pub fn insert(mut self, tool: Arc<dyn Tool>) -> Self {
         let schema = tool.schema().clone();
         if let Some(pos) = self.schemas.iter().position(|s| s.name == schema.name) {
-            self.schemas[pos] = schema.clone();
+            if let Some(slot) = self.schemas.get_mut(pos) {
+                *slot = schema.clone();
+            }
         } else {
             self.schemas.push(schema.clone());
         }
@@ -94,7 +96,7 @@ impl ToolRegistry for CompositeRegistry {
         let mut session_schemas = self.session.schemas();
         let mut process_schemas = self.process.schemas();
         // 会话级覆盖：从 process 中剔除 session 已经声明的同名 schema。
-        let session_names: std::collections::HashSet<&str> =
+        let session_names: HashSet<&str> =
             session_schemas.iter().map(|s| s.name.as_str()).collect();
         process_schemas.retain(|s| !session_names.contains(s.name.as_str()));
         session_schemas.append(&mut process_schemas);

@@ -10,6 +10,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
+use client_util::client::HyperHttpsClient;
 use defect_agent::error::BoxError;
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
@@ -19,6 +20,7 @@ use defect_agent::llm::{
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use http::HeaderValue;
+use toac::body::Body;
 use toac::{ApiClient, CallError, MakeRequest, Operation, Request as ToacRequest};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -37,7 +39,7 @@ const BASE_URL_ENV: &str = "OPENAI_BASE_URL";
 const ORG_ENV: &str = "OPENAI_ORG";
 const PROJECT_ENV: &str = "OPENAI_PROJECT";
 
-pub(crate) type Http = client_util::client::HyperHttpsClient<toac::body::Body>;
+pub(crate) type Http = HyperHttpsClient<Body>;
 pub(crate) type Client = ApiClient<Http>;
 
 /// OpenAI provider 配置。

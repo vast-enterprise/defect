@@ -5,8 +5,10 @@
 //! 设计与字段对应详见 `docs/outbound/llm-anthropic.md`。
 
 use std::env;
+use std::fmt;
 use std::sync::Arc;
 
+use client_util::client::{HyperHttpsClient, build_https_client};
 use defect_agent::error::BoxError;
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
@@ -16,6 +18,7 @@ use defect_agent::llm::{
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use http::HeaderValue;
+use toac::body::Body;
 use toac::{ApiClient, CallError, MakeRequest, Operation, Request as ToacRequest};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -33,7 +36,7 @@ const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-type Http = client_util::client::HyperHttpsClient<toac::body::Body>;
+type Http = HyperHttpsClient<Body>;
 type Client = ApiClient<Http>;
 
 /// Anthropic provider 配置。
@@ -79,8 +82,8 @@ pub struct AnthropicProvider {
     models: Arc<RwLock<Option<Vec<ModelInfo>>>>,
 }
 
-impl std::fmt::Debug for AnthropicProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for AnthropicProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnthropicProvider")
             .field("info", &self.info)
             .field("capabilities", &self.capabilities)
@@ -94,7 +97,7 @@ impl AnthropicProvider {
         let base_url = config.resolve_base_url();
 
         let auth = security::AuthConfig::builder().api_key_auth(token).build();
-        let http = client_util::client::build_https_client::<toac::body::Body>()
+        let http = build_https_client::<Body>()
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport(BoxError::new(e))))?;
         let client = ApiClient::new(http, base_url).with_auth(auth);
 

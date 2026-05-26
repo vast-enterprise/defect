@@ -3,8 +3,10 @@
 //! v0 起步以 jsonl 形式落盘会话事件，支持 append 与回放；后续按需演进到
 //! sqlite 等带索引的存储。
 
+#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Error, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -453,7 +455,7 @@ impl StoredEvent {
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] Error),
 
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),

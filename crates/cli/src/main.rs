@@ -2,6 +2,8 @@
 //!
 //! v0：根据显式 provider 配置装配 LLM provider，组装 [`DefaultAgentCore`]，
 //! 以 stdio 启动 ACP server。
+
+#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
 //!
 //! Provider 选择：
 //! 1. `--provider <name>` 命令行参数
@@ -12,7 +14,7 @@
 //! 取值：`echo` | `anthropic` | `openai` | `deepseek`。
 //! 凭证仍由各 provider 从 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
 //! `DEEPSEEK_API_KEY` 读取。
-
+#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;

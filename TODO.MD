@@ -50,6 +50,7 @@
 | inbound  | ACP 握手与能力协商（initialize / authenticate）                | `docs/inbound/acp-handshake.md`                                         | P0     | ✅ 已完成 |
 | inbound  | ACP 会话生命周期（new / load）                                 | `docs/inbound/acp-session.md`                                           | P0     | ✅ 已完成 |
 | inbound  | ACP prompt/turn 桥接细化（字段语义、image 处理）               | `docs/inbound/acp-prompt.md`                                            | P0     | ✅ 已完成 |
+| inbound  | ACP Content 兼容性补全（Image / Resource / EmbeddedResource 等） | `docs/inbound/acp-prompt.md`                                            | P1     | 🕒 未开始 |
 | inbound  | ACP 权限请求桥（requestPermission）                            | `docs/inbound/acp-permission.md`                                        | P0     | ✅ 已完成 |
 | inbound  | ACP 文件系统委托（通过客户端读写）                             | `docs/inbound/acp-fs.md`                                                | P1     | ✅ 已完成 |
 | inbound  | ACP 取消/中断（cancel turn 边界 case）                         | `docs/inbound/acp-cancel.md`                                            | P1     | ✅ 已完成 |

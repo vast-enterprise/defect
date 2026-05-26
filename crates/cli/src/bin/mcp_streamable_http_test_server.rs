@@ -1,3 +1,5 @@
+#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

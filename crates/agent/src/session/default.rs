@@ -25,6 +25,7 @@
 //! `TurnError::TurnInProgress`。`TurnSlot` 内部存当前 turn 的
 //! [`CancellationToken`]，`cancel_turn` 取出后 `cancel()`。
 
+use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -34,6 +35,7 @@ use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::error::BoxError;
 use crate::event::PermissionResolution;
 use crate::fs::FsBackend;
 use crate::llm::{LlmProvider, ModelInfo, ProviderError, ProviderErrorKind, ProviderInfo};
@@ -210,9 +212,9 @@ impl AgentCore for DefaultAgentCore {
                 return Ok(existing.value().clone());
             }
             let Some(loader) = &self.loader else {
-                return Err(AgentError::Restore(crate::error::BoxError::new(
-                    std::io::Error::other("session loader not configured"),
-                )));
+                return Err(AgentError::Restore(BoxError::new(io::Error::other(
+                    "session loader not configured",
+                ))));
             };
             let loaded = loader
                 .load_session(id.clone())
@@ -434,7 +436,7 @@ impl Session for DefaultSession {
                     &config.prompt,
                     config.system_prompt.as_deref(),
                 )
-                .map_err(|err| TurnError::Internal(crate::error::BoxError::new(err)))?;
+                .map_err(|err| TurnError::Internal(BoxError::new(err)))?;
                 let runner = TurnRunner {
                     history: self.history.as_ref(),
                     tools: self.tools.as_ref(),

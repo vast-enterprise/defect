@@ -2,6 +2,7 @@
 //!
 //! 设计详见 `docs/internal/tools-fs.md` §5。
 
+use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -266,6 +267,6 @@ fn map_fs_err(e: FsError) -> ToolError {
     ToolError::Execution(BoxError::new(e))
 }
 
-fn arg_err(msg: &str) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidInput, msg.to_string())
+fn arg_err(msg: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, msg.to_string())
 }

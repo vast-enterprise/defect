@@ -3,7 +3,10 @@
 //! 把外部 MCP server 暴露的工具包装为 [`defect_agent`] 的 per-session
 //! 工具表。
 
+#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+
 use std::collections::HashSet;
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -37,10 +40,10 @@ pub enum McpAdapterError {
     UnsupportedTransport(String),
 
     #[error("rmcp initialization failed: {0}")]
-    Initialize(#[source] std::io::Error),
+    Initialize(#[source] io::Error),
 
     #[error("rmcp request failed: {0}")]
-    Request(#[source] std::io::Error),
+    Request(#[source] io::Error),
 }
 
 /// 最小 MCP 工厂。
@@ -270,7 +273,7 @@ impl Tool for McpToolAdapter {
             match peer.call_tool(params).await {
                 Ok(call) => completed_event(call),
                 Err(err) => ToolEvent::Failed(defect_agent::tool::ToolError::Execution(
-                    BoxError::new(std::io::Error::other(err.to_string())),
+                    BoxError::new(io::Error::other(err.to_string())),
                 )),
             }
         }))
@@ -298,7 +301,7 @@ fn build_call_params(
         Value::Object(arguments) => Ok(CallToolRequestParams::new(name).with_arguments(arguments)),
         Value::Null => Ok(CallToolRequestParams::new(name)),
         other => Err(defect_agent::tool::ToolError::InvalidArgs(BoxError::new(
-            std::io::Error::other(format!("expected object args, got {other}")),
+            io::Error::other(format!("expected object args, got {other}")),
         ))),
     }
 }
@@ -342,9 +345,7 @@ fn service_error<E>(err: E) -> BoxError
 where
     E: std::error::Error,
 {
-    BoxError::new(McpAdapterError::Request(std::io::Error::other(
-        err.to_string(),
-    )))
+    BoxError::new(McpAdapterError::Request(io::Error::other(err.to_string())))
 }
 
 fn http_headers(
@@ -354,14 +355,14 @@ fn http_headers(
         .into_iter()
         .map(|header| {
             let name = HeaderName::try_from(header.name.as_str()).map_err(|err| {
-                BoxError::new(McpAdapterError::Initialize(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
+                BoxError::new(McpAdapterError::Initialize(io::Error::new(
+                    io::ErrorKind::InvalidInput,
                     format!("invalid MCP HTTP header name '{}': {err}", header.name),
                 )))
             })?;
             let value = HeaderValue::from_str(&header.value).map_err(|err| {
-                BoxError::new(McpAdapterError::Initialize(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
+                BoxError::new(McpAdapterError::Initialize(io::Error::new(
+                    io::ErrorKind::InvalidInput,
                     format!("invalid MCP HTTP header value for '{}': {err}", header.name),
                 )))
             })?;

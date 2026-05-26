@@ -399,7 +399,8 @@ impl OutputBuffer {
         if chunk.len() <= remaining {
             self.bytes.extend_from_slice(chunk);
         } else {
-            self.bytes.extend_from_slice(&chunk[..remaining]);
+            self.bytes
+                .extend_from_slice(chunk.get(..remaining).unwrap_or(chunk));
             self.truncated += (chunk.len() - remaining) as u64;
         }
     }

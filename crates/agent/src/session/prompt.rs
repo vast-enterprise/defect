@@ -1,4 +1,5 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::session::turn::{BasePromptConfig, PromptConfig};
@@ -15,7 +16,7 @@ pub fn resolve_system_prompt(
     base_prompt: &BasePromptConfig,
     prompt: &PromptConfig,
     session_overlay: Option<&str>,
-) -> Result<Option<String>, std::io::Error> {
+) -> Result<Option<String>, io::Error> {
     let mut sections = Vec::new();
 
     sections.extend(load_base_prompt(base_prompt)?);
@@ -43,7 +44,7 @@ pub fn resolve_system_prompt(
     Ok((!sections.is_empty()).then(|| sections.join("\n\n")))
 }
 
-fn load_base_prompt(base_prompt: &BasePromptConfig) -> Result<Vec<String>, std::io::Error> {
+fn load_base_prompt(base_prompt: &BasePromptConfig) -> Result<Vec<String>, io::Error> {
     let mut sections = Vec::new();
 
     if let Some(file) = base_prompt.file.as_deref() {
@@ -58,12 +59,12 @@ fn load_base_prompt(base_prompt: &BasePromptConfig) -> Result<Vec<String>, std::
     Ok(sections)
 }
 
-fn load_prompt_file(cwd: &Path, file: &str) -> Result<Option<Vec<String>>, std::io::Error> {
+fn load_prompt_file(cwd: &Path, file: &str) -> Result<Option<Vec<String>>, io::Error> {
     if file != DEFAULT_PROMPT_FILE {
         let path = resolve_prompt_path(cwd, file);
         return match fs::read_to_string(&path) {
             Ok(text) => Ok(Some(vec![text])),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err),
         };
     }
@@ -73,7 +74,7 @@ fn load_prompt_file(cwd: &Path, file: &str) -> Result<Option<Vec<String>>, std::
         let path = dir.join(DEFAULT_PROMPT_FILE);
         match fs::read_to_string(&path) {
             Ok(text) => sections.push(text),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => return Err(err),
         }
     }

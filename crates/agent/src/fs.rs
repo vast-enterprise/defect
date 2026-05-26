@@ -14,6 +14,7 @@
 //!
 //! [`FileSystemCapabilities`]: agent_client_protocol::schema::FileSystemCapabilities
 
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -38,7 +39,7 @@ impl Fingerprint {
     /// 直接对一段文本取指纹。`edit_file` 读到 old_content 后用这个先打个点，
     /// 避免在写前再读一次。
     pub fn of(content: &str) -> Self {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = DefaultHasher::new();
         content.hash(&mut h);
         Self {
             bytes: content.len() as u64,

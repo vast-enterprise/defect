@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use defect_agent::error::BoxError;
@@ -135,7 +136,7 @@ pub fn load_dotenv_compat(cwd: &Path) -> Result<(), ConfigError> {
     let path = cwd.join(".env");
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
             return Err(ConfigError::Io {
                 path,
@@ -389,7 +390,7 @@ fn load_optional_layer_opt(
     };
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(ConfigError::Io {
                 path,
@@ -476,12 +477,10 @@ fn parse_dotenv_line(line: &str) -> Option<(String, String)> {
 
 fn strip_quotes(s: &str) -> &str {
     let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return &s[1..s.len() - 1];
-        }
+    if let [first @ (b'"' | b'\''), .., last] = bytes
+        && first == last
+    {
+        return &s[1..s.len() - 1];
     }
     s
 }

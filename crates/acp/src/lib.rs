@@ -2,6 +2,8 @@
 //!
 //! 桥接 [`defect_agent`] 暴露的事件流与 ACP 线上协议；不参与业务逻辑，
 //! 仅做协议适配与传输（v0 = stdio）。
+
+#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
 //!
 //! 设计详见 `docs/inbound/acp-bridge.md`。
 
