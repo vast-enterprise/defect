@@ -23,18 +23,20 @@ ACP 的 `terminal/create` / `terminal/output` / `terminal/release` / `terminal/w
 
 ### 1.1 ACP 的 terminal 能力
 
-ACP `InitializeRequest` 携带 [`ClientCapabilities`]；v0 关注的 terminal 相关字段（当前 schema 0.13.2，未来若有变化以实际版本为准）：
+ACP `InitializeRequest` 携带 [`ClientCapabilities`]；v0 关注的 terminal 相关字段（schema 0.13.2，`v2/client.rs::ClientCapabilities`）：
 
+```rust
+pub struct ClientCapabilities {
+    pub fs: FileSystemCapabilities,
+    /// Whether the Client supports all `terminal/*` methods.
+    pub terminal: bool,
+    // ...
+}
 ```
-ClientCapabilities
-  └── terminal: Option<...>   // 客户端是否支持 terminal/* 反向请求
-```
 
-v0 的决策粒度是"全有或全无"——如果客户端声明支持 terminal，就认为它支持完整的 terminal 生命周期（create / output / release / wait_for_exit / kill）。不逐方法拆分——与 `fs` 的"read+write 全才委托"逻辑一致（[`acp-fs.md` §1.2]）。
+`terminal` 是单一 `bool`——schema 已经把"能否处理整组 terminal/* 反向请求"压成一个开关。v0 的决策粒度是"全有或全无"：声明 `true` 即用 [`AcpShellBackend`]，否则回退 [`LocalShellBackend`]。不逐方法拆分——与 `fs` 的"read+write 全才委托"逻辑一致（[`acp-fs.md` §1.2]）。
 
-> **注意**：若 ACP schema 当前版本尚未正式定义 terminal capabilities 字段，v0 采用保守策略——始终回退到 [`LocalShellBackend`]。等协议版本就绪后只需在 `decide_shell_mode` 里加一行判断，其余代码不变。
-
-[`ClientCapabilities`]: https://docs.rs/agent-client-protocol-schema/0.13/agent_client_protocol_schema/v1/struct.ClientCapabilities.html
+[`ClientCapabilities`]: https://docs.rs/agent-client-protocol-schema/0.13/agent_client_protocol_schema/v2/struct.ClientCapabilities.html
 [`acp-fs.md` §1.2]: ./acp-fs.md#12-决策表
 
 ### 1.2 决策表
@@ -55,12 +57,17 @@ v0 的决策粒度是"全有或全无"——如果客户端声明支持 terminal
 enum ShellMode { Local, Delegated }
 
 fn decide_shell_mode(client_caps: &ClientCapabilities) -> ShellMode {
-    // v0：保守——等 schema 正式定义 terminal capabilities 后再启用 Delegated
-    ShellMode::Local
+    if client_caps.terminal {
+        ShellMode::Delegated
+    } else {
+        ShellMode::Local
+    }
 }
 ```
 
-连接级状态存储：与 `FsMode` 并列——`initialize` handler 里决定，存到连接级状态，`session/new` handler 读取后构造对应的 `Arc<dyn ShellBackend>`。
+连接级状态存储：与 `FsMode` 并列存进 `ServeState`（[`serve.rs::ServeState`]）——`initialize` handler 写入，`session/new` / `session/load` handler 读取后构造对应的 `Arc<dyn ShellBackend>`，注入给 `AgentCore::create_session`。
+
+[`serve.rs::ServeState`]: ../../crates/acp/src/serve.rs
 
 ## 2. ACP Terminal 反向请求：形状回顾
 
@@ -205,7 +212,15 @@ pub struct ShellOutput {
 
 #[derive(Debug, Clone)]
 pub struct TerminalExitStatus {
+    /// 进程 exit code。被信号杀掉时为 `None`，看 `signal`。
+    ///
+    /// 内部用 `i32` 与 `BashOutput.exit_code`（[`tools-bash.md` §1]）一致；
+    /// `AcpShellBackend` 收到 ACP schema 的 `Option<u32>` 时按位转 `i32`，
+    /// 0..=i32::MAX 范围内值不变，超过的退化为 -1（实际 exit code 域是
+    /// 0..=255，不会越界）。
     pub exit_code: Option<i32>,
+    /// 信号名（如 `SIGKILL`）。本地后端来自 `signal_name(sig)`；
+    /// ACP 后端直接透传 schema 的 `signal: Option<String>`。
     pub signal: Option<String>,
 }
 
@@ -242,35 +257,44 @@ pub enum ShellError {
 在 `defect-tools` 中实现，直接复用现有 `bash` 工具的进程管理逻辑：
 
 ```rust
-// crates/tools/src/shell.rs（新文件，或扩展 bash 模块）
+// crates/tools/src/shell.rs（新文件）
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub struct LocalShellBackend {
-    terminals: Mutex<HashMap<TerminalId, TerminalState>>,
-    cwd: PathBuf,     // session workspace root
+    terminals: Mutex<HashMap<TerminalId, Arc<TerminalState>>>,
 }
 
+/// 单个 terminal 的运行态。reader task 持续把 stdout/stderr 灌进
+/// `output`，`output()` / `wait_for_exit()` 读这份共享缓冲。
 struct TerminalState {
-    child: tokio::process::Child,
-    output_buf: Vec<u8>,
-    truncated: bool,
-    timed_out: bool,
+    child: Mutex<tokio::process::Child>,
+    output: Mutex<OutputBuffer>,
+    /// reader task 关掉两个流后切到 `wait()`，最终把 ExitStatus 通过这个
+    /// `Notify` + `Mutex<Option<...>>` 暴露出来。
+    exit: tokio::sync::Mutex<Option<std::process::ExitStatus>>,
+    exit_notify: tokio::sync::Notify,
+    timed_out: AtomicBool,
 }
 ```
 
 实现要点：
 
-- **`create`**：spawn `sh -c command`（同现有 [`tools-bash.md` §4.1]），`kill_on_drop(false)`（因为 lifecycle 由 backend 显式管理），存到 `HashMap`。
-- **`output`**：从 `child.stdout` / `child.stderr` 读累积输出（1 MiB 上限），返回 `ShellOutput`。
-- **`wait_for_exit`**：`child.wait().await`，返回 `TerminalExitStatus`。
-- **`release`**：从 `HashMap` 移除，drop `Child`（触发 kill_on_drop 或已退出）。
-- **`kill`**：`child.start_kill()`，然后从 `HashMap` 移除。
+- **`create`**：spawn `sh -c command`（同现有 [`tools-bash.md` §4.1]），`stdout`/`stderr` 走 `Stdio::piped()`，`kill_on_drop(true)`。立刻 `tokio::spawn` 一个 **reader task** 持续 `next_line()` 写入 `output` buffer（1 MiB 上限，与 [`tools-bash.md` §4.2] 同款），两个流都关闭后调 `child.wait()` 把 `ExitStatus` 写进 `exit` 并 `notify_waiters()`。terminal 状态存到 `HashMap`，返回 `TerminalId`。
+- **`output`**：从 `output` buffer 取当前已累积文本，读 `exit` 是否已就位（已退出则填 `Some(...)`），返回 `ShellOutput`。**幂等可重复调用**——返回的是当时的快照，buffer 不被 drain。
+- **`wait_for_exit`**：`exit_notify.notified()` 等到 reader task 写入 `exit`，再返回。
+- **`release`**：从 `HashMap` 移除，drop `Arc<TerminalState>`（reader task 与 child 一并收尾）。
+- **`kill`**：`child.start_kill()`，**不**移除 `HashMap` 项——`kill` 的语义是"强杀但不释放资源"，后续仍可调 `output` / `wait_for_exit`。释放由 `release` 负责。
 
-与现有 `bash` 工具的关系：改造 `BashTool`——去掉内部的 `Command::new("sh")`，改为持有 `Arc<dyn ShellBackend>` + `Arc<dyn FsBackend>`（后者用于路径校验），通过 backend 创建 terminal 并等待结果。
+> **为什么需要 reader task**：ACP 协议里 `output` 是一次性快照查询，但本地实现必须持续从 piped fd 读出来——否则一旦子进程输出超过 pipe buffer 就会被阻塞写。这点与现有 bash 工具的"边跑边读 + select! 同步聚合"等价，只是把读循环从工具的主 future 里搬到了 backend 的 reader task。
+
+与现有 `bash` 工具的关系：改造 `BashTool`——去掉内部的 `Command::new("sh")`，改为通过 [`ToolContext::shell`] 拿后端调 `create` / `wait_for_exit` / `output` / `release`。BashTool 仍然无状态（[`tools-bash.md` §1]），后端依赖走 ctx 注入而非 struct 字段——与 fs 后端取舍一致（[`crate::tool::ToolContext::fs`]）。
 
 [`tools-bash.md` §4.1]: ../internal/tools-bash.md#41-进程生成
+[`tools-bash.md` §4.2]: ../internal/tools-bash.md#42-输出捕获策略
+[`ToolContext::shell`]: ../../crates/agent/src/tool.rs
+[`crate::tool::ToolContext::fs`]: ../../crates/agent/src/tool.rs
 
 ## 5. `AcpShellBackend`
 
@@ -315,21 +339,30 @@ impl ShellBackend for AcpShellBackend {
             Ok(ShellOutput {
                 text: resp.output,
                 truncated: resp.truncated,
-                exit_status: resp.exit_status.map(|s| TerminalExitStatus {
-                    exit_code: s.exit_code,
-                    signal: None, // ACP schema 的 TerminalExitStatus 字段需要确认
-                }),
+                exit_status: resp.exit_status.map(map_acp_exit_status),
             })
         })
     }
 
     // wait_for_exit / release / kill 同理
 }
+
+/// 把 ACP schema 的 `TerminalExitStatus`（`exit_code: Option<u32>`）映射到
+/// agent 内部的 `TerminalExitStatus`（`exit_code: Option<i32>`）。
+///
+/// exit code 的标准值域是 0..=255（POSIX）/ 0..=u32::MAX（Windows GetExitCodeProcess）；
+/// 实际用户语义只取 0..=255。i32 域足够装下，超过 i32::MAX 退化为 -1。
+fn map_acp_exit_status(s: agent_client_protocol::schema::TerminalExitStatus) -> TerminalExitStatus {
+    TerminalExitStatus {
+        exit_code: s.exit_code.map(|n| i32::try_from(n).unwrap_or(-1)),
+        signal: s.signal,
+    }
+}
 ```
 
 - **`ConnectionTo<Client>` 是 `Clone`**——它是 `Arc<...>` 的 newtype，`AcpShellBackend` 持一份即可。
 - **`block_task`** 是 ACP SDK 的 await 模型。
-- **工作区边界**：agent 自己调 `resolve_workspace_path` 校验（与 [`acp-fs.md` §4] 一致）。
+- **工作区边界**：agent 自己再调一次 `resolve_workspace_path` 校验（与 [`acp-fs.md` §4] 一致）——bash 工具层已经用 `resolve_workdir` 做过一次。这是有意的"双层栅栏"：fs 工具家族不在工具层做边界（路径直传 backend），shell 在工具层做了一次（基于现状），backend 层再校验一次让 `AcpShellBackend` / `AcpFsBackend` 的安全保证对称。落地时校验通过的成本可忽略，多一道栅栏避免未来加新 shell 工具时漏掉边界。
 
 [`AcpFsBackend`]: ./acp-fs.md#3-acpfsbackend
 [`acp-fs.md` §3]: ./acp-fs.md#3-acpfsbackend
@@ -339,15 +372,15 @@ impl ShellBackend for AcpShellBackend {
 
 ### 6.1 变更点
 
-当前 `BashTool` 的 `execute` 直接调 `tokio::process::Command::new("sh")` ([`tools-bash.md` §4])。改造后：
+当前 `BashTool` 的 `execute` 直接调 `tokio::process::Command::new("sh")` ([`tools-bash.md` §4])。改造后 `BashTool` struct **不变**——仍然只持 `schema` + 两个 timeout 配置（保持 [`tools-bash.md` §1] "工具单例无状态"的取舍）。后端依赖通过新增的 [`ToolContext::shell`] 注入：
 
 ```rust
-pub struct BashTool {
-    schema: ToolSchema,
-    shell: Arc<dyn ShellBackend>,
-    fs: Arc<dyn FsBackend>,          // 新增：用于路径校验
-    default_timeout_ms: u64,
-    max_timeout_ms: u64,
+// crates/agent/src/tool.rs（扩展 ToolContext）
+pub struct ToolContext<'a> {
+    pub cwd: &'a Path,
+    pub cancel: CancellationToken,
+    pub fs: Arc<dyn FsBackend>,
+    pub shell: Arc<dyn ShellBackend>,   // 新增
 }
 ```
 
@@ -355,17 +388,20 @@ pub struct BashTool {
 
 ```text
 1. 解析 args（command / workdir / timeout_ms）
-2. fs.resolve_workspace_path(workdir) → 边界校验
-3. shell.create(command, cwd) → 拿到 terminal_id
-   ├── 超时：shell.kill(id) → ToolEvent::Completed(timeout 信息)
-   ├── cancel：shell.kill(id) → ToolEvent::Failed(Canceled)
-   └── 正常：shell.wait_for_exit(id) → 拿 exit_status
-4. shell.output(id) → 拿输出文本
-5. shell.release(id)
-6. 组装 ToolEvent::Completed（与现有逻辑一致）
+2. resolve_workdir(ctx.cwd, args.workdir) → 边界校验（沿用 bash.rs 现有逻辑）
+3. ctx.shell.create(command, cwd) → 拿到 terminal_id
+4. 主 select!：
+   ├── cancel：shell.kill(id); shell.release(id); ToolEvent::Failed(Canceled)
+   ├── 超时：shell.kill(id); shell.wait_for_exit(id);
+   │         shell.output(id); shell.release(id); ToolEvent::Completed(timeout=true)
+   └── 正常：shell.wait_for_exit(id); shell.output(id); shell.release(id);
+             ToolEvent::Completed(...)
+5. release 在所有分支上幂等执行（包括失败路径）
 ```
 
 工具的行为与现有 `bash` 完全一致——LLM 感知不到后端差异。
+
+> **路径校验留在工具层**：当前 bash 自己实现了 `resolve_workdir`（bash.rs:347-377），与 fs 工具家族用的 `resolve_workspace_path`（[`agent/src/fs.rs`]）几乎重叠。本次改造**不**合并这两个函数——bash 的 workdir 必须存在（要 canonicalize 整路径），fs 的目标可能尚未存在（只 canonicalize 父目录）。差异够大，强行合并反而割裂。
 
 ### 6.2 不变的部分
 
@@ -377,6 +413,7 @@ pub struct BashTool {
 
 [`tools-bash.md` §2]: ../internal/tools-bash.md#2-安全等级safety_hint
 [`tools-bash.md` §4]: ../internal/tools-bash.md#4-execute
+[`agent/src/fs.rs`]: ../../crates/agent/src/fs.rs
 
 ## 7. e2e 测试
 
@@ -387,9 +424,9 @@ pub struct BashTool {
 | 1 | 客户端声明 terminal 能力 → 跑 `bash` 工具 `echo hello` | 收到一条 `terminal/create` 反向请求；agent 正确拿到 output；`ToolCallFinished` |
 | 2 | 同上 → 命令以非零退出 | `terminal/output` 返回 exit_code≠0；agent 产出 `Completed`（非 `Failed`） |
 | 3 | 同上 → 超时 | agent 发 `terminal/kill`；`Completed` 含 timeout 信息 |
-| 4 | 同上 → turn 中途 cancel | agent 发 `terminal/kill`；`TurnEnded = Cancelled` |
+| 4 | 同上 → turn 中途 cancel | agent 发 `terminal/kill` + `terminal/release`；`ToolCallFinished` status=Failed（`ToolError::Canceled`），随后 `TurnEnded = Cancelled` |
 | 5 | 客户端未声明 terminal 能力 → 跑 `bash` | 不发 `terminal/*` 请求（退回 LocalShellBackend）；命令正常执行 |
-| 6 | 委托模式下 workdir 越界 | agent 端 `resolve_workspace_path` 报错；**不**发 `terminal/create` |
+| 6 | 委托模式下 workdir 越界 | agent 端 `resolve_workdir` 报错（`ToolError::InvalidArgs`）；**不**发 `terminal/create` |
 | 7 | 委托模式下 client 返回 wire error | `ToolCallFinished` status=Failed；content 含 wire error 信息 |
 
 ## 8. 后续演进（不在 v0）
@@ -407,16 +444,20 @@ pub struct BashTool {
 
 ## 9. 落地步骤
 
-1. **`crates/agent/src/shell.rs`**（新文件）：[`ShellBackend`] trait + `ShellError` + `ShellOutput` + `TerminalId` + `TerminalExitStatus`
+1. **`crates/agent/src/shell.rs`**（新文件）：[`ShellBackend`] trait + `ShellError` + `ShellOutput` + `TerminalId` + `TerminalExitStatus` + `NoopShellBackend`（测试占位，与 `NoopFsBackend` 同款）
 2. **`crates/agent/src/lib.rs`**：`pub mod shell;`
-3. **`crates/tools/src/shell.rs`**（新文件）：[`LocalShellBackend`] 实现
-4. **`crates/tools/src/bash.rs`**：改造 `BashTool`——去掉内部 `Command::new("sh")`，注入 `Arc<dyn ShellBackend>` + `Arc<dyn FsBackend>`
-5. **`crates/acp/src/shell.rs`**（新文件）：[`AcpShellBackend`] 实现（镜像 `acp/src/fs.rs`）
-6. **`crates/acp/src/serve.rs`**：
-   - `initialize` handler 加 `decide_shell_mode`（v0 始终 `Local`）
-   - `session/new` handler 按 `ShellMode` 构造 `Arc<dyn ShellBackend>`，注入 session
-7. **`crates/acp/tests/shell_delegation.rs`**：跑 §7 测试矩阵
-8. **文档**：更新 `docs/internal/tools-bash.md` §8 的演进口子（把"ACP terminal 委托"从 v0 不做到已落地），更新 `TODO.MD`
+3. **`crates/agent/src/tool.rs`**：`ToolContext` 加 `pub shell: Arc<dyn ShellBackend>`，`ToolContext::new` 签名扩展（破坏式变更——会牵动现有所有 `ToolContext::new` 调用点，包括测试 fixture）
+4. **`crates/agent/src/session/default.rs`**：`AgentCore::create_session` / `load_session` 增加 `shell: Arc<dyn ShellBackend>` 参数；`DefaultSession` 持有并在构造 `ToolContext` 时透传
+5. **`crates/tools/src/shell.rs`**（新文件）：[`LocalShellBackend`] 实现（含 reader task）
+6. **`crates/tools/src/bash.rs`**：改造 `execute`——去掉 `Command::new("sh")`，改为 `ctx.shell.create(...)` + `wait_for_exit` + `output` + `release`。`BashTool` struct 字段不变
+7. **`crates/acp/src/shell.rs`**（新文件）：[`AcpShellBackend`] 实现（镜像 `acp/src/fs.rs`）
+8. **`crates/acp/src/serve.rs`**：
+   - `ServeState` 加 `shell_mode: RwLock<ShellMode>`
+   - `on_initialize` 调 `decide_shell_mode(&req.client_capabilities)` 写入
+   - `on_session_new` / `on_session_load` 按 `ShellMode` 构造 `Arc<dyn ShellBackend>`，传给 `create_session` / `load_session`
+   - 提取 `ServeState::shell_backend(...)` 方法（与 `fs_backend` 同款）
+9. **`crates/acp/tests/shell_delegation.rs`**：跑 §7 测试矩阵
+10. **文档**：更新 `docs/internal/tools-bash.md` §8 的演进口子（把"ACP terminal 委托"从 v0 不做到已落地），更新 `TODO.MD`
 
 ## 10. 与现有文档的协同更新
 
