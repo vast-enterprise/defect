@@ -17,10 +17,11 @@ use crate::types::{
     ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigToml, ConfigWarning,
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_BASH_MAX_TIMEOUT_MS, DEFAULT_BASH_TIMEOUT_MS,
     DEFAULT_DEEPSEEK_MODEL, DEFAULT_ECHO_MODEL, DEFAULT_FS_READ_LIMIT, DEFAULT_FS_READ_MAX_LIMIT,
-    DEFAULT_OPENAI_MODEL, DeepSeekConfigFile, EffectiveConfig, FsToolConfig, LoadConfigOptions,
-    LoadedConfig, OpenAiConfigFile, OtlpTracingConfig, PROJECT_CONFIG_RELATIVE,
-    PROJECT_LOCAL_CONFIG_RELATIVE, PromptConfigFile, ProviderConfigs, ProviderKind, SandboxConfig,
-    SandboxMode, ToolsConfig, TracingConfig, USER_CONFIG_RELATIVE,
+    DEFAULT_OPENAI_MODEL, DeepSeekConfigFile, EffectiveConfig, FsToolConfig, HttpClientConfig,
+    HttpProxyConfig, HttpProxySettings, LoadConfigOptions, LoadedConfig, OpenAiConfigFile,
+    OtlpTracingConfig, PROJECT_CONFIG_RELATIVE, PROJECT_LOCAL_CONFIG_RELATIVE,
+    PromptConfigFile, ProviderConfigs, ProviderKind, SandboxConfig, SandboxMode, ToolsConfig,
+    TracingConfig, USER_CONFIG_RELATIVE,
 };
 
 /// 加载并合并 `defect` 的有效配置。
@@ -325,6 +326,24 @@ fn build_effective_config(
             path: path.to_path_buf(),
             message,
         })?,
+        http: HttpClientConfig {
+            total_timeout_ms: config.http.total_timeout_ms,
+            transport_retries: config.http.transport_retries,
+            initial_backoff_ms: config.http.initial_backoff_ms,
+            user_agent: config.http.user_agent,
+            proxy: config
+                .http
+                .proxy
+                .map(|cfg| HttpProxyConfig {
+                    mode: cfg.mode.unwrap_or_default(),
+                    explicit: HttpProxySettings {
+                        http_proxy: cfg.http_proxy,
+                        https_proxy: cfg.https_proxy,
+                        no_proxy: cfg.no_proxy.unwrap_or_default(),
+                    },
+                })
+                .unwrap_or_default(),
+        },
     })
 }
 
@@ -365,9 +384,19 @@ fn sanitize_shared_project_layer(
 
     if remove_toml_path(&mut sanitized, &["tracing", "otlp"]) {
         warnings.push(ConfigWarning::IgnoredProjectKey {
-            path,
+            path: path.clone(),
             key: "tracing.otlp".into(),
             reason: "shared project config must not redirect observability sinks",
+        });
+    }
+
+    // 仓库内共享配置不能静默把出站流量改到第三方代理；timeout / retries /
+    // user_agent 等不会改变流量目的地，仍然允许仓库统一调优。
+    if remove_toml_path(&mut sanitized, &["http", "proxy"]) {
+        warnings.push(ConfigWarning::IgnoredProjectKey {
+            path,
+            key: "http.proxy".into(),
+            reason: "shared project config must not redirect outbound HTTP traffic",
         });
     }
 
@@ -520,6 +549,14 @@ fn is_known_config_key(key: &str) -> bool {
             | "tracing.filter"
             | "tracing.otlp.endpoint"
             | "mcp.enabled_servers"
+            | "http.total_timeout_ms"
+            | "http.transport_retries"
+            | "http.initial_backoff_ms"
+            | "http.user_agent"
+            | "http.proxy.mode"
+            | "http.proxy.http_proxy"
+            | "http.proxy.https_proxy"
+            | "http.proxy.no_proxy"
     ) || is_known_mcp_key(key)
 }
 
@@ -541,6 +578,8 @@ fn is_known_config_prefix(key: &str) -> bool {
             | "tracing"
             | "tracing.otlp"
             | "mcp"
+            | "http"
+            | "http.proxy"
     ) || is_known_mcp_prefix(key)
 }
 

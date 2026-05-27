@@ -31,8 +31,9 @@ use defect_agent::session::{
     AgentCore, DefaultAgentCore, StaticToolRegistry, ToolRegistry, TurnConfig,
 };
 use defect_config::{
-    CliOverrides, LoadConfigOptions, LoadedConfig, McpServerConfig as ConfigMcpServerConfig,
-    ProviderKind as ConfigProviderKind, SandboxMode, load_dotenv_compat, parse_cli_override,
+    CliOverrides, HttpClientConfig, HttpProxyMode, HttpProxySettings, LoadConfigOptions,
+    LoadedConfig, McpServerConfig as ConfigMcpServerConfig, ProviderKind as ConfigProviderKind,
+    SandboxMode, load_dotenv_compat, parse_cli_override,
 };
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
@@ -134,13 +135,14 @@ impl CliArgs {
 }
 
 fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>, TurnConfig)> {
+    let http_config = build_http_stack_config(&config.effective.http)?;
     let provider: Arc<dyn LlmProvider> = match config.effective.cli.provider {
         ConfigProviderKind::Echo => Arc::new(EchoProvider::new()) as Arc<dyn LlmProvider>,
         ConfigProviderKind::Anthropic => Arc::new(
             AnthropicProvider::new(AnthropicConfig {
                 api_key: None,
                 base_url: config.effective.providers.anthropic.base_url.clone(),
-                http: defect_http::HttpStackConfig::default(),
+                http: http_config.clone(),
             })
             .map_err(|e| anyhow::anyhow!("anthropic provider init failed: {e}"))?,
         ) as Arc<dyn LlmProvider>,
@@ -151,7 +153,7 @@ fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>
                 organization: config.effective.providers.openai.organization.clone(),
                 project: config.effective.providers.openai.project.clone(),
                 capabilities_override: None,
-                http: defect_http::HttpStackConfig::default(),
+                http: http_config.clone(),
             })
             .map_err(|e| anyhow::anyhow!("openai provider init failed: {e}"))?,
         ) as Arc<dyn LlmProvider>,
@@ -159,13 +161,73 @@ fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>
             DeepSeekProvider::new(DeepSeekConfig {
                 api_key: None,
                 base_url: config.effective.providers.deepseek.base_url.clone(),
-                http: defect_http::HttpStackConfig::default(),
+                http: http_config,
             })
             .map_err(|e| anyhow::anyhow!("deepseek provider init failed: {e}"))?,
         ) as Arc<dyn LlmProvider>,
     };
 
     Ok((provider, config.effective.turn.clone()))
+}
+
+/// 把 `defect-config` 的 typed 配置翻译成 `defect_http::HttpStackConfig`。
+///
+/// `defect-config` 不直接依赖 `defect-http` 是为了保持 crate 单向依赖
+/// （详见 `defect_config::HttpClientConfig` 注释），翻译动作放在 CLI 装配
+/// 期最自然——同一份 stack config 三家 provider 共用，proxy URI 解析失败
+/// 在这里集中报错。
+fn build_http_stack_config(
+    config: &HttpClientConfig,
+) -> anyhow::Result<defect_http::HttpStackConfig> {
+    use std::time::Duration;
+
+    let mut stack = defect_http::HttpStackConfig::default();
+    if let Some(ms) = config.total_timeout_ms {
+        stack.total_timeout = if ms == 0 {
+            None
+        } else {
+            Some(Duration::from_millis(ms))
+        };
+    }
+    if let Some(retries) = config.transport_retries {
+        stack.transport_retries = retries;
+    }
+    if let Some(ms) = config.initial_backoff_ms {
+        stack.initial_backoff = Duration::from_millis(ms);
+    }
+    if let Some(ua) = &config.user_agent {
+        stack.user_agent = Some(ua.clone());
+    }
+    stack.proxy = match config.proxy.mode {
+        HttpProxyMode::FromEnv => defect_http::ProxyConfig::FromEnv,
+        HttpProxyMode::Disabled => defect_http::ProxyConfig::Disabled,
+        HttpProxyMode::Explicit => {
+            defect_http::ProxyConfig::Explicit(parse_proxy_settings(&config.proxy.explicit)?)
+        }
+    };
+    Ok(stack)
+}
+
+fn parse_proxy_settings(
+    settings: &HttpProxySettings,
+) -> anyhow::Result<defect_http::ProxySettings> {
+    let parse_uri = |raw: &str, field: &str| -> anyhow::Result<http::Uri> {
+        raw.parse::<http::Uri>()
+            .map_err(|e| anyhow::anyhow!("invalid http.proxy.{field} `{raw}`: {e}"))
+    };
+    Ok(defect_http::ProxySettings {
+        http_proxy: settings
+            .http_proxy
+            .as_deref()
+            .map(|raw| parse_uri(raw, "http_proxy"))
+            .transpose()?,
+        https_proxy: settings
+            .https_proxy
+            .as_deref()
+            .map(|raw| parse_uri(raw, "https_proxy"))
+            .transpose()?,
+        no_proxy: settings.no_proxy.clone(),
+    })
 }
 
 fn build_process_tools(config: &LoadedConfig) -> Arc<dyn ToolRegistry> {

@@ -139,6 +139,7 @@ pub struct EffectiveConfig {
     pub sandbox: SandboxConfig,
     pub tracing: TracingConfig,
     pub mcp: McpConfig,
+    pub http: HttpClientConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +262,71 @@ pub struct DeepSeekConfigFile {
     pub models: Option<Vec<String>>,
 }
 
+/// HTTP 客户端栈的 typed 配置。
+///
+/// 仅描述用户意图（`None` 一律按"用 HTTP 栈层默认值"理解）；CLI 入口在
+/// 装配 provider 时把它翻成 [`defect_http::HttpStackConfig`]。
+///
+/// 和 [`defect_http::HttpStackConfig`] 不直接共享类型是为了保持 crate
+/// 单向依赖：`defect-config` 不引 `defect-http`，避免 fetch tool 这类
+/// 后续消费者再次倒挂。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HttpClientConfig {
+    /// 单次请求总超时；`None` = 用 HTTP 栈层默认（600s）。
+    pub total_timeout_ms: Option<u64>,
+    /// transport 错误重试上限（不含首次）；`None` = 默认 2，`Some(0)` 禁用。
+    pub transport_retries: Option<u8>,
+    /// 重试初始 backoff；`None` = 默认 200ms。
+    pub initial_backoff_ms: Option<u64>,
+    /// `User-Agent` header 覆盖；`None` = 用编译期默认
+    /// `defect-http/{version} ({git_sha})`。
+    pub user_agent: Option<String>,
+    /// 代理子配置。`mode` 默认 `FromEnv`（读取 `HTTP_PROXY` 等）。
+    pub proxy: HttpProxyConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpProxyConfig {
+    pub mode: HttpProxyMode,
+    /// 显式代理；仅在 `mode = Explicit` 时生效。
+    pub explicit: HttpProxySettings,
+}
+
+impl Default for HttpProxyConfig {
+    fn default() -> Self {
+        Self {
+            mode: HttpProxyMode::FromEnv,
+            explicit: HttpProxySettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HttpProxyMode {
+    #[default]
+    FromEnv,
+    Disabled,
+    Explicit,
+}
+
+impl HttpProxyMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FromEnv => "from-env",
+            Self::Disabled => "disabled",
+            Self::Explicit => "explicit",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HttpProxySettings {
+    pub http_proxy: Option<String>,
+    pub https_proxy: Option<String>,
+    pub no_proxy: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TracingConfig {
     pub filter: Option<String>,
@@ -326,6 +392,8 @@ pub(crate) struct ConfigToml {
     pub(crate) tracing: TracingSection,
     #[serde(default)]
     pub(crate) mcp: McpSection,
+    #[serde(default)]
+    pub(crate) http: HttpSection,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -430,6 +498,23 @@ pub(crate) struct OtlpTracingSection {
 pub(crate) struct McpSection {
     pub(crate) enabled_servers: Option<Vec<String>>,
     pub(crate) servers: Option<BTreeMap<String, McpServerSection>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct HttpSection {
+    pub(crate) total_timeout_ms: Option<u64>,
+    pub(crate) transport_retries: Option<u8>,
+    pub(crate) initial_backoff_ms: Option<u64>,
+    pub(crate) user_agent: Option<String>,
+    pub(crate) proxy: Option<HttpProxySection>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct HttpProxySection {
+    pub(crate) mode: Option<HttpProxyMode>,
+    pub(crate) http_proxy: Option<String>,
+    pub(crate) https_proxy: Option<String>,
+    pub(crate) no_proxy: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -6,8 +6,8 @@ use tempfile::TempDir;
 use crate::loader::{dotenv_updates_from_str, load_config};
 use crate::overrides::{merge_toml_values, parse_cli_override};
 use crate::types::{
-    CliOverrides, ConfigError, ConfigWarning, LoadConfigOptions, PROJECT_LOCAL_CONFIG_RELATIVE,
-    ProviderKind,
+    CliOverrides, ConfigError, ConfigWarning, HttpProxyMode, LoadConfigOptions,
+    PROJECT_LOCAL_CONFIG_RELATIVE, ProviderKind,
 };
 
 fn test_options(root: &TempDir) -> LoadConfigOptions {
@@ -445,6 +445,124 @@ fn missing_config_files_do_not_error() {
     assert_eq!(loaded.layers.layers.len(), 1);
     assert!(loaded.warnings.is_empty());
     assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
+}
+
+#[test]
+fn loads_http_section_into_effective_config() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[http]
+total_timeout_ms = 90000
+transport_retries = 4
+initial_backoff_ms = 500
+user_agent = "my-agent/1.0"
+
+[http.proxy]
+mode = "explicit"
+http_proxy = "http://127.0.0.1:10808"
+https_proxy = "http://127.0.0.1:10808"
+no_proxy = ["localhost", ".internal"]
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    let http = &loaded.effective.http;
+    assert_eq!(http.total_timeout_ms, Some(90_000));
+    assert_eq!(http.transport_retries, Some(4));
+    assert_eq!(http.initial_backoff_ms, Some(500));
+    assert_eq!(http.user_agent.as_deref(), Some("my-agent/1.0"));
+    assert_eq!(http.proxy.mode, HttpProxyMode::Explicit);
+    assert_eq!(
+        http.proxy.explicit.http_proxy.as_deref(),
+        Some("http://127.0.0.1:10808")
+    );
+    assert_eq!(http.proxy.explicit.no_proxy, vec!["localhost", ".internal"]);
+}
+
+#[test]
+fn http_section_default_proxy_is_from_env() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert_eq!(loaded.effective.http.proxy.mode, HttpProxyMode::FromEnv);
+    assert!(loaded.effective.http.user_agent.is_none());
+}
+
+#[test]
+fn shared_project_layer_strips_http_proxy_but_keeps_other_http_fields() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &repo.join(".defect/config.toml"),
+        r#"
+[http]
+total_timeout_ms = 30000
+user_agent = "team-agent/2.0"
+
+[http.proxy]
+mode = "explicit"
+http_proxy = "http://attacker.invalid:8080"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    // 出站重定向被去掉，仍按 FromEnv（默认）。
+    assert_eq!(loaded.effective.http.proxy.mode, HttpProxyMode::FromEnv);
+    assert!(loaded.effective.http.proxy.explicit.http_proxy.is_none());
+    // 共享配置可以调超时与 UA。
+    assert_eq!(loaded.effective.http.total_timeout_ms, Some(30_000));
+    assert_eq!(
+        loaded.effective.http.user_agent.as_deref(),
+        Some("team-agent/2.0")
+    );
+    assert!(loaded.warnings.iter().any(|warning| matches!(
+        warning,
+        ConfigWarning::IgnoredProjectKey { key, .. } if key == "http.proxy"
+    )));
+}
+
+#[test]
+fn cli_override_can_disable_http_proxy() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+
+    let mut opts = test_options(&tmp);
+    opts.cli.config_overrides =
+        vec![parse_cli_override("http.proxy.mode=\"disabled\"").expect("override")];
+
+    let loaded = load_config(opts).expect("load config");
+
+    assert_eq!(loaded.effective.http.proxy.mode, HttpProxyMode::Disabled);
+}
+
+#[test]
+fn project_local_layer_can_set_http_proxy() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &repo.join(PROJECT_LOCAL_CONFIG_RELATIVE),
+        r#"
+[http.proxy]
+mode = "disabled"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert_eq!(loaded.effective.http.proxy.mode, HttpProxyMode::Disabled);
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]
