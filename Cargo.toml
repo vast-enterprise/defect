@@ -17,6 +17,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # 内部 crate 互相引用
 defect-agent = { path = "crates/agent" }
+defect-http = { path = "crates/http" }
 defect-llm = { path = "crates/llm" }
 defect-tools = { path = "crates/tools" }
 defect-mcp = { path = "crates/mcp" }
@@ -63,7 +64,16 @@ http = "1"
 http-body = "1"
 http-body-util = "0.1"
 bytes = "1"
-tower = { version = "0.5", features = ["util"] }
+hyper = "1"
+hyper-util = { version = "0.1", features = ["client", "client-legacy"] }
+# hyper-rustls 用 default features（aws-lc-rs + tls12 + native-tokio + http1 + logging）
+# 加上 http2 — 与 client-util `enable_all_versions()` 匹配。
+hyper-rustls = { version = "0.27", features = ["http2"] }
+# hyper-http-proxy: rustls-tls-native-roots → 复用 workspace 同版本 hyper-rustls 0.27。
+hyper-http-proxy = { version = "1.1", default-features = false, features = ["rustls-tls-native-roots"] }
+tower = { version = "0.5", features = ["util", "timeout"] }
+pin-project-lite = "0.2"
+rand = "0.10"
 oas3 = { version = "0.22", features = ["yaml-spec"] }
 prettyplease = "0.2"
 syn = { version = "2", features = ["full"] }

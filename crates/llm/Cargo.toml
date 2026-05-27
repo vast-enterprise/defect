@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 defect-agent.workspace = true
+defect-http.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -16,12 +17,12 @@ tracing.workspace = true
 
 # LLM 客户端栈：toac codegen 出的 wire/* + hyper transport
 toac.workspace = true
-client-util.workspace = true
 sse-stream.workspace = true
 http.workspace = true
 http-body.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
+hyper.workspace = true
 tower.workspace = true
 
 [dev-dependencies]

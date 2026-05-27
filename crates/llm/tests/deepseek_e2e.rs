@@ -22,6 +22,7 @@ fn provider_for(server_uri: &str) -> Arc<dyn LlmProvider> {
     let cfg = DeepSeekConfig {
         api_key: Some(TEST_API_KEY.to_string()),
         base_url: Some(server_uri.to_string()),
+        http: defect_http::HttpStackConfig::default(),
     };
     Arc::new(DeepSeekProvider::new(cfg).expect("provider")) as Arc<dyn LlmProvider>
 }

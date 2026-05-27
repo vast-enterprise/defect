@@ -8,22 +8,21 @@ use std::env;
 use std::fmt;
 use std::sync::Arc;
 
-use client_util::client::{HyperHttpsClient, build_https_client};
 use defect_agent::error::BoxError;
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
     ModelInfo, ProtocolId, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
-    RateLimitScope, ThinkingEcho,
+    RateLimitScope, ThinkingEcho, TimeoutPhase,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use http::HeaderValue;
-use toac::body::Body;
 use toac::{ApiClient, CallError, MakeRequest, Operation, Request as ToacRequest};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
 
+use defect_http::{HttpStack, HttpStackConfig, HttpStackError, build_http_stack};
 use crate::protocol::anthropic_messages;
 use crate::wire::anthropic::{
     components as wire,
@@ -36,16 +35,18 @@ const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-type Http = HyperHttpsClient<Body>;
-type Client = ApiClient<Http>;
+type Client = ApiClient<HttpStack>;
 
 /// Anthropic provider 配置。
 ///
 /// `api_key` / `base_url` 可显式提供，否则从环境变量读取。
+/// `http` 配置 transport 层（超时 / 重试 / 代理 / UA），默认见
+/// [`HttpStackConfig::default`].
 #[derive(Debug, Default, Clone)]
 pub struct AnthropicConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub http: HttpStackConfig,
 }
 
 impl AnthropicConfig {
@@ -53,6 +54,7 @@ impl AnthropicConfig {
         Self {
             api_key: env::var(API_KEY_ENV).ok(),
             base_url: env::var(BASE_URL_ENV).ok(),
+            http: HttpStackConfig::default(),
         }
     }
 
@@ -97,7 +99,7 @@ impl AnthropicProvider {
         let base_url = config.resolve_base_url();
 
         let auth = security::AuthConfig::builder().api_key_auth(token).build();
-        let http = build_https_client::<Body>()
+        let http = build_http_stack(config.http)
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport(BoxError::new(e))))?;
         let client = ApiClient::new(http, base_url).with_auth(auth);
 
@@ -330,10 +332,12 @@ impl WithRequestIdOpt for ProviderError {
 
 // ---------- error mapping -----------------------------------------------
 
-fn call_error_to_provider<E>(err: CallError<E>) -> ProviderError
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
+/// 把 [`CallError<HttpStackError>`] 翻成 [`ProviderError`]。
+///
+/// 关键分支：[`HttpStackError::Timeout`] 单独翻成
+/// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
+/// 决策——这条之前缺失，详见 [`docs/outbound/http.md`] §4。
+fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {
             hint: Some(e.to_string()),
@@ -341,10 +345,28 @@ where
         CallError::Auth(e) => ProviderError::new(ProviderErrorKind::AuthMalformed {
             hint: Some(e.to_string()),
         }),
+        CallError::Transport(HttpStackError::Timeout { phase }) => {
+            ProviderError::new(ProviderErrorKind::Timeout {
+                phase: map_timeout_phase(phase),
+            })
+        }
         CallError::Transport(e) => {
             ProviderError::new(ProviderErrorKind::Transport(BoxError::new(e)))
         }
         CallError::Decode(e) => ProviderError::new(ProviderErrorKind::Malformed(BoxError::new(e))),
+    }
+}
+
+/// 见 [`super::openai::call_error_to_provider`] 的对位说明。两份 provider
+/// 各持一份独立函数避免相互依赖；这里复用 openai 的 phase 映射函数。
+fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
+    match phase {
+        defect_http::TimeoutPhase::Connect => TimeoutPhase::Connect,
+        defect_http::TimeoutPhase::ReadHeaders => TimeoutPhase::ReadHeaders,
+        defect_http::TimeoutPhase::ReadBody => TimeoutPhase::ReadBody,
+        defect_http::TimeoutPhase::Idle => TimeoutPhase::Idle,
+        defect_http::TimeoutPhase::Total => TimeoutPhase::Total,
+        _ => TimeoutPhase::Total,
     }
 }
 

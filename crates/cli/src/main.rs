@@ -140,6 +140,7 @@ fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>
             AnthropicProvider::new(AnthropicConfig {
                 api_key: None,
                 base_url: config.effective.providers.anthropic.base_url.clone(),
+                http: defect_http::HttpStackConfig::default(),
             })
             .map_err(|e| anyhow::anyhow!("anthropic provider init failed: {e}"))?,
         ) as Arc<dyn LlmProvider>,
@@ -150,6 +151,7 @@ fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>
                 organization: config.effective.providers.openai.organization.clone(),
                 project: config.effective.providers.openai.project.clone(),
                 capabilities_override: None,
+                http: defect_http::HttpStackConfig::default(),
             })
             .map_err(|e| anyhow::anyhow!("openai provider init failed: {e}"))?,
         ) as Arc<dyn LlmProvider>,
@@ -157,6 +159,7 @@ fn build_provider(config: &LoadedConfig) -> anyhow::Result<(Arc<dyn LlmProvider>
             DeepSeekProvider::new(DeepSeekConfig {
                 api_key: None,
                 base_url: config.effective.providers.deepseek.base_url.clone(),
+                http: defect_http::HttpStackConfig::default(),
             })
             .map_err(|e| anyhow::anyhow!("deepseek provider init failed: {e}"))?,
         ) as Arc<dyn LlmProvider>,

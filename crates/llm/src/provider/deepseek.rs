@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tower::Service;
 
 use super::openai::{OpenAiConfig, OpenAiProvider};
+use defect_http::HttpStackConfig;
 use crate::protocol::deepseek_chat;
 
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
@@ -34,6 +35,7 @@ const BASE_URL_ENV: &str = "DEEPSEEK_BASE_URL";
 pub struct DeepSeekConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub http: HttpStackConfig,
 }
 
 impl DeepSeekConfig {
@@ -41,6 +43,7 @@ impl DeepSeekConfig {
         Self {
             api_key: env::var(API_KEY_ENV).ok(),
             base_url: env::var(BASE_URL_ENV).ok(),
+            http: HttpStackConfig::default(),
         }
     }
 
@@ -77,6 +80,7 @@ impl DeepSeekProvider {
             organization: None,
             project: None,
             capabilities_override: Some(default_deepseek_capabilities()),
+            http: config.http,
         };
         let inner = Arc::new(OpenAiProvider::new(openai_cfg)?);
         Ok(Self {

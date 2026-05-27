@@ -45,6 +45,7 @@ fn provider_for(server_uri: &str) -> Arc<dyn LlmProvider> {
         organization: None,
         project: None,
         capabilities_override: None,
+        http: defect_http::HttpStackConfig::default(),
     };
     Arc::new(OpenAiProvider::new(cfg).expect("provider")) as Arc<dyn LlmProvider>
 }

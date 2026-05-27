@@ -1,0 +1,37 @@
+[package]
+name = "defect-http"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+defect-agent.workspace = true
+
+# tower / hyper transport
+tower.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+hyper-rustls.workspace = true
+hyper-http-proxy.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+
+# toac request body type — defect-llm 的 ApiClient 透过这层 Service 跑
+toac.workspace = true
+client-util.workspace = true
+
+# 错误 / 异步 / 工具
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+pin-project-lite.workspace = true
+rand.workspace = true
+
+[build-dependencies]
+# 注入 git sha 到 User-Agent
+# (空 — build.rs 只用 std)
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

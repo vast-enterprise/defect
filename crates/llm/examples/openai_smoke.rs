@@ -62,6 +62,7 @@ async fn main() {
         organization,
         project,
         capabilities_override: None,
+        http: defect_http::HttpStackConfig::default(),
     }) {
         Ok(p) => Arc::new(p),
         Err(e) => {

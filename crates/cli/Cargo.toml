@@ -21,6 +21,7 @@ defect-acp.workspace = true
 defect-agent.workspace = true
 agent-client-protocol.workspace = true
 defect-config.workspace = true
+defect-http.workspace = true
 defect-llm.workspace = true
 defect-mcp.workspace = true
 defect-storage.workspace = true

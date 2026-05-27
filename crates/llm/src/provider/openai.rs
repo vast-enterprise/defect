@@ -10,23 +10,22 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use client_util::client::HyperHttpsClient;
 use defect_agent::error::BoxError;
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
     ModelInfo, ProtocolId, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
-    RateLimitScope, ThinkingEcho,
+    RateLimitScope, ThinkingEcho, TimeoutPhase,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use http::HeaderValue;
-use toac::body::Body;
 use toac::body::codec::sse::SseEventStream;
 use toac::{ApiClient, CallError, MakeRequest, Operation, Request as ToacRequest};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
 
+use defect_http::{HttpStack, HttpStackConfig, HttpStackError, build_http_stack};
 use crate::protocol::openai_chat;
 use crate::wire::openai::{
     components as wire,
@@ -40,14 +39,14 @@ const BASE_URL_ENV: &str = "OPENAI_BASE_URL";
 const ORG_ENV: &str = "OPENAI_ORG";
 const PROJECT_ENV: &str = "OPENAI_PROJECT";
 
-pub(crate) type Http = HyperHttpsClient<Body>;
-pub(crate) type Client = ApiClient<Http>;
+pub(crate) type Client = ApiClient<HttpStack>;
 
 /// OpenAI provider 配置。
 ///
 /// `api_key` / `base_url` / `organization` / `project` 可显式提供，否则
 /// 从环境变量读取。`capabilities_override` 用于兼容厂商（如 DeepSeek
-/// 把 `thinking` 翻成 `Supported`）。
+/// 把 `thinking` 翻成 `Supported`）。`http` 配置 transport 层，默认见
+/// [`HttpStackConfig::default`].
 #[derive(Debug, Default, Clone)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
@@ -55,6 +54,7 @@ pub struct OpenAiConfig {
     pub organization: Option<String>,
     pub project: Option<String>,
     pub capabilities_override: Option<Capabilities>,
+    pub http: HttpStackConfig,
 }
 
 impl OpenAiConfig {
@@ -65,6 +65,7 @@ impl OpenAiConfig {
             organization: env::var(ORG_ENV).ok(),
             project: env::var(PROJECT_ENV).ok(),
             capabilities_override: None,
+            http: HttpStackConfig::default(),
         }
     }
 
@@ -131,7 +132,7 @@ impl OpenAiProvider {
             .unwrap_or(default_openai_capabilities());
 
         let auth = security::AuthConfig::builder().api_key_auth(token).build();
-        let http = client_util::client::build_https_client::<toac::body::Body>()
+        let http = build_http_stack(config.http)
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport(BoxError::new(e))))?;
         let client = ApiClient::new(http, base_url).with_auth(auth);
 
@@ -446,10 +447,15 @@ impl WithRequestIdOpt for ProviderError {
 
 // ---------- error mapping -----------------------------------------------
 
-pub(crate) fn call_error_to_provider<E>(err: CallError<E>) -> ProviderError
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
+/// 把 [`CallError<HttpStackError>`] 翻成 [`ProviderError`]。
+///
+/// 关键分支：[`HttpStackError::Timeout`] 单独翻成
+/// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
+/// 决策——这条之前缺失，详见 [`docs/outbound/http.md`] §4。
+/// [`HttpStackError::ProxyConnect`] / [`HttpStackError::Config`] 都按
+/// transport 错处理（结构化原因写进 `Display`，turn-loop 拿到的就是
+/// transport-flavor 的 backoff 重试）。
+pub(crate) fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {
             hint: Some(e.to_string()),
@@ -457,10 +463,32 @@ where
         CallError::Auth(e) => ProviderError::new(ProviderErrorKind::AuthMalformed {
             hint: Some(e.to_string()),
         }),
+        CallError::Transport(HttpStackError::Timeout { phase }) => {
+            ProviderError::new(ProviderErrorKind::Timeout {
+                phase: map_timeout_phase(phase),
+            })
+        }
         CallError::Transport(e) => {
             ProviderError::new(ProviderErrorKind::Transport(BoxError::new(e)))
         }
         CallError::Decode(e) => ProviderError::new(ProviderErrorKind::Malformed(BoxError::new(e))),
+    }
+}
+
+/// 把 [`HttpStackError`] 携带的 [`defect_http::TimeoutPhase`] 翻成
+/// agent 层的 [`TimeoutPhase`]。两者形态一致（都是 `Connect / ReadHeaders /
+/// ReadBody / Idle / Total`），但分属不同 crate，避免 layer 实现耦合到
+/// LLM 错误模型。v0 实际只产 `Total`，其余 arm 是为后续分阶段超时占位。
+fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
+    match phase {
+        defect_http::TimeoutPhase::Connect => TimeoutPhase::Connect,
+        defect_http::TimeoutPhase::ReadHeaders => TimeoutPhase::ReadHeaders,
+        defect_http::TimeoutPhase::ReadBody => TimeoutPhase::ReadBody,
+        defect_http::TimeoutPhase::Idle => TimeoutPhase::Idle,
+        defect_http::TimeoutPhase::Total => TimeoutPhase::Total,
+        // 上游 `#[non_exhaustive]`：未来新增 phase 时退到 Total——不爆栈、
+        // 不丢信息（turn-loop §7 对所有 phase 走相同 Backoff 路径）。
+        _ => TimeoutPhase::Total,
     }
 }
 
