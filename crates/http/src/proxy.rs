@@ -53,11 +53,16 @@ pub(crate) fn build_proxy_connector(
     let mut http_connector = HttpConnector::new();
     http_connector.enforce_http(false);
 
-    let mut proxy_connector = ProxyConnector::new(http_connector).map_err(|e| {
-        HttpStackError::Config {
-            hint: format!("ProxyConnector::new failed: {e}"),
-        }
-    })?;
+    // ⚠ 必须 `unsecured`：开启 `__rustls`（任何 `rustls-tls-*-roots` feature）
+    // 时 `ProxyConnector::new` 会内置一份 `tokio_rustls::TlsConnector`，并在
+    // CONNECT 隧道之上**自己**做一次 TLS 握手，返回 `ProxyStream::Secured`。
+    // 我们外层 `HttpsConnector::wrap_connector(_)` 会把这条已经加密的流再包
+    // 一次 TLS——TLS-in-TLS，外层握手永远读不到 ServerHello，~14s 后超时。
+    // 用 `unsecured` 关闭 ProxyConnector 自己的 TLS，让它只负责 CONNECT 隧道
+    // + 原始 TCP（返回 `ProxyStream::Regular`），TLS 完全由外层
+    // `HttpsConnector` 统一负责（HTTP/2 ALPN 也在那一层完成）。
+    // 因此 workspace 把 `hyper-http-proxy` 的 `rustls-*-roots` feature 全关。
+    let mut proxy_connector = ProxyConnector::unsecured(http_connector);
     for entry in entries {
         proxy_connector.add_proxy(Proxy::new(entry.intercept, entry.uri));
     }

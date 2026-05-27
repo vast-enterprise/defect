@@ -192,8 +192,11 @@ fn build_proxy_connector(
     config: &ProxyConfig,
 ) -> Result<HttpsConnector<ProxyConnector<HttpConnector>>, HttpStackError> {
     let entries = resolve_proxy(config)?;
-    let mut proxy_connector = ProxyConnector::new(HttpConnector::new())
-        .map_err(|e| HttpStackError::Config { hint: e.to_string() })?;
+    // ⚠ enforce_http(false)：见下文"两个必踩的坑"#1。
+    let mut http_connector = HttpConnector::new();
+    http_connector.enforce_http(false);
+    // ⚠ unsecured：见下文"两个必踩的坑"#2。
+    let mut proxy_connector = ProxyConnector::unsecured(http_connector);
     for entry in entries {
         proxy_connector.add_proxy(Proxy::new(entry.intercept, entry.uri));
     }
@@ -206,6 +209,11 @@ fn build_proxy_connector(
 ```
 
 `ProxyConfig::Disabled` 也走这条路径，但 `entries` 是空 `Vec`——`ProxyConnector` 在 `match_proxy` 找不到任何 entry 时透明放行（见上游 `Service<Uri>` impl），所以连接器类型保持一致 `HttpsConnector<ProxyConnector<HttpConnector>>`，避免 `build_http_stack` 出现两份不同的连接器类型。
+
+#### 两个必踩的坑
+
+1. **内层 `HttpConnector` 必须 `enforce_http(false)`。** 默认 `HttpConnector` 拒绝 `https` scheme，`hyper-rustls::HttpsConnectorBuilder::build()` 会自己改这个 flag，但 `wrap_connector(_)` 不会；走 `https://` 时内层会先 `Err(InvalidUri/scheme is not http)`，根本到不了 TLS 阶段。`crates/http/src/proxy.rs::build_proxy_connector_does_not_reject_https_when_no_proxy_match` 单测专门盯这条回归。
+2. **`ProxyConnector::unsecured(_)`，不是 `ProxyConnector::new(_)`。** 一旦 `hyper-http-proxy` 的 `__rustls`（任何 `rustls-tls-*-roots` feature）被打开，`ProxyConnector::new` 会内置一份 `tokio_rustls::TlsConnector`，并在 CONNECT 隧道之上**自己**做一次 TLS 握手，返回 `ProxyStream::Secured`。我们外层 `HttpsConnector::wrap_connector(_)` 会把这条已加密流再包一次 TLS——TLS-in-TLS，外层握手永远读不到 ServerHello（trace 里只看到 `ALPN protocol is None`，~14s 后超时为 `client error (Connect)`）。`unsecured` 让 ProxyConnector 只负责 CONNECT + 原始 TCP（返回 `ProxyStream::Regular`），TLS / ALPN 全交给外层 `HttpsConnector`。所以 workspace 的 `hyper-http-proxy` 依赖**关掉**所有 `rustls-tls-*-roots` feature。
 
 #### 选型：`hyper-http-proxy`
 
