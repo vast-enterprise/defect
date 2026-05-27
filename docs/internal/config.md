@@ -180,7 +180,8 @@ pub struct EffectiveConfig {
 - `CliConfig`：CLI 自己消费，比如默认 provider、model、resume 路径等
 - `TurnConfigFile`：映射到 `defect-agent::session::TurnConfig`
 - `ProviderConfigSet`：各 provider 的显式配置
-- `ToolsConfig`：bash / fs / search 等工具默认行为
+- `CapabilitiesConfig`：能力层配置（`search` 三态 mode；image_generation / code_execution 等待加），详见 [`capabilities.md`](./capabilities.md)
+- `ToolsConfig`：bash / fs / fetch 等本地工具默认行为；本地 `search` tool 的参数也在 `[tools.search]` 段（仅 `capabilities.search.mode = "local"` 时生效，详见 [`tools-fetch.md`](./tools-fetch.md) / [`capabilities.md`](./capabilities.md)）
 - `SandboxConfigFile`：默认 sandbox / permission policy
 - `TracingConfigFile`：日志等级、结构化 tracing 相关项
 - `McpConfig`：默认启用的 MCP server 名单与具名 server 定义表

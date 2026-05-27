@@ -23,10 +23,15 @@ use tower::util::BoxCloneSyncService;
 
 use defect_agent::error::BoxError;
 
+mod fetch;
 mod proxy;
 mod retry;
 mod trace;
 mod user_agent;
+
+pub use fetch::{
+    FetchHttpClient, build_default_fetch_client_arc, build_fetch_client, build_fetch_client_arc,
+};
 
 /// `build_http_stack` 输出的类型擦除 service。
 ///

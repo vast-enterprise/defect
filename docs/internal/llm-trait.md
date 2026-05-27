@@ -105,6 +105,16 @@ pub trait LlmProvider: Send + Sync {
     /// 表达，主循环按需合并。
     fn capabilities(&self) -> Capabilities;
 
+    /// provider adapter 自报家门的 hosted capability 集合（与
+    /// [`Self::capabilities`] 不同——前者是模型属性，这里是当前 adapter
+    /// 实现状态：能否在 wire 上声明 hosted search / fetch 等）。
+    ///
+    /// 默认实现返回全 `false`。session 启动期与 `capabilities.search.mode`
+    /// 一起做能力来源裁决；详见 [`capabilities.md`](./capabilities.md)。
+    fn hosted_capabilities(&self) -> HostedCapabilities {
+        HostedCapabilities::default()
+    }
+
     /// 列出此 provider 当前可用的模型。
     ///
     /// 实现可能产生网络调用（如 OpenAI `/v1/models`），结果应在
@@ -162,6 +172,9 @@ pub struct CompletionRequest {
     pub tools: Vec<ToolSchema>,
     pub tool_choice: ToolChoice,
     pub sampling: SamplingParams,
+    /// 本轮允许 provider 自行使用的 hosted capability 集合。session
+    /// 启动期一次性裁决，turn 装配时透传。详见 [`capabilities.md`](./capabilities.md) §9。
+    pub hosted_capabilities: HostedCapabilities,
 }
 
 pub struct Message {
@@ -184,6 +197,15 @@ pub enum MessageContent {
     /// 都放在 messages 里，让 provider 重建上下文。
     ToolUse { id: String, name: String, args: serde_json::Value },
     ToolResult { tool_use_id: String, output: ToolResultBody, is_error: bool },
+    /// provider-hosted 能力产生的活动（hosted search 调用 + 结果）。
+    /// agent 主循环不解释 `payload`；codec 在重发同 provider 时透传，
+    /// 切 provider 时由 codec 决定如何降级。`#[serde(skip)]` 不持久化。
+    /// 详见 [`capabilities.md`](./capabilities.md) §7。
+    ProviderActivity {
+        provider_id: String,
+        kind: ProviderActivityKind,
+        payload: serde_json::Value,
+    },
     /// 多模态输入。 *(P2)*
     Image { mime: String, data: ImageData },
 }
@@ -376,7 +398,7 @@ pub enum FeatureSupport {
 | `system_prompt` | 两家 wire 都支持，OpenAI 通过第一条 message 实现，codec 内部消化 |
 | `forced_tool_choice` | trait 已有 [`ToolChoice::Required`] / `Named`，能用即视为支持 |
 | `seed` / `logit_bias` / `response_format` | `SamplingParams` 字段，主循环传或不传即可，无需能力声明 |
-| `web_search` / `image_generation` | "内置工具"概念，由 agent 侧 `Tool` trait 实现，不属于 LLM provider 能力 |
+| `web_search` / `image_generation` | 这是 capability（hosted vs local 来源协商），不是模型属性——走 [`HostedCapabilities`] + `[capabilities.*]` 配置树，详见 [`capabilities.md`](./capabilities.md) |
 | `max_context_tokens` / `max_output_tokens` | per-model 信息，已在 [`ModelInfo`] 字段中 |
 
 ## 6. 设计取舍记录

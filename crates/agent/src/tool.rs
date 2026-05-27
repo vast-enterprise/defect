@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::BoxError;
 use crate::fs::FsBackend;
+use crate::http::HttpClient;
 use crate::shell::ShellBackend;
 
 /// 工具的"对外名片"：只描述参数形状，不带任何执行能力。
@@ -141,6 +142,13 @@ pub struct ToolContext<'a> {
     /// [`LocalShellBackend`]: defect_tools::shell::LocalShellBackend
     /// [`AcpShellBackend`]: defect_acp::shell::AcpShellBackend
     pub shell: Arc<dyn ShellBackend>,
+    /// HTTP fetch 后端。`fetch` 工具通过它发起网络读取；装配在 CLI 入口完成
+    /// （按 [`HttpClientConfig`] 构造一个进程级 [`HttpClient`] 实例并复用）。
+    /// 工具实现拿到的是 [`Arc`] 副本；`Tool::execute` 是 `'static` future，
+    /// 借用形式无法跨过 await。
+    ///
+    /// [`HttpClientConfig`]: defect_config::HttpClientConfig
+    pub http: Arc<dyn HttpClient>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -152,12 +160,14 @@ impl<'a> ToolContext<'a> {
         cancel: CancellationToken,
         fs: Arc<dyn FsBackend>,
         shell: Arc<dyn ShellBackend>,
+        http: Arc<dyn HttpClient>,
     ) -> Self {
         Self {
             cwd,
             cancel,
             fs,
             shell,
+            http,
         }
     }
 }

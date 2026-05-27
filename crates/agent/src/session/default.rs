@@ -38,6 +38,7 @@ use tracing::Instrument;
 use crate::error::BoxError;
 use crate::event::PermissionResolution;
 use crate::fs::FsBackend;
+use crate::http::{HttpClient, NoopHttpClient};
 use crate::llm::{
     HostedCapabilities, LlmProvider, ModelInfo, ProviderError, ProviderErrorKind, ProviderInfo,
 };
@@ -64,6 +65,13 @@ pub struct DefaultAgentCore {
     loader: Option<Arc<dyn SessionLoader>>,
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
+    /// 进程级 HTTP fetch 后端。所有 session 共享一份——HTTP 没有 per-client
+    /// capability 协商，多 session 间也无须隔离连接池。CLI 入口按
+    /// [`HttpClientConfig`] 构造一次后注入；测试 / `echo` provider 走
+    /// [`NoopHttpClient`]。
+    ///
+    /// [`HttpClientConfig`]: defect_config::HttpClientConfig
+    http: Arc<dyn HttpClient>,
     sessions: DashMap<SessionId, Arc<dyn Session>>,
 }
 
@@ -81,6 +89,7 @@ pub struct DefaultAgentCoreBuilder {
     loader: Option<Arc<dyn SessionLoader>>,
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
+    http: Option<Arc<dyn HttpClient>>,
     config: TurnConfig,
     capabilities: SessionCapabilitiesConfig,
 }
@@ -126,6 +135,14 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
+    /// 设置进程级 HTTP fetch 后端。未设置时退化为 [`NoopHttpClient`]——
+    /// 任何 `fetch` 调用都会以 [`crate::http::HttpClientError::Transport`]
+    /// 失败，便于不需要网络的测试 / `echo` 装配跳过真实 HTTP 栈构造。
+    pub fn http(mut self, http: Arc<dyn HttpClient>) -> Self {
+        self.http = Some(http);
+        self
+    }
+
     /// # Panics
     /// 如果 `provider` 没有设置。
     pub fn build(self) -> DefaultAgentCore {
@@ -140,6 +157,9 @@ impl DefaultAgentCoreBuilder {
             loader: self.loader,
             session_tools: self.session_tools,
             observers: self.observers,
+            http: self
+                .http
+                .unwrap_or_else(|| Arc::new(NoopHttpClient) as Arc<dyn HttpClient>),
             config: RwLock::new(self.config),
             capabilities: self.capabilities,
             sessions: DashMap::new(),
@@ -205,6 +225,7 @@ impl AgentCore for DefaultAgentCore {
                 hosted_capabilities: resolved.hosted,
                 fs,
                 shell,
+                http: self.http.clone(),
             }) as Arc<dyn Session>;
 
             let session_info = SessionCreateInfo {
@@ -277,6 +298,7 @@ impl AgentCore for DefaultAgentCore {
                 hosted_capabilities: resolved.hosted,
                 fs,
                 shell,
+                http: self.http.clone(),
             }) as Arc<dyn Session>;
 
             self.sessions.insert(id, session.clone());
@@ -312,6 +334,9 @@ pub struct DefaultSession {
     /// session 级 shell 后端。与 `fs` 同款由 [`AgentCore::create_session`] 注入；
     /// `bash` 工具通过 [`crate::tool::ToolContext`] 拿它。
     shell: Arc<dyn ShellBackend>,
+    /// 进程级 HTTP fetch 后端（多 session 共享，由 [`DefaultAgentCore`]
+    /// 一份持有 / clone）。`fetch` 工具通过 [`crate::tool::ToolContext`] 拿它。
+    http: Arc<dyn HttpClient>,
 }
 
 impl DefaultSession {}
@@ -486,6 +511,7 @@ impl Session for DefaultSession {
                     cwd: &self.cwd,
                     fs: self.fs.clone(),
                     shell: self.shell.clone(),
+                    http: self.http.clone(),
                     hosted_capabilities: self.hosted_capabilities,
                 };
 

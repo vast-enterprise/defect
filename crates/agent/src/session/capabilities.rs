@@ -1,8 +1,8 @@
 //! session 级能力配置与启动期裁决。
 //!
 //! 设计详见
-//! [`docs/proposals/search-capability-and-fetch-tool.md`](../../../../docs/proposals/search-capability-and-fetch-tool.md)
-//! §4 / §6.1。
+//! [`docs/internal/capabilities.md`](../../../../docs/internal/capabilities.md)
+//! §3 / §5。
 //!
 //! `SearchCapabilityMode` 表达「这个 session 的 search 能力来源是什么」：
 //! - `Delegate`：走 provider-hosted search

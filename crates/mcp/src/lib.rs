@@ -224,9 +224,9 @@ struct McpToolAdapter {
 
 /// 把 MCP server 名与上游工具名拼成本地 ToolRegistry 中注册用的工具名。
 ///
-/// 设计详见 `docs/proposals/config-capabilities-and-tools.md` §14：所有
-/// MCP 工具在本地一律以 `mcp.<server>.<name>` 注册，避免和内置工具撞名 /
-/// 抢名。这是一个无副作用的字符串拼接，单测见 [`crate::test`]。
+/// 设计详见 `docs/internal/capabilities.md` §6.2：所有 MCP 工具在本地
+/// 一律以 `mcp.<server>.<name>` 注册，避免和内置工具撞名 / 抢名。
+/// 这是一个无副作用的字符串拼接，单测见 [`crate::test`]。
 #[must_use]
 pub fn registered_mcp_tool_name(server: &str, upstream_name: &str) -> String {
     format!("mcp.{server}.{upstream_name}")

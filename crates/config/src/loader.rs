@@ -403,7 +403,7 @@ fn provider_capability_overrides(
 }
 
 /// 在 `[capabilities.search]` 与 `[tools.search]` 段共存时按
-/// `docs/proposals/config-capabilities-and-tools.md` §6.2 的表发
+/// `docs/internal/capabilities.md` §3 的语义对照表发
 /// `ConfigWarning::InactiveSection`。注意：仅在 mode = `delegate` /
 /// `disabled` 时发；mode = `local` 时 `[tools.search]` 是正常的本地实现
 /// 参数。
@@ -663,8 +663,8 @@ fn is_known_config_key(key: &str) -> bool {
         || is_known_tools_search_key(key)
 }
 
-/// `[tools.search]` 段的 schema 在 P1 还没敲定（详见
-/// `docs/proposals/config-capabilities-and-tools.md` §9）；这里把整段
+/// `[tools.search]` 段的 schema 在 P1 还没敲定（本地 `search` tool 实现
+/// 待后续 PR；详见 `docs/internal/capabilities.md` §10）；这里把整段
 /// 视为已知，避免每个未来字段都触发 `UnknownKey`。当 mode != `local`
 /// 时由 `InactiveSection` warning 提示用户该段实际不会生效。
 fn is_known_tools_search_key(key: &str) -> bool {

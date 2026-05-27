@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
 use defect_agent::fs::FsBackend;
+use defect_agent::http::{HttpClient, NoopHttpClient};
 use defect_agent::shell::{NoopShellBackend, ShellBackend};
 use defect_agent::tool::{Tool, ToolContext, ToolError, ToolEvent};
 use defect_config::FsToolConfig;
@@ -42,7 +43,8 @@ impl Harness {
 
     fn ctx(&self) -> ToolContext<'_> {
         let shell: Arc<dyn ShellBackend> = Arc::new(NoopShellBackend);
-        ToolContext::new(&self.root, self.cancel.clone(), self.fs.clone(), shell)
+        let http: Arc<dyn HttpClient> = Arc::new(NoopHttpClient);
+        ToolContext::new(&self.root, self.cancel.clone(), self.fs.clone(), shell, http)
     }
 
     fn write_file(&self, name: &str, bytes: impl AsRef<[u8]>) {
@@ -524,7 +526,8 @@ async fn case23_edit_detects_external_modification_between_read_and_write() {
         target,
     });
     let shell: Arc<dyn ShellBackend> = Arc::new(NoopShellBackend);
-    let ctx = ToolContext::new(&h.root, h.cancel.clone(), advancer, shell);
+    let http: Arc<dyn HttpClient> = Arc::new(NoopHttpClient);
+    let ctx = ToolContext::new(&h.root, h.cancel.clone(), advancer, shell, http);
 
     let tool = EditFileTool::new();
     let events = drive(tool.execute(

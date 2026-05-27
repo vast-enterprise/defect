@@ -80,6 +80,9 @@ prettyplease = "0.2"
 syn = { version = "2", features = ["full"] }
 serde_yaml = "0.9"
 
+# HTML → Markdown for fetch tool
+htmd = "0.5"
+
 # 测试基础设施
 wiremock = "0.6"
 tempfile = "3"

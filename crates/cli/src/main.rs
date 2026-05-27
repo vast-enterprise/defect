@@ -40,7 +40,7 @@ use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
 use defect_llm::provider::openai::{OpenAiConfig, OpenAiProvider};
 use defect_mcp::McpToolFactory;
 use defect_storage::StorageObserver;
-use defect_tools::{BashTool, EditFileTool, ReadFileTool, WriteFileTool};
+use defect_tools::{BashTool, EditFileTool, FetchTool, ReadFileTool, WriteFileTool};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -95,6 +95,10 @@ async fn main() -> anyhow::Result<()> {
         "starting defect ACP server on stdio"
     );
 
+    let http_stack_config = build_http_stack_config(&config.effective.http)?;
+    let http_client = defect_http::build_fetch_client_arc(&http_stack_config)
+        .map_err(|e| anyhow::anyhow!("fetch http client init failed: {e}"))?;
+
     let tools = build_process_tools(&config);
     let storage = Arc::new(StorageObserver::new(default_sessions_root()?));
     let agent = DefaultAgentCore::builder()
@@ -108,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         )))
         .config(turn_config)
         .capabilities(session_capabilities)
+        .http(http_client)
         .build();
     let agent: Arc<dyn AgentCore> = Arc::new(agent);
 
@@ -258,18 +263,21 @@ fn parse_proxy_settings(
 }
 
 fn build_process_tools(config: &LoadedConfig) -> Arc<dyn ToolRegistry> {
-    Arc::new(
-        StaticToolRegistry::builder()
-            .insert(Arc::new(BashTool::from_config(
-                &config.effective.tools.bash,
-            )))
-            .insert(Arc::new(ReadFileTool::from_config(
-                &config.effective.tools.fs,
-            )))
-            .insert(Arc::new(WriteFileTool::new()))
-            .insert(Arc::new(EditFileTool::new()))
-            .build(),
-    )
+    let mut builder = StaticToolRegistry::builder()
+        .insert(Arc::new(BashTool::from_config(
+            &config.effective.tools.bash,
+        )))
+        .insert(Arc::new(ReadFileTool::from_config(
+            &config.effective.tools.fs,
+        )))
+        .insert(Arc::new(WriteFileTool::new()))
+        .insert(Arc::new(EditFileTool::new()));
+    if config.effective.tools.fetch.enabled {
+        builder = builder.insert(Arc::new(FetchTool::from_config(
+            &config.effective.tools.fetch,
+        )));
+    }
+    Arc::new(builder.build())
 }
 
 fn build_default_mcp_servers(config: &LoadedConfig) -> Vec<McpServer> {

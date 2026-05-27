@@ -28,6 +28,7 @@ use tracing::Instrument;
 use crate::error::BoxError;
 use crate::event::{AgentEvent, PermissionResolution};
 use crate::fs::FsBackend;
+use crate::http::HttpClient;
 use crate::llm::{
     CompletionRequest, HostedCapabilities, LlmProvider, Message, MessageContent, ProviderChunk,
     ProviderStream, RetryHint, Role, SamplingParams, StopReason as LlmStopReason, ToolChoice,
@@ -155,6 +156,7 @@ pub struct TurnRunner<'a> {
     pub cwd: &'a std::path::Path,
     pub fs: Arc<dyn FsBackend>,
     pub shell: Arc<dyn ShellBackend>,
+    pub http: Arc<dyn HttpClient>,
     /// session 启动期裁决出的 hosted capability 集合。
     /// 每轮 turn 装配请求时直接复用，不再重新查询。
     pub hosted_capabilities: HostedCapabilities,
@@ -523,6 +525,7 @@ impl<'a> TurnRunner<'a> {
                 self.cancel.clone(),
                 self.fs.clone(),
                 self.shell.clone(),
+                self.http.clone(),
             );
             let description = tool.describe(&args, describe_ctx).await;
             self.events
@@ -651,6 +654,7 @@ impl<'a> TurnRunner<'a> {
                     let cwd = self.cwd.to_path_buf();
                     let fs = self.fs.clone();
                     let shell = self.shell.clone();
+                    let http = self.http.clone();
                     let span = tracing::info_span!(
                         "tool_call",
                         tool = %tool.schema().name,
@@ -667,6 +671,7 @@ impl<'a> TurnRunner<'a> {
                             events,
                             fs,
                             shell,
+                            http,
                         )
                         .instrument(span),
                     );
@@ -1045,8 +1050,15 @@ async fn drive_tool_stream(
     events: Arc<EventEmitter>,
     fs: Arc<dyn FsBackend>,
     shell: Arc<dyn ShellBackend>,
+    http: Arc<dyn HttpClient>,
 ) -> ToolResult {
-    let ctx = ToolContext::new(&cwd, cancel.clone(), fs.clone(), shell.clone());
+    let ctx = ToolContext::new(
+        &cwd,
+        cancel.clone(),
+        fs.clone(),
+        shell.clone(),
+        http.clone(),
+    );
     let mut stream = tool.execute(args, ctx);
 
     let mut last_text: Option<String> = None;

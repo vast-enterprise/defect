@@ -15,7 +15,10 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time", "macros", "sync", "rt"] }
 tokio-util.workspace = true
 tracing.workspace = true
+htmd.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "io-util", "time", "macros", "sync", "rt", "rt-multi-thread", "test-util"] }
 tempfile.workspace = true
+wiremock.workspace = true
+defect-http.workspace = true

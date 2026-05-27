@@ -19,7 +19,7 @@ pub struct CompletionRequest {
     /// 本轮允许 provider 自行使用的 hosted capability 集合。
     ///
     /// session 启动期一次性裁决（详见
-    /// `docs/proposals/search-capability-and-fetch-tool.md` §6.1），
+    /// `docs/internal/capabilities.md` §5 / §9），
     /// 每轮 turn 装配请求时直接复用 session 上的标记。
     /// provider adapter 据此决定是否在 wire 上声明 hosted tool。
     #[serde(default)]
@@ -86,7 +86,7 @@ pub enum MessageContent {
     /// 后若模型再次触发同样的 hosted 调用，会重新发起新的 hosted call，
     /// 不依赖旧 payload。
     ///
-    /// 设计详见 `docs/proposals/search-capability-and-fetch-tool.md` §8.4。
+    /// 设计详见 `docs/internal/capabilities.md` §7.3。
     ProviderActivity {
         provider_id: String,
         kind: ProviderActivityKind,

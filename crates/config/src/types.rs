@@ -82,7 +82,7 @@ pub enum ConfigWarning {
     },
     /// 配置文件里出现了某段，但在当前 mode 下不会生效。
     ///
-    /// 详见 `docs/proposals/config-capabilities-and-tools.md` §6.2。
+    /// 详见 `docs/internal/capabilities.md` §3 的语义对照表。
     /// 典型场景：`capabilities.search.mode = "delegate"` 时仍写了
     /// `[tools.search]`——本地 search 不会注册，该段实际不生效。
     InactiveSection {
@@ -92,8 +92,7 @@ pub enum ConfigWarning {
     },
     /// 撞名的 MCP 工具在 session 启动期被重命名为 `mcp.<server>.<name>`。
     ///
-    /// 详见 `docs/proposals/search-capability-and-fetch-tool.md` §7.3 与
-    /// `config-capabilities-and-tools.md` §14。`search` / `fetch` 一律
+    /// 详见 `docs/internal/capabilities.md` §6.2。所有 MCP 工具一律
     /// 重命名（无视 capability mode 与 tool enabled），避免 MCP 旁路占名。
     McpToolRenamed {
         server: String,
@@ -155,8 +154,7 @@ pub struct EffectiveConfig {
     pub base_prompt: BasePromptConfigFile,
     pub prompt: PromptConfigFile,
     /// 全局 capability 来源选择。`providers.<p>.capabilities` 覆写在
-    /// session 启动期叠加。详见
-    /// `docs/proposals/config-capabilities-and-tools.md` §3 / §13。
+    /// session 启动期叠加。详见 `docs/internal/capabilities.md` §3 / §5。
     pub capabilities: CapabilitiesConfig,
     pub providers: ProviderConfigs,
     pub tools: ToolsConfig,
@@ -252,8 +250,7 @@ pub struct ToolsConfig {
     pub fetch: FetchToolConfig,
 }
 
-/// 本地 `fetch` 工具的配置。详见
-/// `docs/proposals/config-capabilities-and-tools.md` §7.2。
+/// 本地 `fetch` 工具的配置。详见 `docs/internal/tools-fetch.md` §7。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchToolConfig {

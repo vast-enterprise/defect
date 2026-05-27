@@ -56,8 +56,11 @@ pub trait AgentCore: Send + Sync {
 要点：
 
 - **不暴露 LLM provider 选择**。哪个 provider / 模型由 `AgentCore` 实现内部根据全局配置决定，避免 `defect-acp` 接触 provider 类型。
-- **`mcp_servers` 来自 ACP `NewSessionRequest`**。`AgentCore` 实现负责拉起 MCP server 子进程 / SSE 连接，把每个 MCP 工具包装成 `Arc<dyn Tool>` 加入会话工具表。
+- **`mcp_servers` 来自 ACP `NewSessionRequest`**。`AgentCore` 实现负责拉起 MCP server 子进程 / SSE 连接，把每个 MCP 工具按 `mcp.<server>.<name>` 命名空间包装成 `Arc<dyn Tool>` 加入会话工具表（详见 [`capabilities.md`](./capabilities.md) §6.2）。
+- **session 启动期一次性裁决能力来源**。`create_session` 内部读 `(capabilities.search, provider.hosted_capabilities())` 确定本 session 的 search 来源（hosted / local / disabled），失败返回 [`AgentError::Init(SessionInitError::CapabilityUnsatisfied)`]；详见 [`capabilities.md`](./capabilities.md) §5。
 - **session 表的并发模型**由实现决定（典型实现：`DashMap<SessionId, Arc<dyn Session>>`）；trait 不暴露。
+
+[`AgentError::Init(SessionInitError::CapabilityUnsatisfied)`]: ./capabilities.md
 
 ## 3. Session
 
@@ -181,8 +184,8 @@ pub trait ToolRegistry: Send + Sync {
 
 两层注册表：
 
-- **进程级**：`AgentCore` 持有，内置工具（`defect-tools` 暴露的 fs / bash / grep ...）。无状态，`Arc<dyn Tool>` 可被所有 session 直接共享。
-- **会话级**：`Session` 持有，每个 session 自己的 MCP 工具（每个 MCP server 是 per-session 的子进程）。
+- **进程级**：`AgentCore` 持有，内置工具（`defect-tools` 暴露的 fs / bash / grep ...）。无状态，`Arc<dyn Tool>` 可被所有 session 直接共享。注册名是裸名（`fetch` / `bash` / ...）。本地 `search` tool 仅在 session 启动时 `capabilities.search.mode = "local"` 才注入会话级。
+- **会话级**：`Session` 持有，每个 session 自己的 MCP 工具（每个 MCP server 是 per-session 的子进程）。**所有 MCP 工具一律以 `mcp.<server>.<name>` 命名空间注册**——不区分名字、不区分 capability mode、不区分本地工具 enabled。详见 [`capabilities.md`](./capabilities.md) §6.2。
 
 主循环通过 `Session` 暴露的 **composite registry** 查工具——`Session` 实现内部把进程级 + 会话级两个 registry 串起来（`get` 时先查会话级、再查进程级）。这样 turn 主循环只接触一个统一接口。
 

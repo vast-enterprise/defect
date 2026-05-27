@@ -6,9 +6,11 @@
 #![warn(clippy::indexing_slicing, clippy::unwrap_used)]
 
 pub mod bash;
+pub mod fetch;
 pub mod fs;
 pub mod shell;
 
 pub use bash::BashTool;
+pub use fetch::FetchTool;
 pub use fs::{EditFileTool, LocalFsBackend, ReadFileTool, WriteFileTool};
 pub use shell::LocalShellBackend;

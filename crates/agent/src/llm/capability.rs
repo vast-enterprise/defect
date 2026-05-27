@@ -82,7 +82,7 @@ pub enum FeatureSupport {
 /// 此结构，与 `capabilities.search.mode` 一起决定本 session 的 search
 /// 能力来源。
 ///
-/// 设计详见 `docs/proposals/search-capability-and-fetch-tool.md` §10.1。
+/// 设计详见 `docs/internal/capabilities.md` §4。
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostedCapabilities {

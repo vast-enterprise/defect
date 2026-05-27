@@ -296,7 +296,7 @@ pub enum AgentError {
 
 /// session 启动期一次性裁决失败。
 ///
-/// 设计详见 `docs/proposals/search-capability-and-fetch-tool.md` §6.1。
+/// 设计详见 `docs/internal/capabilities.md` §5。
 /// 当 `capabilities.<name>.mode = "delegate"` 但当前 provider 的
 /// [`crate::llm::LlmProvider::hosted_capabilities`] 不支持该 capability
 /// 时，拒绝启动 session。

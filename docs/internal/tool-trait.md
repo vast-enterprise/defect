@@ -4,6 +4,8 @@
 
 设计的根本原则是 **"以 ACP 为导向"**：工具产出的字段直接对位 [agent-client-protocol](https://agentclientprotocol.com/) 的 wire 类型（`ToolCallUpdateFields` / `RequestPermissionRequest`），避免重复造一份内部字段再做映射。
 
+`Tool` 仅服务于本地工具——`fetch` / `fs` / `bash` / `capabilities.search.mode = "local"` 时的 `search`。**provider-hosted 能力（hosted search / hosted fetch 等）不实现 `Tool` trait**，由 provider adapter 在 wire 层直接处理，详见 [`capabilities.md`](./capabilities.md) §8。本地 `fetch` 工具的形状见 [`tools-fetch.md`](./tools-fetch.md)。
+
 ## 1. ToolSchema
 
 工具的"对外名片"，仅描述参数形状，不带任何执行能力。
