@@ -43,7 +43,17 @@ pub(crate) fn build_proxy_connector(
 ) -> Result<ProxyAwareConnector, HttpStackError> {
     let entries = resolve_proxy(config)?;
 
-    let mut proxy_connector = ProxyConnector::new(HttpConnector::new()).map_err(|e| {
+    // ⚠ 必须 `enforce_http(false)`：默认 `HttpConnector` 拒绝 https scheme，
+    // 走 `https://` 时由外层 `HttpsConnector` 接管 TLS、内层 `HttpConnector`
+    // 仅负责 TCP。`ProxyConnector` 在没有命中 proxy entry 时透传给内层
+    // `HttpConnector`（见上游 `Service<Uri>` impl 的 fallthrough 分支），
+    // 默认 `enforce_http=true` 会让所有 `https://` 直接 `Err(InvalidUri)`。
+    // hyper-rustls 自家的 `HttpsConnectorBuilder::build()` 也是这么改的，
+    // 但 `wrap_connector(_)` 不会替我们改自定义连接器，需要手动设置。
+    let mut http_connector = HttpConnector::new();
+    http_connector.enforce_http(false);
+
+    let mut proxy_connector = ProxyConnector::new(http_connector).map_err(|e| {
         HttpStackError::Config {
             hint: format!("ProxyConnector::new failed: {e}"),
         }
@@ -352,6 +362,32 @@ mod tests {
         let settings = ProxySettings::default();
         let v = resolve_explicit(&settings).unwrap();
         assert!(v.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_proxy_connector_does_not_reject_https_when_no_proxy_match() {
+        // 回归测试：之前 `wrap_connector(ProxyConnector::new(HttpConnector::new()))`
+        // 漏掉了 `enforce_http(false)`，导致没命中 proxy entry 的 https 请求
+        // 在 `HttpConnector::call` 阶段直接 `Err(InvalidUri/scheme is not http)`，
+        // 还没走到 TLS。这里直接 poll 一次连接，断言我们**没有**拿到那条
+        // 错误——真正的 DNS / 拒连失败是允许的（不联网）。
+        use http::Uri;
+        use tower::{Service, ServiceExt};
+
+        let connector = build_proxy_connector(&ProxyConfig::Disabled).expect("build");
+        let uri: Uri = "https://example.invalid/".parse().unwrap();
+        let svc = connector.ready_oneshot().await;
+        // ready_oneshot 失败说明连接器自身 ready 不出来——目前 hyper-rustls
+        // / hyper-util 的 ready 都是恒 ready，所以这里不该 panic。
+        let mut svc = svc.expect("connector ready");
+        let res = svc.call(uri).await;
+        if let Err(e) = res {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("scheme is not http"),
+                "https URI should not be rejected at HttpConnector layer; got: {msg}"
+            );
+        }
     }
 
     #[test]
