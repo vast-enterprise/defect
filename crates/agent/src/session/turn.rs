@@ -29,9 +29,9 @@ use crate::error::BoxError;
 use crate::event::{AgentEvent, PermissionResolution};
 use crate::fs::FsBackend;
 use crate::llm::{
-    CompletionRequest, LlmProvider, Message, MessageContent, ProviderChunk, ProviderStream,
-    RetryHint, Role, SamplingParams, StopReason as LlmStopReason, ToolChoice, ToolResultBody,
-    Usage,
+    CompletionRequest, HostedCapabilities, LlmProvider, Message, MessageContent, ProviderChunk,
+    ProviderStream, RetryHint, Role, SamplingParams, StopReason as LlmStopReason, ToolChoice,
+    ToolResultBody, Usage,
 };
 use crate::policy::{PolicyCtx, PolicyDecision, RecordedOutcome, SandboxPolicy};
 use crate::session::events::EventEmitter;
@@ -155,6 +155,9 @@ pub struct TurnRunner<'a> {
     pub cwd: &'a std::path::Path,
     pub fs: Arc<dyn FsBackend>,
     pub shell: Arc<dyn ShellBackend>,
+    /// session 启动期裁决出的 hosted capability 集合。
+    /// 每轮 turn 装配请求时直接复用，不再重新查询。
+    pub hosted_capabilities: HostedCapabilities,
 }
 
 impl<'a> TurnRunner<'a> {
@@ -263,6 +266,7 @@ impl<'a> TurnRunner<'a> {
             tools: self.tools.schemas(),
             tool_choice: ToolChoice::Auto,
             sampling: self.config.sampling.clone(),
+            hosted_capabilities: self.hosted_capabilities,
         }
     }
 

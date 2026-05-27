@@ -9,6 +9,7 @@ use crate::types::{
     CliOverrides, ConfigError, ConfigWarning, HttpProxyMode, LoadConfigOptions,
     PROJECT_LOCAL_CONFIG_RELATIVE, ProviderKind,
 };
+use defect_agent::session::SearchCapabilityMode;
 
 fn test_options(root: &TempDir) -> LoadConfigOptions {
     LoadConfigOptions {
@@ -563,6 +564,336 @@ mode = "disabled"
 
     assert_eq!(loaded.effective.http.proxy.mode, HttpProxyMode::Disabled);
     assert!(loaded.warnings.is_empty());
+}
+
+#[test]
+fn capabilities_search_default_is_local() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert_eq!(
+        loaded.effective.capabilities.search.mode,
+        SearchCapabilityMode::Local
+    );
+    // 三个 provider 的覆写默认为 None（未声明覆写）。
+    assert!(
+        loaded
+            .effective
+            .providers
+            .anthropic
+            .capabilities
+            .search
+            .is_none()
+    );
+    assert!(
+        loaded
+            .effective
+            .providers
+            .openai
+            .capabilities
+            .search
+            .is_none()
+    );
+    assert!(
+        loaded
+            .effective
+            .providers
+            .deepseek
+            .capabilities
+            .search
+            .is_none()
+    );
+}
+
+#[test]
+fn capabilities_search_mode_parses_three_values() {
+    for (value, expected) in [
+        ("delegate", SearchCapabilityMode::Delegate),
+        ("local", SearchCapabilityMode::Local),
+        ("disabled", SearchCapabilityMode::Disabled),
+    ] {
+        let tmp = TempDir::new().expect("tmp");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).expect("git");
+        write(
+            &tmp.path().join("xdg/defect/config.toml"),
+            &format!(
+                r#"
+[capabilities.search]
+mode = "{value}"
+"#
+            ),
+        );
+
+        let loaded = load_config(test_options(&tmp)).expect("load config");
+        assert_eq!(
+            loaded.effective.capabilities.search.mode, expected,
+            "mode = {value}"
+        );
+    }
+}
+
+#[test]
+fn provider_capability_overrides_are_loaded() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[capabilities.search]
+mode = "local"
+
+[providers.anthropic.capabilities.search]
+mode = "delegate"
+
+[providers.openai.capabilities.search]
+mode = "delegate"
+
+[providers.deepseek.capabilities.search]
+mode = "local"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert_eq!(
+        loaded.effective.capabilities.search.mode,
+        SearchCapabilityMode::Local
+    );
+    assert_eq!(
+        loaded
+            .effective
+            .providers
+            .anthropic
+            .capabilities
+            .search
+            .map(|s| s.mode),
+        Some(SearchCapabilityMode::Delegate)
+    );
+    assert_eq!(
+        loaded
+            .effective
+            .providers
+            .openai
+            .capabilities
+            .search
+            .map(|s| s.mode),
+        Some(SearchCapabilityMode::Delegate)
+    );
+    assert_eq!(
+        loaded
+            .effective
+            .providers
+            .deepseek
+            .capabilities
+            .search
+            .map(|s| s.mode),
+        Some(SearchCapabilityMode::Local)
+    );
+}
+
+#[test]
+fn provider_capability_override_merge_falls_back_to_global() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[capabilities.search]
+mode = "delegate"
+
+[providers.deepseek.capabilities.search]
+mode = "local"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    // Anthropic 没有覆写，merge 后回落到全局 delegate。
+    let anthropic_session = loaded
+        .effective
+        .providers
+        .anthropic
+        .capabilities
+        .merge_into(loaded.effective.capabilities)
+        .to_session_capabilities();
+    assert_eq!(anthropic_session.search.mode, SearchCapabilityMode::Delegate);
+
+    // DeepSeek 覆写为 local，应当压过全局 delegate。
+    let deepseek_session = loaded
+        .effective
+        .providers
+        .deepseek
+        .capabilities
+        .merge_into(loaded.effective.capabilities)
+        .to_session_capabilities();
+    assert_eq!(deepseek_session.search.mode, SearchCapabilityMode::Local);
+}
+
+#[test]
+fn tools_search_section_inactive_under_delegate_emits_warning() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[capabilities.search]
+mode = "delegate"
+
+[tools.search]
+default_max_results = 8
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert!(
+        loaded.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::InactiveSection { section, reason, .. }
+                if section == "tools.search"
+                    && reason.contains("delegate")
+        )),
+        "expected InactiveSection warning; got {:?}",
+        loaded.warnings,
+    );
+}
+
+#[test]
+fn tools_search_section_inactive_under_disabled_emits_warning() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[capabilities.search]
+mode = "disabled"
+
+[tools.search]
+default_max_results = 8
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert!(
+        loaded.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::InactiveSection { section, reason, .. }
+                if section == "tools.search"
+                    && reason.contains("disabled")
+        )),
+        "expected InactiveSection warning; got {:?}",
+        loaded.warnings,
+    );
+}
+
+#[test]
+fn tools_search_section_active_under_local_no_warning() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[capabilities.search]
+mode = "local"
+
+[tools.search]
+default_max_results = 8
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert!(
+        !loaded.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::InactiveSection { section, .. } if section == "tools.search"
+        )),
+        "should NOT emit InactiveSection under mode=local; got {:?}",
+        loaded.warnings,
+    );
+}
+
+#[test]
+fn no_inactive_section_warning_when_tools_search_absent() {
+    // mode != local 也不应在 [tools.search] 缺席时硬发 warning。
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[capabilities.search]
+mode = "delegate"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    assert!(
+        !loaded.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::InactiveSection { section, .. } if section == "tools.search"
+        )),
+        "should NOT emit InactiveSection when [tools.search] absent; got {:?}",
+        loaded.warnings,
+    );
+}
+
+#[test]
+fn loads_tools_fetch_section_into_effective_config() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[tools.fetch]
+enabled = false
+default_timeout_secs = 15
+max_timeout_secs = 60
+max_response_bytes = 1048576
+default_format = "html"
+html_to_markdown = false
+follow_redirects = false
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    let fetch = &loaded.effective.tools.fetch;
+    assert!(!fetch.enabled);
+    assert_eq!(fetch.default_timeout_secs, 15);
+    assert_eq!(fetch.max_timeout_secs, 60);
+    assert_eq!(fetch.max_response_bytes, 1_048_576);
+    assert!(!fetch.html_to_markdown);
+    assert!(!fetch.follow_redirects);
+}
+
+#[test]
+fn tools_fetch_defaults_when_absent() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    let fetch = &loaded.effective.tools.fetch;
+    assert!(fetch.enabled);
+    assert_eq!(fetch.default_timeout_secs, 30);
+    assert_eq!(fetch.max_timeout_secs, 120);
+    assert_eq!(fetch.max_response_bytes, 5 * 1024 * 1024);
+    assert!(fetch.html_to_markdown);
+    assert!(fetch.follow_redirects);
 }
 
 #[test]

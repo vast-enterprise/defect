@@ -3,7 +3,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use defect_agent::error::BoxError;
-use defect_agent::session::TurnConfig;
+use defect_agent::session::{SearchCapabilityConfig, SessionCapabilitiesConfig, TurnConfig};
 use serde::{Deserialize, Serialize};
 use toml::Value as TomlValue;
 
@@ -80,6 +80,26 @@ pub enum ConfigWarning {
         old: String,
         new: String,
     },
+    /// 配置文件里出现了某段，但在当前 mode 下不会生效。
+    ///
+    /// 详见 `docs/proposals/config-capabilities-and-tools.md` §6.2。
+    /// 典型场景：`capabilities.search.mode = "delegate"` 时仍写了
+    /// `[tools.search]`——本地 search 不会注册，该段实际不生效。
+    InactiveSection {
+        path: PathBuf,
+        section: String,
+        reason: String,
+    },
+    /// 撞名的 MCP 工具在 session 启动期被重命名为 `mcp.<server>.<name>`。
+    ///
+    /// 详见 `docs/proposals/search-capability-and-fetch-tool.md` §7.3 与
+    /// `config-capabilities-and-tools.md` §14。`search` / `fetch` 一律
+    /// 重命名（无视 capability mode 与 tool enabled），避免 MCP 旁路占名。
+    McpToolRenamed {
+        server: String,
+        original: String,
+        renamed: String,
+    },
 }
 
 #[non_exhaustive]
@@ -134,12 +154,67 @@ pub struct EffectiveConfig {
     pub turn: TurnConfig,
     pub base_prompt: BasePromptConfigFile,
     pub prompt: PromptConfigFile,
+    /// 全局 capability 来源选择。`providers.<p>.capabilities` 覆写在
+    /// session 启动期叠加。详见
+    /// `docs/proposals/config-capabilities-and-tools.md` §3 / §13。
+    pub capabilities: CapabilitiesConfig,
     pub providers: ProviderConfigs,
     pub tools: ToolsConfig,
     pub sandbox: SandboxConfig,
     pub tracing: TracingConfig,
     pub mcp: McpConfig,
     pub http: HttpClientConfig,
+}
+
+/// 全局 capability 配置入口。
+///
+/// 与 [`SessionCapabilitiesConfig`] 形态等价；在 `EffectiveConfig` 上保
+/// 留独立类型是为了未来追加非 session 级 capability 时不动 agent crate。
+/// 当前 P1 仅有 `search`，直接复用 agent 侧的 `SearchCapabilityConfig`。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CapabilitiesConfig {
+    pub search: SearchCapabilityConfig,
+}
+
+impl CapabilitiesConfig {
+    /// 用单条 [`SearchCapabilityConfig`] 构造。跨 crate 调用方需要这个
+    /// 入口，因为本结构体 `#[non_exhaustive]` 后不能直接 struct literal。
+    #[must_use]
+    pub const fn with_search(search: SearchCapabilityConfig) -> Self {
+        Self { search }
+    }
+
+    /// 转成 agent 侧的 [`SessionCapabilitiesConfig`]，供
+    /// `DefaultAgentCoreBuilder::capabilities` 直接消费。
+    #[must_use]
+    pub fn to_session_capabilities(self) -> SessionCapabilitiesConfig {
+        SessionCapabilitiesConfig::with_search(self.search)
+    }
+}
+
+/// 单个 provider 下对全局 capability 的覆写。
+///
+/// `None` 字段意味着「跟随全局」。详见 §5 / §13.2。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderCapabilityOverrides {
+    pub search: Option<SearchCapabilityConfig>,
+}
+
+impl ProviderCapabilityOverrides {
+    /// 用单条 search 覆写构造。`None` = 跟随全局。
+    #[must_use]
+    pub const fn with_search(search: Option<SearchCapabilityConfig>) -> Self {
+        Self { search }
+    }
+
+    /// 把全局 [`CapabilitiesConfig`] 与本 provider 的覆写合并。
+    /// 未覆写字段沿用全局值。
+    #[must_use]
+    pub fn merge_into(&self, base: CapabilitiesConfig) -> CapabilitiesConfig {
+        CapabilitiesConfig::with_search(self.search.unwrap_or(base.search))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +248,45 @@ pub struct ProviderConfigs {
 pub struct ToolsConfig {
     pub bash: BashToolConfig,
     pub fs: FsToolConfig,
+    /// `[tools.fetch]` 段。预留出来——P1 仅 schema 落地，工具实现在后续 PR。
+    pub fetch: FetchToolConfig,
+}
+
+/// 本地 `fetch` 工具的配置。详见
+/// `docs/proposals/config-capabilities-and-tools.md` §7.2。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchToolConfig {
+    pub enabled: bool,
+    pub default_timeout_secs: u32,
+    pub max_timeout_secs: u32,
+    pub max_response_bytes: u64,
+    pub default_format: FetchFormat,
+    pub html_to_markdown: bool,
+    pub follow_redirects: bool,
+}
+
+impl Default for FetchToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_timeout_secs: 30,
+            max_timeout_secs: 120,
+            max_response_bytes: 5 * 1024 * 1024,
+            default_format: FetchFormat::Markdown,
+            html_to_markdown: true,
+            follow_redirects: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FetchFormat {
+    #[default]
+    Markdown,
+    Html,
+    Text,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +358,7 @@ pub struct AnthropicConfigFile {
     pub base_url: Option<String>,
     pub default_model: Option<String>,
     pub models: Option<Vec<String>>,
+    pub capabilities: ProviderCapabilityOverrides,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -253,6 +368,7 @@ pub struct OpenAiConfigFile {
     pub models: Option<Vec<String>>,
     pub organization: Option<String>,
     pub project: Option<String>,
+    pub capabilities: ProviderCapabilityOverrides,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -260,6 +376,7 @@ pub struct DeepSeekConfigFile {
     pub base_url: Option<String>,
     pub default_model: Option<String>,
     pub models: Option<Vec<String>>,
+    pub capabilities: ProviderCapabilityOverrides,
 }
 
 /// HTTP 客户端栈的 typed 配置。
@@ -383,6 +500,8 @@ pub(crate) struct ConfigToml {
     #[serde(default)]
     pub(crate) turn: TurnSection,
     #[serde(default)]
+    pub(crate) capabilities: CapabilitiesSection,
+    #[serde(default)]
     pub(crate) providers: ProvidersSection,
     #[serde(default)]
     pub(crate) tools: ToolsSection,
@@ -394,6 +513,21 @@ pub(crate) struct ConfigToml {
     pub(crate) mcp: McpSection,
     #[serde(default)]
     pub(crate) http: HttpSection,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct CapabilitiesSection {
+    pub(crate) search: Option<SearchCapabilitySection>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct SearchCapabilitySection {
+    pub(crate) mode: Option<defect_agent::session::SearchCapabilityMode>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ProviderCapabilitiesSection {
+    pub(crate) search: Option<SearchCapabilitySection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -442,6 +576,7 @@ pub(crate) struct AnthropicProviderSection {
     pub(crate) base_url: Option<String>,
     pub(crate) default_model: Option<String>,
     pub(crate) models: Option<Vec<String>>,
+    pub(crate) capabilities: Option<ProviderCapabilitiesSection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -451,6 +586,7 @@ pub(crate) struct OpenAiProviderSection {
     pub(crate) models: Option<Vec<String>>,
     pub(crate) organization: Option<String>,
     pub(crate) project: Option<String>,
+    pub(crate) capabilities: Option<ProviderCapabilitiesSection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -458,12 +594,32 @@ pub(crate) struct DeepSeekProviderSection {
     pub(crate) base_url: Option<String>,
     pub(crate) default_model: Option<String>,
     pub(crate) models: Option<Vec<String>>,
+    pub(crate) capabilities: Option<ProviderCapabilitiesSection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ToolsSection {
     pub(crate) bash: Option<BashToolSection>,
     pub(crate) fs: Option<FsToolSection>,
+    pub(crate) fetch: Option<FetchToolSection>,
+    /// `[tools.search]`：mode = local 时本地实现的参数。P1 仅识别段，
+    /// 不强 schema——具体字段在 search tool 落地 PR 里再细化。是否生效
+    /// 由 `loader::collect_inactive_section_warnings` 在合并后从 raw
+    /// TomlValue 上判断；这个字段只是为了让 `serde::deserialize` 把段读掉，
+    /// 避免 `UnknownKey` warning，它本身不需要被消费。
+    #[allow(dead_code)]
+    pub(crate) search: Option<TomlValue>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct FetchToolSection {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) default_timeout_secs: Option<u32>,
+    pub(crate) max_timeout_secs: Option<u32>,
+    pub(crate) max_response_bytes: Option<u64>,
+    pub(crate) default_format: Option<FetchFormat>,
+    pub(crate) html_to_markdown: Option<bool>,
+    pub(crate) follow_redirects: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

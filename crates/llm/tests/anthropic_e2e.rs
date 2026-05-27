@@ -242,6 +242,7 @@ async fn missing_api_key_header_is_rejected_by_server() {
         tools: vec![],
         tool_choice: defect_agent::llm::ToolChoice::Auto,
         sampling: defect_agent::llm::SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let res = provider.complete(req, cancel).await;
     // wiremock 在没有 mock 命中时返回 404，provider 应映射到 ServerError。

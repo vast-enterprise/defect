@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::llm::capability::HostedCapabilities;
 use crate::tool::ToolSchema;
 
 /// 一次完整生成请求的输入。
@@ -15,6 +16,14 @@ pub struct CompletionRequest {
     pub tools: Vec<ToolSchema>,
     pub tool_choice: ToolChoice,
     pub sampling: SamplingParams,
+    /// 本轮允许 provider 自行使用的 hosted capability 集合。
+    ///
+    /// session 启动期一次性裁决（详见
+    /// `docs/proposals/search-capability-and-fetch-tool.md` §6.1），
+    /// 每轮 turn 装配请求时直接复用 session 上的标记。
+    /// provider adapter 据此决定是否在 wire 上声明 hosted tool。
+    #[serde(default)]
+    pub hosted_capabilities: HostedCapabilities,
 }
 
 /// 对话历史中的一条消息。
@@ -69,6 +78,34 @@ pub enum MessageContent {
         mime: String,
         data: ImageData,
     },
+    /// provider-hosted 能力产生的活动（hosted search / hosted code execution
+    /// 等）。agent 不解释 `payload`：在重发同 provider 时透传，切 provider
+    /// 时由 codec 决定如何降级。
+    ///
+    /// `payload` 用 `#[serde(skip)]`：跨进程持久化时丢弃，session resume
+    /// 后若模型再次触发同样的 hosted 调用，会重新发起新的 hosted call，
+    /// 不依赖旧 payload。
+    ///
+    /// 设计详见 `docs/proposals/search-capability-and-fetch-tool.md` §8.4。
+    ProviderActivity {
+        provider_id: String,
+        kind: ProviderActivityKind,
+        #[serde(skip)]
+        payload: serde_json::Value,
+    },
+}
+
+/// hosted activity 的种类。仅在 [`MessageContent::ProviderActivity`]
+/// 内出现。
+///
+/// `#[non_exhaustive]` 是为后续追加 `CodeExecution` / `ImageGeneration`
+/// 等不构成 breaking。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderActivityKind {
+    /// hosted web search。
+    Search,
 }
 
 /// 工具结果载荷。codec 在序列化时按 wire 需要转换：部分 wire 只支持

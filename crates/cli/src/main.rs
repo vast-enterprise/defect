@@ -63,6 +63,32 @@ async fn main() -> anyhow::Result<()> {
 
     let (provider, turn_config) = build_provider(&config)?;
 
+    // 当前 session 绑定的 provider 已确定；按 §6 把全局 capability 与该
+    // provider 的覆写合并，再传给 agent core。其它 provider 的覆写不进入
+    // session（session 不切换 provider）。
+    let session_capabilities = match config.effective.cli.provider {
+        defect_config::ProviderKind::Anthropic => config
+            .effective
+            .providers
+            .anthropic
+            .capabilities
+            .merge_into(config.effective.capabilities),
+        defect_config::ProviderKind::Openai => config
+            .effective
+            .providers
+            .openai
+            .capabilities
+            .merge_into(config.effective.capabilities),
+        defect_config::ProviderKind::Deepseek => config
+            .effective
+            .providers
+            .deepseek
+            .capabilities
+            .merge_into(config.effective.capabilities),
+        defect_config::ProviderKind::Echo => config.effective.capabilities,
+    }
+    .to_session_capabilities();
+
     tracing::info!(
         provider = %provider.info().vendor,
         model = %turn_config.model,
@@ -81,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
             build_default_mcp_servers(&config),
         )))
         .config(turn_config)
+        .capabilities(session_capabilities)
         .build();
     let agent: Arc<dyn AgentCore> = Arc::new(agent);
 

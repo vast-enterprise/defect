@@ -11,7 +11,9 @@ pub(crate) mod model;
 pub(crate) mod provider;
 pub(crate) mod request;
 
-pub use capability::{Capabilities, FeatureSupport, ModelCapabilityOverrides, ThinkingEcho};
+pub use capability::{
+    Capabilities, FeatureSupport, HostedCapabilities, ModelCapabilityOverrides, ThinkingEcho,
+};
 pub use chunk::{ProviderChunk, StopReason, Usage};
 pub use error::{
     ProviderError, ProviderErrorKind, RateLimitScope, RetryAction, RetryHint, TimeoutPhase,
@@ -19,6 +21,6 @@ pub use error::{
 pub use model::{ModelInfo, ProtocolId, ProviderInfo};
 pub use provider::{LlmProvider, ProviderStream};
 pub use request::{
-    CompletionRequest, ImageData, Message, MessageContent, Role, SamplingParams, ThinkingConfig,
-    ToolChoice, ToolResultBody,
+    CompletionRequest, ImageData, Message, MessageContent, ProviderActivityKind, Role,
+    SamplingParams, ThinkingConfig, ToolChoice, ToolResultBody,
 };

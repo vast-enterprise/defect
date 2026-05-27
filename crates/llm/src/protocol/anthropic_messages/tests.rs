@@ -100,6 +100,7 @@ fn encode_minimal_request() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let wire_req = encode_request(&req);
     assert_eq!(wire_req.max_tokens, i64::from(DEFAULT_MAX_TOKENS));
@@ -163,6 +164,7 @@ fn encode_request_carries_sampling() {
                 budget_tokens: Some(2000),
             },
         },
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
     assert_eq!(w.max_tokens, 8000);
@@ -218,6 +220,7 @@ fn encode_request_tool_uses_and_results() {
             name: "fs_read".into(),
         },
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -291,6 +294,7 @@ fn encode_with_thinking(text: &str, signature: Option<&str>) -> Vec<wire::Conten
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
     let wire::MessageParamContent::MessageParamContentVariant1(blocks) =

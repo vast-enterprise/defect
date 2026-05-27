@@ -23,7 +23,7 @@ async fn stdio_mcp_tool_round_trip() {
     let cwd = tempfile::tempdir().expect("cwd tempdir");
 
     let round1 = openai_sse_body(&[
-        r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_echo","type":"function","function":{"name":"echo","arguments":""}}]},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_echo","type":"function","function":{"name":"mcp.mcp-echo.echo","arguments":""}}]},"finish_reason":null}]}"#,
         r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"message\":\"hello from mcp\"}"}}]},"finish_reason":null}]}"#,
         r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
     ]);
@@ -170,7 +170,7 @@ async fn config_enabled_stdio_mcp_tool_round_trip() {
     let cwd = tempfile::tempdir().expect("cwd tempdir");
 
     let round1 = openai_sse_body(&[
-        r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_echo","type":"function","function":{"name":"echo","arguments":""}}]},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_echo","type":"function","function":{"name":"mcp.echo.echo","arguments":""}}]},"finish_reason":null}]}"#,
         r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"message\":\"hello from mcp\"}"}}]},"finish_reason":null}]}"#,
         r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
     ]);
@@ -428,7 +428,7 @@ impl Drop for StreamableHttpServerHandle {
 async fn spawn_streamable_http_server() -> StreamableHttpServerHandle {
     let openai = MockServer::start().await;
     let round1 = openai_sse_body(&[
-        r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_echo","type":"function","function":{"name":"echo","arguments":""}}]},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_echo","type":"function","function":{"name":"mcp.mcp-sse.echo","arguments":""}}]},"finish_reason":null}]}"#,
         r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"message\":\"hello from mcp\"}"}}]},"finish_reason":null}]}"#,
         r#"{"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
     ]);

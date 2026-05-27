@@ -239,6 +239,7 @@ async fn missing_bearer_header_results_in_404() {
         tools: vec![],
         tool_choice: defect_agent::llm::ToolChoice::Auto,
         sampling: defect_agent::llm::SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let res = provider
         .complete(req, tokio_util::sync::CancellationToken::new())

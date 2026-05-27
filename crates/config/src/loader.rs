@@ -13,16 +13,17 @@ use crate::overrides::{
     build_cli_layer, merge_toml_values, remove_toml_path, remove_toml_table_key,
 };
 use crate::types::{
-    AnthropicConfigFile, BasePromptConfigFile, BashToolConfig, CliConfig, ConfigError,
-    ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigToml, ConfigWarning,
+    AnthropicConfigFile, BasePromptConfigFile, BashToolConfig, CapabilitiesConfig, CliConfig,
+    ConfigError, ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigToml, ConfigWarning,
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_BASH_MAX_TIMEOUT_MS, DEFAULT_BASH_TIMEOUT_MS,
     DEFAULT_DEEPSEEK_MODEL, DEFAULT_ECHO_MODEL, DEFAULT_FS_READ_LIMIT, DEFAULT_FS_READ_MAX_LIMIT,
-    DEFAULT_OPENAI_MODEL, DeepSeekConfigFile, EffectiveConfig, FsToolConfig, HttpClientConfig,
-    HttpProxyConfig, HttpProxySettings, LoadConfigOptions, LoadedConfig, OpenAiConfigFile,
-    OtlpTracingConfig, PROJECT_CONFIG_RELATIVE, PROJECT_LOCAL_CONFIG_RELATIVE,
-    PromptConfigFile, ProviderConfigs, ProviderKind, SandboxConfig, SandboxMode, ToolsConfig,
-    TracingConfig, USER_CONFIG_RELATIVE,
+    DEFAULT_OPENAI_MODEL, DeepSeekConfigFile, EffectiveConfig, FetchToolConfig, FsToolConfig,
+    HttpClientConfig, HttpProxyConfig, HttpProxySettings, LoadConfigOptions, LoadedConfig,
+    OpenAiConfigFile, OtlpTracingConfig, PROJECT_CONFIG_RELATIVE, PROJECT_LOCAL_CONFIG_RELATIVE,
+    PromptConfigFile, ProviderCapabilityOverrides, ProviderConfigs, ProviderKind, SandboxConfig,
+    SandboxMode, ToolsConfig, TracingConfig, USER_CONFIG_RELATIVE,
 };
+use defect_agent::session::SearchCapabilityConfig;
 
 /// 加载并合并 `defect` 的有效配置。
 ///
@@ -120,6 +121,7 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
         parsed,
         base_prompt.unwrap_or_default(),
     )?;
+    collect_inactive_section_warnings(&merged, &effective.capabilities, &mut warnings);
 
     Ok(LoadedConfig {
         layers: ConfigLayerStack { layers },
@@ -259,11 +261,45 @@ fn build_effective_config(
         // 保持 default sampling 显式落在 effective config 中，方便后续扩字段。
     }
 
+    let capabilities = CapabilitiesConfig::with_search(SearchCapabilityConfig::new(
+        config
+            .capabilities
+            .search
+            .as_ref()
+            .and_then(|s| s.mode)
+            .unwrap_or_default(),
+    ));
+    let fetch_default = FetchToolConfig::default();
+    let fetch = config
+        .tools
+        .fetch
+        .map(|cfg| FetchToolConfig {
+            enabled: cfg.enabled.unwrap_or(fetch_default.enabled),
+            default_timeout_secs: cfg
+                .default_timeout_secs
+                .unwrap_or(fetch_default.default_timeout_secs),
+            max_timeout_secs: cfg
+                .max_timeout_secs
+                .unwrap_or(fetch_default.max_timeout_secs),
+            max_response_bytes: cfg
+                .max_response_bytes
+                .unwrap_or(fetch_default.max_response_bytes),
+            default_format: cfg.default_format.unwrap_or(fetch_default.default_format),
+            html_to_markdown: cfg
+                .html_to_markdown
+                .unwrap_or(fetch_default.html_to_markdown),
+            follow_redirects: cfg
+                .follow_redirects
+                .unwrap_or(fetch_default.follow_redirects),
+        })
+        .unwrap_or(fetch_default);
+
     Ok(EffectiveConfig {
         cli: CliConfig { provider, model },
         turn,
         base_prompt,
         prompt,
+        capabilities,
         providers: ProviderConfigs {
             anthropic: config
                 .providers
@@ -272,6 +308,7 @@ fn build_effective_config(
                     base_url: cfg.base_url,
                     default_model: cfg.default_model,
                     models: cfg.models,
+                    capabilities: provider_capability_overrides(cfg.capabilities.as_ref()),
                 })
                 .unwrap_or_default(),
             openai: config
@@ -283,6 +320,7 @@ fn build_effective_config(
                     models: cfg.models,
                     organization: cfg.organization,
                     project: cfg.project,
+                    capabilities: provider_capability_overrides(cfg.capabilities.as_ref()),
                 })
                 .unwrap_or_default(),
             deepseek: config
@@ -292,6 +330,7 @@ fn build_effective_config(
                     base_url: cfg.base_url,
                     default_model: cfg.default_model,
                     models: cfg.models,
+                    capabilities: provider_capability_overrides(cfg.capabilities.as_ref()),
                 })
                 .unwrap_or_default(),
         },
@@ -312,6 +351,7 @@ fn build_effective_config(
                     read_max_limit: cfg.read_max_limit.unwrap_or(DEFAULT_FS_READ_MAX_LIMIT),
                 })
                 .unwrap_or_default(),
+            fetch,
         },
         sandbox: SandboxConfig {
             mode: config.sandbox.mode.unwrap_or(SandboxMode::AskWrites),
@@ -345,6 +385,57 @@ fn build_effective_config(
                 .unwrap_or_default(),
         },
     })
+}
+
+fn provider_capability_overrides(
+    section: Option<&crate::types::ProviderCapabilitiesSection>,
+) -> ProviderCapabilityOverrides {
+    let Some(section) = section else {
+        return ProviderCapabilityOverrides::default();
+    };
+    ProviderCapabilityOverrides::with_search(
+        section
+            .search
+            .as_ref()
+            .and_then(|s| s.mode)
+            .map(SearchCapabilityConfig::new),
+    )
+}
+
+/// 在 `[capabilities.search]` 与 `[tools.search]` 段共存时按
+/// `docs/proposals/config-capabilities-and-tools.md` §6.2 的表发
+/// `ConfigWarning::InactiveSection`。注意：仅在 mode = `delegate` /
+/// `disabled` 时发；mode = `local` 时 `[tools.search]` 是正常的本地实现
+/// 参数。
+fn collect_inactive_section_warnings(
+    merged: &TomlValue,
+    capabilities: &CapabilitiesConfig,
+    warnings: &mut Vec<ConfigWarning>,
+) {
+    use defect_agent::session::SearchCapabilityMode;
+
+    let has_tools_search = merged
+        .get("tools")
+        .and_then(TomlValue::as_table)
+        .map(|t| t.contains_key("search"))
+        .unwrap_or(false);
+    if !has_tools_search {
+        return;
+    }
+    let mode = capabilities.search.mode;
+    // `#[non_exhaustive]` 上来的兜底：未来追加 mode 时默认按 inactive 提示，
+    // 让用户至少看到一条 warning，再按需细化。
+    let mode_label = match mode {
+        SearchCapabilityMode::Local => return,
+        SearchCapabilityMode::Delegate => "delegate",
+        SearchCapabilityMode::Disabled => "disabled",
+        _ => "unknown",
+    };
+    warnings.push(ConfigWarning::InactiveSection {
+        path: PathBuf::from("<merged>"),
+        section: "tools.search".into(),
+        reason: format!("capabilities.search.mode = \"{mode_label}\""),
+    });
 }
 
 fn sanitize_shared_project_layer(
@@ -530,21 +621,32 @@ fn is_known_config_key(key: &str) -> bool {
             | "turn.compact_threshold_tokens"
             | "turn.max_llm_retries"
             | "turn.max_concurrent_tools"
+            | "capabilities.search.mode"
             | "providers.anthropic.base_url"
             | "providers.anthropic.default_model"
             | "providers.anthropic.models"
+            | "providers.anthropic.capabilities.search.mode"
             | "providers.openai.base_url"
             | "providers.openai.default_model"
             | "providers.openai.models"
             | "providers.openai.organization"
             | "providers.openai.project"
+            | "providers.openai.capabilities.search.mode"
             | "providers.deepseek.base_url"
             | "providers.deepseek.default_model"
             | "providers.deepseek.models"
+            | "providers.deepseek.capabilities.search.mode"
             | "tools.bash.default_timeout_ms"
             | "tools.bash.max_timeout_ms"
             | "tools.fs.read_default_limit"
             | "tools.fs.read_max_limit"
+            | "tools.fetch.enabled"
+            | "tools.fetch.default_timeout_secs"
+            | "tools.fetch.max_timeout_secs"
+            | "tools.fetch.max_response_bytes"
+            | "tools.fetch.default_format"
+            | "tools.fetch.html_to_markdown"
+            | "tools.fetch.follow_redirects"
             | "sandbox.mode"
             | "tracing.filter"
             | "tracing.otlp.endpoint"
@@ -558,6 +660,15 @@ fn is_known_config_key(key: &str) -> bool {
             | "http.proxy.https_proxy"
             | "http.proxy.no_proxy"
     ) || is_known_mcp_key(key)
+        || is_known_tools_search_key(key)
+}
+
+/// `[tools.search]` 段的 schema 在 P1 还没敲定（详见
+/// `docs/proposals/config-capabilities-and-tools.md` §9）；这里把整段
+/// 视为已知，避免每个未来字段都触发 `UnknownKey`。当 mode != `local`
+/// 时由 `InactiveSection` warning 提示用户该段实际不会生效。
+fn is_known_tools_search_key(key: &str) -> bool {
+    key == "tools.search" || key.starts_with("tools.search.")
 }
 
 fn is_known_config_prefix(key: &str) -> bool {
@@ -567,13 +678,23 @@ fn is_known_config_prefix(key: &str) -> bool {
             | "base_prompt"
             | "prompt"
             | "turn"
+            | "capabilities"
+            | "capabilities.search"
             | "providers"
             | "providers.anthropic"
+            | "providers.anthropic.capabilities"
+            | "providers.anthropic.capabilities.search"
             | "providers.openai"
+            | "providers.openai.capabilities"
+            | "providers.openai.capabilities.search"
             | "providers.deepseek"
+            | "providers.deepseek.capabilities"
+            | "providers.deepseek.capabilities.search"
             | "tools"
             | "tools.bash"
             | "tools.fs"
+            | "tools.fetch"
+            | "tools.search"
             | "sandbox"
             | "tracing"
             | "tracing.otlp"

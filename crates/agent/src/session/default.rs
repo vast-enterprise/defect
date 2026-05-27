@@ -38,8 +38,11 @@ use tracing::Instrument;
 use crate::error::BoxError;
 use crate::event::PermissionResolution;
 use crate::fs::FsBackend;
-use crate::llm::{LlmProvider, ModelInfo, ProviderError, ProviderErrorKind, ProviderInfo};
+use crate::llm::{
+    HostedCapabilities, LlmProvider, ModelInfo, ProviderError, ProviderErrorKind, ProviderInfo,
+};
 use crate::policy::{AskWritesPolicy, SandboxPolicy};
+use crate::session::capabilities::{ResolvedSessionCapabilities, SessionCapabilitiesConfig};
 use crate::session::events::EventEmitter;
 use crate::session::permissions::PermissionGate;
 use crate::session::prompt::resolve_system_prompt;
@@ -57,6 +60,7 @@ pub struct DefaultAgentCore {
     process_tools: Arc<dyn ToolRegistry>,
     policy: Arc<dyn SandboxPolicy>,
     config: RwLock<TurnConfig>,
+    capabilities: SessionCapabilitiesConfig,
     loader: Option<Arc<dyn SessionLoader>>,
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
@@ -78,6 +82,7 @@ pub struct DefaultAgentCoreBuilder {
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
     config: TurnConfig,
+    capabilities: SessionCapabilitiesConfig,
 }
 
 impl DefaultAgentCoreBuilder {
@@ -116,6 +121,11 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
+    pub fn capabilities(mut self, capabilities: SessionCapabilitiesConfig) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// # Panics
     /// 如果 `provider` 没有设置。
     pub fn build(self) -> DefaultAgentCore {
@@ -131,6 +141,7 @@ impl DefaultAgentCoreBuilder {
             session_tools: self.session_tools,
             observers: self.observers,
             config: RwLock::new(self.config),
+            capabilities: self.capabilities,
             sessions: DashMap::new(),
         }
     }
@@ -153,6 +164,12 @@ impl AgentCore for DefaultAgentCore {
             if self.sessions.contains_key(&id) {
                 return Err(AgentError::DuplicateSessionId(id));
             }
+
+            let resolved = ResolvedSessionCapabilities::resolve(
+                self.capabilities,
+                self.provider.hosted_capabilities(),
+                &self.provider.info().vendor,
+            )?;
 
             let session_tools = match &self.session_tools {
                 Some(factory) => factory
@@ -185,6 +202,7 @@ impl AgentCore for DefaultAgentCore {
                         .expect("DefaultAgentCore config rwlock poisoned")
                         .clone(),
                 ),
+                hosted_capabilities: resolved.hosted,
                 fs,
                 shell,
             }) as Arc<dyn Session>;
@@ -224,6 +242,11 @@ impl AgentCore for DefaultAgentCore {
                 .load_session(id.clone())
                 .await
                 .map_err(AgentError::Restore)?;
+            let resolved = ResolvedSessionCapabilities::resolve(
+                self.capabilities,
+                self.provider.hosted_capabilities(),
+                &self.provider.info().vendor,
+            )?;
             let session_tools = match &self.session_tools {
                 Some(factory) => factory
                     .build_registry(loaded.info.cwd.clone(), loaded.info.mcp_servers.clone())
@@ -251,6 +274,7 @@ impl AgentCore for DefaultAgentCore {
                         .expect("DefaultAgentCore config rwlock poisoned")
                         .clone(),
                 ),
+                hosted_capabilities: resolved.hosted,
                 fs,
                 shell,
             }) as Arc<dyn Session>;
@@ -278,6 +302,10 @@ pub struct DefaultSession {
     /// `None` 表示空闲。`std::sync::Mutex` 仅短暂持锁、不跨 await。
     turn_state: Mutex<TurnSlot>,
     config: RwLock<TurnConfig>,
+    /// session 启动期一次性裁决出的 hosted capability 集合。
+    /// 每次 `run_turn` 装配 [`TurnRunner`] 时直接复用——`(provider, mode)`
+    /// 在 session 生命周期内不变。
+    hosted_capabilities: HostedCapabilities,
     /// session 级 fs 后端。由 [`AgentCore::create_session`] 注入；
     /// `TurnRunner` 把 `&dyn FsBackend` 借到 [`crate::tool::ToolContext`] 传给工具。
     fs: Arc<dyn FsBackend>,
@@ -458,6 +486,7 @@ impl Session for DefaultSession {
                     cwd: &self.cwd,
                     fs: self.fs.clone(),
                     shell: self.shell.clone(),
+                    hosted_capabilities: self.hosted_capabilities,
                 };
 
                 runner.run(prompt).await

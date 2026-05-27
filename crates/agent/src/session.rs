@@ -26,6 +26,7 @@ use crate::llm::{Message, ModelInfo, ProviderError, ProviderInfo};
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolSchema};
 
+mod capabilities;
 mod default;
 mod events;
 mod history;
@@ -34,6 +35,10 @@ mod prompt;
 mod tool_registry;
 mod turn;
 
+pub use capabilities::{
+    ResolvedSessionCapabilities, SearchCapabilityConfig, SearchCapabilityMode,
+    SessionCapabilitiesConfig,
+};
 pub use default::{DefaultAgentCore, DefaultAgentCoreBuilder, DefaultSession, uuid_like};
 pub use events::EventEmitter;
 pub use history::VecHistory;
@@ -281,9 +286,65 @@ pub enum AgentError {
     #[error("session restore failed: {0}")]
     Restore(#[source] BoxError),
 
+    /// session 启动期能力裁决失败。详见 [`SessionInitError`]。
+    #[error(transparent)]
+    Init(#[from] SessionInitError),
+
     #[error(transparent)]
     Other(#[from] BoxError),
 }
+
+/// session 启动期一次性裁决失败。
+///
+/// 设计详见 `docs/proposals/search-capability-and-fetch-tool.md` §6.1。
+/// 当 `capabilities.<name>.mode = "delegate"` 但当前 provider 的
+/// [`crate::llm::LlmProvider::hosted_capabilities`] 不支持该 capability
+/// 时，拒绝启动 session。
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum SessionInitError {
+    /// 用户显式选择 `Delegate`，但 provider 不支持对应 hosted capability。
+    CapabilityUnsatisfied {
+        /// 出问题的 capability 名（例如 `"search"`）。
+        capability: &'static str,
+        /// 当前 session 绑定的 provider 名。
+        provider: String,
+    },
+}
+
+impl std::fmt::Display for SessionInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CapabilityUnsatisfied {
+                capability,
+                provider,
+            } => {
+                writeln!(
+                    f,
+                    "{capability} capability is unsatisfied: provider `{provider}` does not support hosted {capability}."
+                )?;
+                writeln!(f)?;
+                writeln!(f, "To fix this, choose one of:")?;
+                writeln!(
+                    f,
+                    "  1. Override per-provider in your config:"
+                )?;
+                writeln!(f, "       [providers.{provider}.capabilities.{capability}]")?;
+                writeln!(f, "       mode = \"local\"")?;
+                writeln!(
+                    f,
+                    "  2. Change global default to `local` and keep hosted only for providers that support it:"
+                )?;
+                writeln!(f, "       [capabilities.{capability}]")?;
+                writeln!(f, "       mode = \"local\"")?;
+                writeln!(f, "       [providers.<hosted-supported>.capabilities.{capability}]")?;
+                write!(f, "       mode = \"delegate\"")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SessionInitError {}
 
 /// 一次 turn 的失败原因。
 ///

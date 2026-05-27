@@ -122,9 +122,11 @@ async fn load_server_tools(
     match server {
         McpServer::Stdio(stdio) => load_stdio_server_tools(cwd, stdio).await,
         McpServer::Http(http) => {
-            load_streamable_http_server_tools(cwd, http.url, http.headers).await
+            load_streamable_http_server_tools(cwd, http.name, http.url, http.headers).await
         }
-        McpServer::Sse(sse) => load_streamable_http_server_tools(cwd, sse.url, sse.headers).await,
+        McpServer::Sse(sse) => {
+            load_streamable_http_server_tools(cwd, sse.name, sse.url, sse.headers).await
+        }
         other => Err(BoxError::new(McpAdapterError::UnsupportedTransport(
             format!("{other:?}"),
         ))),
@@ -140,6 +142,7 @@ async fn load_stdio_server_tools(
     cwd: PathBuf,
     server: McpServerStdio,
 ) -> Result<Vec<Arc<dyn Tool>>, BoxError> {
+    let server_name = server.name.clone();
     let mut command = tokio::process::Command::new(&server.command);
     command.args(&server.args);
     command.current_dir(cwd);
@@ -159,7 +162,9 @@ async fn load_stdio_server_tools(
 
     Ok(tools
         .into_iter()
-        .map(|tool| Arc::new(McpToolAdapter::new(connection.clone(), tool)) as Arc<dyn Tool>)
+        .map(|tool| {
+            Arc::new(McpToolAdapter::new(connection.clone(), &server_name, tool)) as Arc<dyn Tool>
+        })
         .collect())
 }
 
@@ -170,6 +175,7 @@ async fn load_stdio_server_tools(
 /// 当 header 非法、rmcp 初始化失败、或工具列表请求失败时返回错误。
 async fn load_streamable_http_server_tools(
     _cwd: PathBuf,
+    server_name: String,
     url: String,
     headers: Vec<agent_client_protocol::schema::HttpHeader>,
 ) -> Result<Vec<Arc<dyn Tool>>, BoxError> {
@@ -183,7 +189,9 @@ async fn load_streamable_http_server_tools(
 
     Ok(tools
         .into_iter()
-        .map(|tool| Arc::new(McpToolAdapter::new(connection.clone(), tool)) as Arc<dyn Tool>)
+        .map(|tool| {
+            Arc::new(McpToolAdapter::new(connection.clone(), &server_name, tool)) as Arc<dyn Tool>
+        })
         .collect())
 }
 
@@ -208,13 +216,27 @@ impl McpConnection {
 
 struct McpToolAdapter {
     connection: Arc<McpConnection>,
-    name: String,
+    /// Wire 名：调用 `call_tool` 时发回 MCP server 用的原始工具名。
+    upstream_name: String,
     schema: ToolSchema,
     safety: SafetyClass,
 }
 
+/// 把 MCP server 名与上游工具名拼成本地 ToolRegistry 中注册用的工具名。
+///
+/// 设计详见 `docs/proposals/config-capabilities-and-tools.md` §14：所有
+/// MCP 工具在本地一律以 `mcp.<server>.<name>` 注册，避免和内置工具撞名 /
+/// 抢名。这是一个无副作用的字符串拼接，单测见 [`crate::test`]。
+#[must_use]
+pub fn registered_mcp_tool_name(server: &str, upstream_name: &str) -> String {
+    format!("mcp.{server}.{upstream_name}")
+}
+
 impl McpToolAdapter {
-    fn new(connection: Arc<McpConnection>, tool: McpTool) -> Self {
+    /// 详见 [`registered_mcp_tool_name`]：所有 MCP 工具在本地以
+    /// `mcp.<server>.<name>` 注册。`upstream_name` 仍是原始名，发回 MCP
+    /// server 用。
+    fn new(connection: Arc<McpConnection>, server: &str, tool: McpTool) -> Self {
         let input_schema = match serde_json::to_value(tool.input_schema.as_ref()) {
             Ok(schema) => schema,
             Err(err) => {
@@ -226,14 +248,16 @@ impl McpToolAdapter {
                 Value::Object(Default::default())
             }
         };
+        let upstream_name = tool.name.to_string();
+        let registered_name = registered_mcp_tool_name(server, &upstream_name);
         let schema = ToolSchema {
-            name: tool.name.to_string(),
+            name: registered_name,
             description: tool.description.clone().unwrap_or_default().to_string(),
             input_schema,
         };
         Self {
             connection,
-            name: tool.name.to_string(),
+            upstream_name,
             schema,
             safety: infer_safety(&tool),
         }
@@ -263,7 +287,7 @@ impl Tool for McpToolAdapter {
 
     fn execute(&self, args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
         let peer = self.connection.peer.clone();
-        let name = self.name.clone();
+        let name = self.upstream_name.clone();
         Box::pin(stream::once(async move {
             let params = match build_call_params(name, args) {
                 Ok(params) => params,

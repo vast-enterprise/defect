@@ -93,6 +93,7 @@ fn encode_minimal_request_promotes_system_to_messages0() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -165,6 +166,7 @@ fn encode_request_carries_sampling_and_thinking() {
                 budget_tokens: Some(2000),
             },
         },
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -219,6 +221,7 @@ fn encode_request_sets_stable_prompt_cache_key_from_prefix_shape() {
         }],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
 
     let first = encode_request(&req).prompt_cache_key;
@@ -247,6 +250,7 @@ fn encode_request_changes_prompt_cache_key_when_prefix_changes() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let base = encode_request(&req).prompt_cache_key;
 
@@ -305,6 +309,7 @@ fn encode_request_splits_tool_use_and_tool_result_into_separate_messages() {
             name: "fs_read".into(),
         },
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -410,6 +415,7 @@ fn encode_request_image_base64_and_url() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -459,6 +465,7 @@ fn encode_with_thinking(
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request_with_echo(&req, echo_mode);
     let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
@@ -517,6 +524,7 @@ fn encode_thinking_concatenates_multiple_thinking_blocks() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request_with_echo(&req, ThinkingEcho::Required);
     let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
@@ -542,6 +550,7 @@ fn encode_thinking_only_required_adds_empty_content() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request_with_echo(&req, ThinkingEcho::Required);
     let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
@@ -575,6 +584,7 @@ fn encode_thinking_only_forbidden_keeps_content_none() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request_with_echo(&req, ThinkingEcho::Forbidden);
     let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
@@ -607,6 +617,7 @@ fn encode_request_default_forbids_thinking_echo() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
     let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =

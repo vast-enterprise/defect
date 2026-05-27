@@ -13,11 +13,11 @@ mod types;
 pub use loader::{load_config, load_dotenv_compat};
 pub use overrides::parse_cli_override;
 pub use types::{
-    AnthropicConfigFile, BasePromptConfigFile, BashToolConfig, CliConfig, CliOverrides,
-    ConfigError, ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigWarning,
-    DeepSeekConfigFile, EffectiveConfig, FsToolConfig, HttpClientConfig, HttpProxyConfig,
-    HttpProxyMode, HttpProxySettings, LoadConfigOptions, LoadedConfig, McpConfig,
-    McpRemoteServerConfig, McpServerConfig, McpStdioServerConfig, OpenAiConfigFile,
-    OtlpTracingConfig, PromptConfigFile, ProviderConfigs, ProviderKind, SandboxConfig, SandboxMode,
-    ToolsConfig, TracingConfig,
+    AnthropicConfigFile, BasePromptConfigFile, BashToolConfig, CapabilitiesConfig, CliConfig,
+    CliOverrides, ConfigError, ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigWarning,
+    DeepSeekConfigFile, EffectiveConfig, FetchFormat, FetchToolConfig, FsToolConfig,
+    HttpClientConfig, HttpProxyConfig, HttpProxyMode, HttpProxySettings, LoadConfigOptions,
+    LoadedConfig, McpConfig, McpRemoteServerConfig, McpServerConfig, McpStdioServerConfig,
+    OpenAiConfigFile, OtlpTracingConfig, PromptConfigFile, ProviderCapabilityOverrides,
+    ProviderConfigs, ProviderKind, SandboxConfig, SandboxMode, ToolsConfig, TracingConfig,
 };

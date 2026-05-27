@@ -4,7 +4,7 @@ use agent_client_protocol::schema::{
 use rmcp::model::{CallToolResult, Content};
 use serde_json::json;
 
-use crate::{build_call_params, completed_event, merge_mcp_servers};
+use crate::{build_call_params, completed_event, merge_mcp_servers, registered_mcp_tool_name};
 
 #[test]
 fn build_call_params_accepts_object_args() {
@@ -68,6 +68,24 @@ fn completed_event_ignores_non_text_content() {
     };
     assert!(fields.content.is_none());
     assert!(fields.raw_output.is_some());
+}
+
+#[test]
+fn registered_name_prefixes_server_and_tool() {
+    // 形态固定为 `mcp.<server>.<tool>`——既覆盖 search/fetch 撞名，也覆盖普通
+    // MCP 工具，且没有任何条件分支：所有 MCP 工具一律 namespace。
+    assert_eq!(
+        registered_mcp_tool_name("docs", "search"),
+        "mcp.docs.search"
+    );
+    assert_eq!(
+        registered_mcp_tool_name("notion", "fetch"),
+        "mcp.notion.fetch"
+    );
+    assert_eq!(
+        registered_mcp_tool_name("private", "create_page"),
+        "mcp.private.create_page"
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::pin::Pin;
 use futures::{Stream, future::BoxFuture};
 use tokio_util::sync::CancellationToken;
 
-use super::capability::Capabilities;
+use super::capability::{Capabilities, HostedCapabilities};
 use super::chunk::ProviderChunk;
 use super::error::ProviderError;
 use super::model::{ModelInfo, ProviderInfo};
@@ -28,6 +28,20 @@ pub trait LlmProvider: Send + Sync {
     /// 厂商级能力矩阵。模型级差异通过
     /// [`super::ModelCapabilityOverrides`] 表达，主循环按需合并。
     fn capabilities(&self) -> Capabilities;
+
+    /// provider adapter 自报家门的 hosted capability 集合。
+    ///
+    /// 与 [`Self::capabilities`] 不同——前者是模型属性，这里是当前
+    /// adapter 实现状态：能否把 hosted search / fetch 等通过 wire 暴露
+    /// 给模型。session 启动期会读这个值与
+    /// `capabilities.search.mode` 一起做能力来源裁决。
+    ///
+    /// 默认实现返回全 `false`，新 provider 不需要主动覆盖。
+    /// 真支持 hosted 的 adapter（Anthropic / OpenAI Responses）应
+    /// 显式 override 此方法。
+    fn hosted_capabilities(&self) -> HostedCapabilities {
+        HostedCapabilities::default()
+    }
 
     /// 列出此 provider 当前可用的模型。
     ///
