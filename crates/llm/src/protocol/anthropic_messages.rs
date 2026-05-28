@@ -505,7 +505,15 @@ fn process_sse(
     let evt = match parsed {
         Ok(e) => e,
         Err(e) => {
-            // 协议噪声：单条解析失败不终止整个流。
+            // 协议噪声：单条解析失败不终止整个流。把原始 payload 也打到 warn
+            // 日志——不同 transport（Bedrock event-stream / Messages SSE）
+            // 之间字段差异要靠原文对比定位。
+            warn!(
+                error = %e,
+                event_name = ?event_name,
+                payload = %data,
+                "failed to decode anthropic messages stream event",
+            );
             out.push(Err(ProviderError::new(ProviderErrorKind::Malformed(
                 BoxError::new(e),
             ))));

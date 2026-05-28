@@ -15,6 +15,7 @@
 //! 期望被 `build.rs` 调。我们要把生成的代码 commit 进仓库，所以走底
 //! 层 `toac_build::build_with` + 自己 `prettyplease::unparse` + 写文件。
 
+mod anthropic_strip;
 mod openai_strip;
 
 use std::{
@@ -127,6 +128,14 @@ fn generate(name: &str, oas_path: &Path, root_path: &str) -> Result<String> {
     let parsed: syn::File =
         syn::parse_file(&tokens.to_string()).with_context(|| format!("syn::parse_file({name})"))?;
     let body = prettyplease::unparse(&parsed);
+    // toac quirk patches per provider。`nullable: true` 在 OAS 里被 toac
+    // 翻成 `Vec<T>` 而不是 `Option<Vec<T>>`，serde 默认遇到字段缺失就报错；
+    // 单条 patch 的形态见各 strip 模块。
+    let body = match name {
+        "anthropic" => anthropic_strip::patch_generated(&body)
+            .with_context(|| format!("anthropic_strip::patch_generated({name})"))?,
+        _ => body,
+    };
     let oas_rel = oas_path
         .strip_prefix(workspace_root()?)
         .map(Path::to_path_buf)
