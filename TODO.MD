@@ -37,6 +37,7 @@
 | internal | 内置工具：fetch（HTTP GET + html→markdown 渲染）               | `docs/internal/tools-fetch.md`                                          | P1     | ✅ 已完成 |
 | internal | 内置工具：grep / glob 检索                                     | `docs/internal/tools-search.md`                                         | P1     | 🕒 未开始 |
 | internal | 会话持久化（jsonl，append-only，可 resume）                    | `docs/internal/storage-jsonl.md`                                        | P1     | ✅ 已完成 |
+| internal | Hook 系统（5 件套生命周期 + Builtin/Command/Prompt handler）   | `docs/internal/hooks.md`                                                | P1     | 🕒 未开始 |
 | outbound | LLM 模块两层架构（协议层 + 厂商层）总览                        | `docs/outbound/llm.md`                                                  | P0     | ✅ 已完成 |
 | outbound | Anthropic provider（messages API + 流式）                      | `docs/outbound/llm-anthropic.md`                                        | P0     | ✅ 已完成 |
 | outbound | OpenAI 兼容 provider（chat completions + 流式）                | `docs/outbound/llm-openai.md`                                           | P0     | ✅ 已完成 |
@@ -69,7 +70,6 @@
 | outbound | tracing OTLP exporter（导出到外部 collector）                  | `docs/outbound/tracing-otlp.md` | 🕒 未开始 |
 | inbound  | ACP Content 音频输入支持                                       | `docs/inbound/acp-prompt.md`  | 🕒 未开始 |
 | inbound  | ACP Content 二进制资源支持（BlobResourceContents）              | `docs/inbound/acp-prompt.md`  | 🕒 未开始 |
-| internal | Hook 系统（session / turn / tool 生命周期钩子，shell 命令执行） | `docs/internal/hooks.md` | 🕒 未开始 |
 | internal | Skill 加载机制（glob 条件匹配 + always 的 markdown skill 注入到 system prompt，附 `skill` 工具供模型按需加载） | `docs/internal/skills.md` | 🕒 未开始 |
 | internal | LSP 语义理解（诊断注入、跳转定义、查找引用；P1 可用 hook 跑 linter 过渡） | `docs/internal/lsp.md` | 🕒 未开始 |
 | internal | Checkpoint / Undo（工具执行前自动快照，支持回滚；可复用 git stash 或文件级快照） | `docs/internal/checkpoint.md` | 🕒 未开始 |

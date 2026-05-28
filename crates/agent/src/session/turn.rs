@@ -28,6 +28,7 @@ use tracing::Instrument;
 use crate::error::BoxError;
 use crate::event::{AgentEvent, PermissionResolution};
 use crate::fs::FsBackend;
+use crate::hooks::{HookCtx, HookEngine, HookEvent, HookPatch};
 use crate::http::HttpClient;
 use crate::llm::{
     CompletionRequest, HostedCapabilities, LlmProvider, Message, MessageContent, ProviderChunk,
@@ -40,6 +41,7 @@ use crate::session::permissions::PermissionGate;
 use crate::session::{History, ToolRegistry, TurnError};
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolContext, ToolError, ToolEvent};
+use agent_client_protocol::schema::SessionId;
 
 const DEFAULT_PROMPT_FILE: &str = "AGENTS.md";
 
@@ -160,11 +162,29 @@ pub struct TurnRunner<'a> {
     /// session 启动期裁决出的 hosted capability 集合。
     /// 每轮 turn 装配请求时直接复用，不再重新查询。
     pub hosted_capabilities: HostedCapabilities,
+    /// Hook 引擎。turn 主循环在 4 个时刻 emit Sync 事件
+    /// （`UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`）
+    /// 等 hook 跑完再继续。详见 `docs/internal/hooks.md` §7.1。
+    pub hooks: &'a dyn HookEngine,
+    /// 当前 session id。`HookCtx` 注入用——hook handler 按 session 维度路由 / 审计。
+    pub session_id: &'a SessionId,
 }
 
 impl<'a> TurnRunner<'a> {
     /// 跑完一次 turn。
     pub async fn run(&self, prompt: Vec<ContentBlock>) -> Result<AcpStopReason, TurnError> {
+        // ① UserPromptSubmit hook（Sync 拦截）
+        // 在 prompt 落 history 之前给 hook 改写 / 拦截的机会。详见
+        // `docs/internal/hooks.md` §7.1。
+        let prompt = match self.fire_user_prompt_submit(prompt).await {
+            UserPromptHookFlow::Continue(p) => p,
+            UserPromptHookFlow::Refused => {
+                // hook block：不 emit UserPromptCommitted，不进 history；
+                // 直接返回 Refusal，让 ACP 桥接以此回 PromptResponse。
+                return Ok(AcpStopReason::Refusal);
+            }
+        };
+
         self.events
             .emit(AgentEvent::UserPromptCommitted {
                 content: prompt.clone(),
@@ -501,24 +521,50 @@ impl<'a> TurnRunner<'a> {
                 let reason = format!("tool not found: {}", tu.name);
                 self.emit_tool_failed(&id, reason.clone()).await;
                 approved.push(Approved::FailedArgs {
+                    id: id.clone(),
                     tool_use_id: tu.id.clone(),
+                    name: tu.name.clone(),
                     reason,
                 });
                 continue;
             };
 
-            let args: JsonValue = match parse_args(&tu.args_buf) {
+            let mut args: JsonValue = match parse_args(&tu.args_buf) {
                 Ok(v) => v,
                 Err(reason) => {
                     let reason = format!("invalid args: {reason}");
                     self.emit_tool_failed(&id, reason.clone()).await;
                     approved.push(Approved::FailedArgs {
+                        id: id.clone(),
                         tool_use_id: tu.id.clone(),
+                        name: tu.name.clone(),
                         reason,
                     });
                     continue;
                 }
             };
+
+            // ② PreToolUse hook（Sync 拦截）
+            // 在 policy 之前——hook 可改写 args / 直接 block 让 policy 都不用算。
+            // 详见 `docs/internal/hooks.md` §7.1 / §7.3。
+            let safety_hint_pre = tool.safety_hint(&args);
+            match self
+                .fire_pre_tool_use(&id, &tu.name, &args, safety_hint_pre)
+                .await
+            {
+                PreToolHookFlow::Continue { args: new_args } => {
+                    args = new_args;
+                }
+                PreToolHookFlow::Block(reason) => {
+                    self.emit_tool_failed(&id, reason).await;
+                    approved.push(Approved::Denied {
+                        id: id.clone(),
+                        tool_use_id: tu.id.clone(),
+                        name: tu.name.clone(),
+                    });
+                    continue;
+                }
+            }
 
             let describe_ctx = ToolContext::new(
                 self.cwd,
@@ -558,7 +604,9 @@ impl<'a> TurnRunner<'a> {
                     self.emit_tool_failed(&id, "denied by policy".to_string())
                         .await;
                     approved.push(Approved::Denied {
+                        id: id.clone(),
                         tool_use_id: tu.id.clone(),
+                        name: tu.name.clone(),
                     });
                 }
                 PolicyDecision::Ask(ask) => {
@@ -567,7 +615,9 @@ impl<'a> TurnRunner<'a> {
                         self.emit_tool_failed(&id, "denied by policy".to_string())
                             .await;
                         approved.push(Approved::Denied {
+                            id: id.clone(),
                             tool_use_id: tu.id.clone(),
+                            name: tu.name.clone(),
                         });
                         continue;
                     }
@@ -601,7 +651,9 @@ impl<'a> TurnRunner<'a> {
                                 self.emit_tool_failed(&id, "denied by user".to_string())
                                     .await;
                                 approved.push(Approved::Denied {
+                                    id: id.clone(),
                                     tool_use_id: tu.id.clone(),
+                                    name: tu.name.clone(),
                                 });
                             }
                         }
@@ -655,15 +707,17 @@ impl<'a> TurnRunner<'a> {
                     let fs = self.fs.clone();
                     let shell = self.shell.clone();
                     let http = self.http.clone();
+                    let name = tool.schema().name.clone();
                     let span = tracing::info_span!(
                         "tool_call",
-                        tool = %tool.schema().name,
+                        tool = %name,
                         tool_call_id = %id,
                     );
                     joinset.spawn(
                         drive_tool_stream(
                             id,
                             tool_use_id,
+                            name,
                             tool,
                             args,
                             cwd,
@@ -676,23 +730,39 @@ impl<'a> TurnRunner<'a> {
                         .instrument(span),
                     );
                 }
-                Approved::Denied { tool_use_id } => {
+                Approved::Denied {
+                    id,
+                    tool_use_id,
+                    name,
+                } => {
                     results.push(ToolResult {
+                        id,
+                        name,
                         tool_use_id,
                         body: ToolResultBody::Text {
                             text: "denied".to_string(),
                         },
                         is_error: true,
+                        fields: None,
+                        error: Some("denied".to_string()),
                     });
                 }
                 Approved::FailedArgs {
+                    id,
                     tool_use_id,
+                    name,
                     reason,
                 } => {
                     results.push(ToolResult {
+                        id,
+                        name,
                         tool_use_id,
-                        body: ToolResultBody::Text { text: reason },
+                        body: ToolResultBody::Text {
+                            text: reason.clone(),
+                        },
                         is_error: true,
+                        fields: None,
+                        error: Some(reason),
                     });
                 }
             }
@@ -704,18 +774,173 @@ impl<'a> TurnRunner<'a> {
                 Err(join_err) => {
                     tracing::error!(error = ?join_err, "tool task panicked");
                     results.push(ToolResult {
+                        id: ToolCallId::new(""),
+                        name: String::new(),
                         tool_use_id: String::new(),
                         body: ToolResultBody::Text {
                             text: format!("tool task crashed: {join_err}"),
                         },
                         is_error: true,
+                        fields: None,
+                        error: Some(format!("tool task crashed: {join_err}")),
                     });
                 }
             }
         }
 
+        // ③/④ PostToolUse / PostToolUseFailure hook（Sync 拦截）
+        // 在 tool_result 落 history 之前给 hook 追加注释的机会。详见
+        // `docs/internal/hooks.md` §3.2 / §7.1。
+        for result in results.iter_mut() {
+            self.fire_post_tool_hook(result).await;
+        }
+
         results
     }
+}
+
+// ----- hook helpers -----
+
+impl<'a> TurnRunner<'a> {
+    fn hook_ctx(&self) -> HookCtx<'_> {
+        HookCtx::new(self.session_id, self.cwd, self.cancel.clone())
+    }
+
+    /// 触发 `UserPromptSubmit` hook。
+    ///
+    /// 处理三类 outcome：
+    /// - `block` → 拒绝该 turn（调用方返回 `Refusal`）
+    /// - `patch = UserPrompt { prepend, append }` → 改写 prompt 顺序为
+    ///   `[prepend, original, append]`，落 history 时按改写后形态
+    /// - `append` → 暂未拼到 system prompt（v0 无落点；待 system_prompt
+    ///   动态拼接落地后填上，详见 `docs/internal/hooks.md` §3.2）
+    async fn fire_user_prompt_submit(&self, prompt: Vec<ContentBlock>) -> UserPromptHookFlow {
+        let outcome = {
+            let event = HookEvent::UserPromptSubmit { content: &prompt };
+            self.hooks.fire(event, self.hook_ctx()).await
+        };
+        if let Some(reason) = outcome.block {
+            tracing::info!(reason = %reason, "user prompt blocked by hook");
+            return UserPromptHookFlow::Refused;
+        }
+        let prompt = match outcome.patch {
+            Some(HookPatch::UserPrompt { prepend, append }) => {
+                let mut combined = Vec::with_capacity(prepend.len() + prompt.len() + append.len());
+                combined.extend(prepend);
+                combined.extend(prompt);
+                combined.extend(append);
+                combined
+            }
+            Some(_) | None => prompt,
+        };
+        if !outcome.append.is_empty() {
+            // v0：UserPromptSubmit 上 outcome.append 的承诺落点是"system prompt 后缀"，
+            // 但 system_prompt 在 turn 装配时已经定型；先记 warn 以保证未来落地时
+            // 行为可观测。详见 hooks.md §3.2。
+            tracing::warn!(
+                count = outcome.append.len(),
+                "UserPromptSubmit hook returned append blocks but system_prompt is fixed at this point; dropped"
+            );
+        }
+        UserPromptHookFlow::Continue(prompt)
+    }
+
+    /// 触发 `PreToolUse` hook。
+    async fn fire_pre_tool_use(
+        &self,
+        id: &ToolCallId,
+        name: &str,
+        args: &JsonValue,
+        safety: crate::tool::SafetyClass,
+    ) -> PreToolHookFlow {
+        let event = HookEvent::PreToolUse {
+            id,
+            name,
+            args,
+            safety,
+        };
+        let outcome = self.hooks.fire(event, self.hook_ctx()).await;
+        if let Some(reason) = outcome.block {
+            tracing::info!(tool = %name, reason = %reason, "tool blocked by pre-hook");
+            return PreToolHookFlow::Block(reason);
+        }
+        let args = match outcome.patch {
+            Some(HookPatch::ToolArgs(v)) => v,
+            Some(_) | None => args.clone(),
+        };
+        if !outcome.append.is_empty() {
+            // PreToolUse 上 append 没有自然落点（hooks.md §3.2/§3.3 表）。
+            tracing::warn!(
+                tool = %name,
+                count = outcome.append.len(),
+                "PreToolUse hook returned append blocks; dropped (no landing site)"
+            );
+        }
+        PreToolHookFlow::Continue { args }
+    }
+
+    /// 触发 `PostToolUse` 或 `PostToolUseFailure` hook。把 `outcome.append`
+    /// 拼到 `result.body` 末尾——下一轮 LLM 看到 hook 注释作为工具输出的一部分。
+    async fn fire_post_tool_hook(&self, result: &mut ToolResult) {
+        let outcome = if !result.is_error
+            && let Some(fields) = result.fields.as_ref()
+        {
+            let event = HookEvent::PostToolUse {
+                id: &result.id,
+                name: &result.name,
+                fields,
+            };
+            self.hooks.fire(event, self.hook_ctx()).await
+        } else if let Some(err) = result.error.as_deref() {
+            let event = HookEvent::PostToolUseFailure {
+                id: &result.id,
+                name: &result.name,
+                error: err,
+            };
+            self.hooks.fire(event, self.hook_ctx()).await
+        } else {
+            return;
+        };
+
+        if outcome.block.is_some() {
+            // hooks.md §3.2：Post* 不允许 block；引擎层应已丢弃 + warn，
+            // 这里再次保护，确保 result 行为不变。
+        }
+
+        if outcome.append.is_empty() {
+            return;
+        }
+
+        // 把 hook 追加的 ContentBlock（仅取 Text 块）拼到 tool_result body。
+        let extra: String = outcome
+            .append
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if extra.is_empty() {
+            return;
+        }
+        if let ToolResultBody::Text { text } = &mut result.body {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&extra);
+        }
+    }
+}
+
+enum UserPromptHookFlow {
+    Continue(Vec<ContentBlock>),
+    Refused,
+}
+
+enum PreToolHookFlow {
+    Continue { args: JsonValue },
+    Block(String),
 }
 
 // ----- internal types -----
@@ -768,10 +993,14 @@ enum Approved {
         args: JsonValue,
     },
     Denied {
+        id: ToolCallId,
         tool_use_id: String,
+        name: String,
     },
     FailedArgs {
+        id: ToolCallId,
         tool_use_id: String,
+        name: String,
         reason: String,
     },
 }
@@ -790,9 +1019,18 @@ struct TurnOutcome {
 }
 
 struct ToolResult {
+    /// 工具调用的 ACP id。`tool_use_id` 是 LLM 给的 wire id；hook 事件用
+    /// ACP id（与 `ToolCallStarted` 等事件同款），更稳定。
+    id: ToolCallId,
+    /// 工具名。`PostToolUse[Failure]` hook matcher 按 tool 名过滤要用。
+    name: String,
     tool_use_id: String,
     body: ToolResultBody,
     is_error: bool,
+    /// 终态字段。`PostToolUse` 成功路径要把它喂给 hook。失败路径为 `None`。
+    fields: Option<ToolCallUpdateFields>,
+    /// 失败文本。`PostToolUseFailure` 路径要把它喂给 hook。成功路径为 `None`。
+    error: Option<String>,
 }
 
 struct TurnState {
@@ -1043,6 +1281,7 @@ fn extract_text(fields: &ToolCallUpdateFields) -> Option<String> {
 async fn drive_tool_stream(
     id: ToolCallId,
     tool_use_id: String,
+    name: String,
     tool: Arc<dyn Tool>,
     args: JsonValue,
     cwd: std::path::PathBuf,
@@ -1086,18 +1325,23 @@ async fn drive_tool_stream(
                 if let Some(text) = extract_text(&fields) {
                     last_text = Some(text);
                 }
+                let fields = with_status(fields, ToolCallStatus::Completed);
                 events
                     .emit(AgentEvent::ToolCallFinished {
                         id: id.clone(),
-                        fields: with_status(fields, ToolCallStatus::Completed),
+                        fields: fields.clone(),
                     })
                     .await;
                 return ToolResult {
+                    id,
+                    name,
                     tool_use_id,
                     body: ToolResultBody::Text {
                         text: last_text.unwrap_or_default(),
                     },
                     is_error: false,
+                    fields: Some(fields),
+                    error: None,
                 };
             }
             ToolEvent::Failed(err) => {
@@ -1110,9 +1354,13 @@ async fn drive_tool_stream(
                     })
                     .await;
                 return ToolResult {
+                    id,
+                    name,
                     tool_use_id,
-                    body: ToolResultBody::Text { text },
+                    body: ToolResultBody::Text { text: text.clone() },
                     is_error: !is_cancel,
+                    fields: None,
+                    error: Some(text),
                 };
             }
         }
@@ -1124,11 +1372,14 @@ async fn drive_tool_stream(
             fields: failed_fields_text("tool stream closed without terminal event".to_string()),
         })
         .await;
+    let text = "tool stream closed without terminal event".to_string();
     ToolResult {
+        id,
+        name,
         tool_use_id,
-        body: ToolResultBody::Text {
-            text: "tool stream closed without terminal event".to_string(),
-        },
+        body: ToolResultBody::Text { text: text.clone() },
         is_error: true,
+        fields: None,
+        error: Some(text),
     }
 }

@@ -25,8 +25,8 @@ use defect_agent::error::BoxError;
 use defect_agent::http::{HttpClient, HttpClientError, HttpRequest, HttpResponse};
 
 use super::proxy::{ProxyAwareConnector, build_proxy_connector};
-use super::{HttpStackConfig, HttpStackError, ProxyConfig};
 use super::user_agent::default_user_agent;
+use super::{HttpStackConfig, HttpStackError, ProxyConfig};
 
 /// 内部使用的 hyper-util Client 类型别名——和 `build_http_stack` 用的
 /// 同一个连接器、同一个 body 类型族（这里是 `Empty<Bytes>`，因为 fetch
@@ -63,8 +63,7 @@ impl std::fmt::Debug for FetchHttpClient {
 /// [`HttpStackError`]。
 pub fn build_fetch_client(config: &HttpStackConfig) -> Result<FetchHttpClient, HttpStackError> {
     let connector = build_proxy_connector(&config.proxy)?;
-    let inner =
-        HyperClient::builder(TokioExecutor::default()).build::<_, Empty<Bytes>>(connector);
+    let inner = HyperClient::builder(TokioExecutor::default()).build::<_, Empty<Bytes>>(connector);
 
     let user_agent = match &config.user_agent {
         Some(s) => HeaderValue::from_str(s).map_err(|e| HttpStackError::Config {
@@ -88,10 +87,7 @@ pub fn build_fetch_client_arc(
 }
 
 impl HttpClient for FetchHttpClient {
-    fn fetch(
-        &self,
-        req: HttpRequest,
-    ) -> BoxFuture<'_, Result<HttpResponse, HttpClientError>> {
+    fn fetch(&self, req: HttpRequest) -> BoxFuture<'_, Result<HttpResponse, HttpClientError>> {
         Box::pin(async move {
             let timeout = req.timeout;
             let fut = self.execute(req);
@@ -141,10 +137,7 @@ impl FetchHttpClient {
         }
     }
 
-    async fn send_one(
-        &self,
-        uri: &Uri,
-    ) -> Result<http::Response<Incoming>, HttpClientError> {
+    async fn send_one(&self, uri: &Uri) -> Result<http::Response<Incoming>, HttpClientError> {
         let request = Request::builder()
             .method(Method::GET)
             .uri(uri.clone())
@@ -198,16 +191,16 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, HttpClientError> 
         return parse_http_uri(trimmed);
     }
 
-    let base_scheme = base
-        .scheme_str()
-        .ok_or_else(|| HttpClientError::Transport(BoxError::new(std::io::Error::other(
+    let base_scheme = base.scheme_str().ok_or_else(|| {
+        HttpClientError::Transport(BoxError::new(std::io::Error::other(
             "base URI missing scheme",
-        ))))?;
-    let base_authority = base
-        .authority()
-        .ok_or_else(|| HttpClientError::Transport(BoxError::new(std::io::Error::other(
+        )))
+    })?;
+    let base_authority = base.authority().ok_or_else(|| {
+        HttpClientError::Transport(BoxError::new(std::io::Error::other(
             "base URI missing authority",
-        ))))?;
+        )))
+    })?;
 
     let composed = if let Some(rest) = trimmed.strip_prefix("//") {
         // protocol-relative
@@ -218,9 +211,7 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, HttpClientError> 
     } else {
         // path-relative：v0 不支持
         return Err(HttpClientError::Transport(BoxError::new(
-            std::io::Error::other(format!(
-                "relative redirect not supported: `{trimmed}`"
-            )),
+            std::io::Error::other(format!("relative redirect not supported: `{trimmed}`")),
         )));
     };
 

@@ -6,9 +6,7 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
 use defect_agent::http::HttpClient;
-use defect_agent::tool::{
-    SafetyClass, Tool, ToolContext, ToolError, ToolEvent, ToolStream,
-};
+use defect_agent::tool::{SafetyClass, Tool, ToolContext, ToolError, ToolEvent, ToolStream};
 use defect_config::{FetchFormat, FetchToolConfig};
 use defect_http::{HttpStackConfig, ProxyConfig, build_fetch_client_arc};
 use futures::StreamExt;
@@ -100,9 +98,7 @@ async fn case1_text_markdown_passthrough() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
     Mock::given(method("GET"))
         .and(path("/200"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_raw("# Hello\nbody\n", "text/markdown"),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_raw("# Hello\nbody\n", "text/markdown"))
         .mount(&server)
         .await;
 
@@ -125,10 +121,8 @@ async fn case2_html_to_markdown_rendered() {
     Mock::given(method("GET"))
         .and(path("/page"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_raw(
-                "<h1>Title</h1><p>Body text</p>",
-                "text/html; charset=utf-8",
-            ),
+            ResponseTemplate::new(200)
+                .set_body_raw("<h1>Title</h1><p>Body text</p>", "text/html; charset=utf-8"),
         )
         .mount(&server)
         .await;
@@ -156,12 +150,10 @@ async fn case3_format_html_with_markdown_content_type_fails() {
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
     let url = format!("{}/md", server.uri());
-    let events = drive(
-        tool.execute(
-            json!({"url": url, "format": "html"}),
-            ctx(dir.path(), cancel, http),
-        ),
-    )
+    let events = drive(tool.execute(
+        json!({"url": url, "format": "html"}),
+        ctx(dir.path(), cancel, http),
+    ))
     .await;
     assert!(
         matches!(events[0], ToolEvent::Failed(ToolError::Execution(_))),
@@ -187,12 +179,10 @@ async fn case4_format_text_strips_html_tags() {
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
     let url = format!("{}/page", server.uri());
-    let events = drive(
-        tool.execute(
-            json!({"url": url, "format": "text"}),
-            ctx(dir.path(), cancel, http),
-        ),
-    )
+    let events = drive(tool.execute(
+        json!({"url": url, "format": "text"}),
+        ctx(dir.path(), cancel, http),
+    ))
     .await;
     let text = extract_text(&events[0]);
     assert!(!text.contains('<'));
@@ -244,12 +234,10 @@ async fn case7_file_scheme_rejected() {
     let (_server, tool, http) = fixture(FetchToolConfig::default()).await;
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
-    let events = drive(
-        tool.execute(
-            json!({"url": "file:///etc/passwd"}),
-            ctx(dir.path(), cancel, http),
-        ),
-    )
+    let events = drive(tool.execute(
+        json!({"url": "file:///etc/passwd"}),
+        ctx(dir.path(), cancel, http),
+    ))
     .await;
     assert!(
         matches!(events[0], ToolEvent::Failed(ToolError::InvalidArgs(_))),
@@ -374,12 +362,10 @@ async fn case14_html_to_markdown_disabled_returns_raw_html() {
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
     let url = format!("{}/page", server.uri());
-    let events = drive(
-        tool.execute(
-            json!({"url": url, "format": "markdown"}),
-            ctx(dir.path(), cancel, http),
-        ),
-    )
+    let events = drive(tool.execute(
+        json!({"url": url, "format": "markdown"}),
+        ctx(dir.path(), cancel, http),
+    ))
     .await;
     let text = extract_text(&events[0]);
     assert!(text.contains("<h1>X</h1>"), "got: {text}");
@@ -433,12 +419,10 @@ async fn case18_clamp_timeout_records_clamped_from() {
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
     let url = format!("{}/quick", server.uri());
-    let events = drive(
-        tool.execute(
-            json!({"url": url, "timeout_secs": 999}),
-            ctx(dir.path(), cancel, http),
-        ),
-    )
+    let events = drive(tool.execute(
+        json!({"url": url, "timeout_secs": 999}),
+        ctx(dir.path(), cancel, http),
+    ))
     .await;
     assert!(matches!(events[0], ToolEvent::Completed(_)));
     let raw = extract_raw(&events[0]);
@@ -458,12 +442,10 @@ async fn case19_binary_content_type_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
     let url = format!("{}/img", server.uri());
-    let events = drive(
-        tool.execute(
-            json!({"url": url, "format": "text"}),
-            ctx(dir.path(), cancel, http),
-        ),
-    )
+    let events = drive(tool.execute(
+        json!({"url": url, "format": "text"}),
+        ctx(dir.path(), cancel, http),
+    ))
     .await;
     let msg = format!("{:?}", events[0]);
     assert!(

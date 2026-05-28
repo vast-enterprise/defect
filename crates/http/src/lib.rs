@@ -163,9 +163,7 @@ pub fn build_http_stack(config: HttpStackConfig) -> Result<HttpStack, HttpStackE
 
     // hyper-util Client 的 Error → HttpStackError::Transport
     let transport = ServiceBuilder::new()
-        .map_err(|e: hyper_util::client::legacy::Error| {
-            HttpStackError::Transport(BoxError::new(e))
-        })
+        .map_err(|e: hyper_util::client::legacy::Error| HttpStackError::Transport(BoxError::new(e)))
         .service(inner);
 
     let ua_value = match &config.user_agent {
@@ -175,9 +173,8 @@ pub fn build_http_stack(config: HttpStackConfig) -> Result<HttpStack, HttpStackE
         None => user_agent::default_user_agent(),
     };
 
-    let retry_layer = (config.transport_retries > 0).then(|| {
-        retry::TransportRetryLayer::new(config.transport_retries, config.initial_backoff)
-    });
+    let retry_layer = (config.transport_retries > 0)
+        .then(|| retry::TransportRetryLayer::new(config.transport_retries, config.initial_backoff));
 
     let retried = ServiceBuilder::new()
         .option_layer(retry_layer)

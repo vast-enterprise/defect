@@ -28,8 +28,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use super::{HttpStackError, ProxyConfig, ProxySettings};
 
 /// 完整连接器类型——上层用这个类型构造 [`hyper_util::client::legacy::Client`]。
-pub(crate) type ProxyAwareConnector =
-    hyper_rustls::HttpsConnector<ProxyConnector<HttpConnector>>;
+pub(crate) type ProxyAwareConnector = hyper_rustls::HttpsConnector<ProxyConnector<HttpConnector>>;
 
 /// 从 [`ProxyConfig`] 构造完整连接器。
 ///
@@ -144,11 +143,9 @@ fn env_proxy(lower: &str, upper: &str) -> Result<Option<Uri>, HttpStackError> {
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let uri = trimmed
-        .parse::<Uri>()
-        .map_err(|e| HttpStackError::Config {
-            hint: format!("invalid proxy URL `{trimmed}` from env: {e}"),
-        })?;
+    let uri = trimmed.parse::<Uri>().map_err(|e| HttpStackError::Config {
+        hint: format!("invalid proxy URL `{trimmed}` from env: {e}"),
+    })?;
     Ok(Some(uri))
 }
 
@@ -252,36 +249,24 @@ mod tests {
 
     #[test]
     fn suffix_match_with_dot() {
-        assert!(matches_no_proxy(
-            "api.openai.com",
-            &pats(&[".openai.com"])
-        ));
+        assert!(matches_no_proxy("api.openai.com", &pats(&[".openai.com"])));
     }
 
     #[test]
     fn suffix_match_without_dot() {
         // GNU 风格：pattern 不带前导点也按后缀匹配。
-        assert!(matches_no_proxy(
-            "api.openai.com",
-            &pats(&["openai.com"])
-        ));
+        assert!(matches_no_proxy("api.openai.com", &pats(&["openai.com"])));
     }
 
     #[test]
     fn substring_does_not_match() {
         // "openai" 不应匹配 "myopenai.com"——必须以 "." 边界结尾。
-        assert!(!matches_no_proxy(
-            "myopenai.com",
-            &pats(&["openai.com"])
-        ));
+        assert!(!matches_no_proxy("myopenai.com", &pats(&["openai.com"])));
     }
 
     #[test]
     fn case_insensitive() {
-        assert!(matches_no_proxy(
-            "API.OpenAI.COM",
-            &pats(&["openai.com"])
-        ));
+        assert!(matches_no_proxy("API.OpenAI.COM", &pats(&["openai.com"])));
     }
 
     #[test]
@@ -304,10 +289,7 @@ mod tests {
 
     #[test]
     fn host_trailing_dot_normalised() {
-        assert!(matches_no_proxy(
-            "api.openai.com.",
-            &pats(&["openai.com"])
-        ));
+        assert!(matches_no_proxy("api.openai.com.", &pats(&["openai.com"])));
     }
 
     #[test]

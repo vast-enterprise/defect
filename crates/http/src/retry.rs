@@ -132,10 +132,7 @@ async fn collect_body(body: toac::body::Body) -> Result<Bytes, HttpStackError> {
 /// 用同一份 `bytes` + 原 `parts` 重建一个新 [`http::Request`]——header /
 /// uri / extensions 全部克隆下来，body 走新 [`Bytes`] 包成
 /// [`toac::body::Body`]。
-fn rebuild_request(
-    parts: &http::request::Parts,
-    bytes: Bytes,
-) -> http::Request<toac::body::Body> {
+fn rebuild_request(parts: &http::request::Parts, bytes: Bytes) -> http::Request<toac::body::Body> {
     let mut req = http::Request::new(toac::body::Body::new(http_body_util::Full::new(bytes)));
     *req.method_mut() = parts.method.clone();
     *req.uri_mut() = parts.uri.clone();
@@ -155,9 +152,7 @@ pub(crate) fn is_transport_retryable(err: &HttpStackError) -> bool {
 
 /// `initial * 2^attempt`，加 ±25% jitter，封顶 30s。
 fn backoff_delay(initial: Duration, attempt: u32) -> Duration {
-    let base_nanos = initial
-        .as_nanos()
-        .saturating_mul(1u128 << attempt.min(20));
+    let base_nanos = initial.as_nanos().saturating_mul(1u128 << attempt.min(20));
     let cap_nanos = MAX_BACKOFF.as_nanos();
     let clamped = base_nanos.min(cap_nanos);
 
@@ -194,9 +189,7 @@ mod tests {
 
     #[test]
     fn config_is_not_retryable() {
-        let e = HttpStackError::Config {
-            hint: "x".into(),
-        };
+        let e = HttpStackError::Config { hint: "x".into() };
         assert!(!is_transport_retryable(&e));
     }
 
@@ -216,24 +209,19 @@ mod tests {
         let attempts_clone = attempts.clone();
 
         // Inner service：前两次返回 transport 错，第 3 次返回 200。
-        let inner = tower::service_fn(
-            move |_req: http::Request<toac::body::Body>| {
-                let attempts = attempts_clone.clone();
-                async move {
-                    let n = attempts.fetch_add(1, Ordering::SeqCst);
-                    if n < 2 {
-                        Err::<http::Response<()>, _>(HttpStackError::Transport(
-                            BoxError::new(io::Error::new(
-                                io::ErrorKind::ConnectionRefused,
-                                format!("attempt {n}"),
-                            )),
-                        ))
-                    } else {
-                        Ok(http::Response::new(()))
-                    }
+        let inner = tower::service_fn(move |_req: http::Request<toac::body::Body>| {
+            let attempts = attempts_clone.clone();
+            async move {
+                let n = attempts.fetch_add(1, Ordering::SeqCst);
+                if n < 2 {
+                    Err::<http::Response<()>, _>(HttpStackError::Transport(BoxError::new(
+                        io::Error::new(io::ErrorKind::ConnectionRefused, format!("attempt {n}")),
+                    )))
+                } else {
+                    Ok(http::Response::new(()))
                 }
-            },
-        );
+            }
+        });
 
         let svc = TransportRetryLayer::new(3, Duration::from_millis(1)).layer(inner);
         let req = http::Request::builder()
@@ -254,17 +242,15 @@ mod tests {
 
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
-        let inner = tower::service_fn(
-            move |_req: http::Request<toac::body::Body>| {
-                let attempts = attempts_clone.clone();
-                async move {
-                    attempts.fetch_add(1, Ordering::SeqCst);
-                    Err::<http::Response<()>, _>(HttpStackError::Timeout {
-                        phase: super::super::TimeoutPhase::Total,
-                    })
-                }
-            },
-        );
+        let inner = tower::service_fn(move |_req: http::Request<toac::body::Body>| {
+            let attempts = attempts_clone.clone();
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<http::Response<()>, _>(HttpStackError::Timeout {
+                    phase: super::super::TimeoutPhase::Total,
+                })
+            }
+        });
         let svc = TransportRetryLayer::new(3, Duration::from_millis(1)).layer(inner);
         let req = http::Request::builder()
             .uri("/")
@@ -272,11 +258,7 @@ mod tests {
             .expect("build req");
         let err = svc.oneshot(req).await.expect_err("must error");
         assert!(matches!(err, HttpStackError::Timeout { .. }));
-        assert_eq!(
-            attempts.load(Ordering::SeqCst),
-            1,
-            "Timeout 不该被重试"
-        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1, "Timeout 不该被重试");
     }
 
     #[tokio::test]
@@ -287,17 +269,15 @@ mod tests {
 
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
-        let inner = tower::service_fn(
-            move |_req: http::Request<toac::body::Body>| {
-                let attempts = attempts_clone.clone();
-                async move {
-                    attempts.fetch_add(1, Ordering::SeqCst);
-                    Err::<http::Response<()>, _>(HttpStackError::Transport(BoxError::new(
-                        io::Error::other("nope"),
-                    )))
-                }
-            },
-        );
+        let inner = tower::service_fn(move |_req: http::Request<toac::body::Body>| {
+            let attempts = attempts_clone.clone();
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<http::Response<()>, _>(HttpStackError::Transport(BoxError::new(
+                    io::Error::other("nope"),
+                )))
+            }
+        });
         let svc = TransportRetryLayer::new(2, Duration::from_millis(1)).layer(inner);
         let req = http::Request::builder()
             .uri("/")

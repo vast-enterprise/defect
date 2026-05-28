@@ -13,6 +13,7 @@
 pub mod error;
 pub mod event;
 pub mod fs;
+pub mod hooks;
 pub mod http;
 pub mod llm;
 pub mod policy;

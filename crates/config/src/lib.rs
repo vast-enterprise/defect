@@ -5,6 +5,7 @@
 
 #![warn(clippy::indexing_slicing, clippy::unwrap_used)]
 
+mod hooks;
 mod loader;
 mod mcp;
 mod overrides;
@@ -16,8 +17,10 @@ pub use types::{
     AnthropicConfigFile, BasePromptConfigFile, BashToolConfig, CapabilitiesConfig, CliConfig,
     CliOverrides, ConfigError, ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigWarning,
     DeepSeekConfigFile, EffectiveConfig, FetchFormat, FetchToolConfig, FsToolConfig,
-    HttpClientConfig, HttpProxyConfig, HttpProxyMode, HttpProxySettings, LoadConfigOptions,
-    LoadedConfig, McpConfig, McpRemoteServerConfig, McpServerConfig, McpStdioServerConfig,
-    OpenAiConfigFile, OtlpTracingConfig, PromptConfigFile, ProviderCapabilityOverrides,
-    ProviderConfigs, ProviderKind, SandboxConfig, SandboxMode, ToolsConfig, TracingConfig,
+    HookCommandSpec, HookEntry, HookHandlerSpec, HookMatcher, HookPromptRender, HookPromptSpec,
+    HookShellKind, HooksConfig, HttpClientConfig, HttpProxyConfig, HttpProxyMode,
+    HttpProxySettings, LoadConfigOptions, LoadedConfig, McpConfig, McpRemoteServerConfig,
+    McpServerConfig, McpStdioServerConfig, OpenAiConfigFile, OtlpTracingConfig, PromptConfigFile,
+    ProviderCapabilityOverrides, ProviderConfigs, ProviderKind, SandboxConfig, SandboxMode,
+    ToolsConfig, TracingConfig,
 };

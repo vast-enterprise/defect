@@ -325,10 +325,7 @@ impl std::fmt::Display for SessionInitError {
                 )?;
                 writeln!(f)?;
                 writeln!(f, "To fix this, choose one of:")?;
-                writeln!(
-                    f,
-                    "  1. Override per-provider in your config:"
-                )?;
+                writeln!(f, "  1. Override per-provider in your config:")?;
                 writeln!(f, "       [providers.{provider}.capabilities.{capability}]")?;
                 writeln!(f, "       mode = \"local\"")?;
                 writeln!(
@@ -337,7 +334,10 @@ impl std::fmt::Display for SessionInitError {
                 )?;
                 writeln!(f, "       [capabilities.{capability}]")?;
                 writeln!(f, "       mode = \"local\"")?;
-                writeln!(f, "       [providers.<hosted-supported>.capabilities.{capability}]")?;
+                writeln!(
+                    f,
+                    "       [providers.<hosted-supported>.capabilities.{capability}]"
+                )?;
                 write!(f, "       mode = \"delegate\"")
             }
         }

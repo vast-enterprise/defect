@@ -22,13 +22,13 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
 
-use defect_http::{HttpStack, HttpStackConfig, HttpStackError, build_http_stack};
 use crate::protocol::anthropic_messages;
 use crate::wire::anthropic::{
     components as wire,
     operations::v1::{messages, models},
     security,
 };
+use defect_http::{HttpStack, HttpStackConfig, HttpStackError, build_http_stack};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";

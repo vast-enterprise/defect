@@ -141,9 +141,12 @@ mod tests {
 
     #[test]
     fn delegate_with_supported_provider_enables_hosted() {
-        let resolved =
-            ResolvedSessionCapabilities::resolve(config(SearchCapabilityMode::Delegate), hosted(true), "anthropic")
-                .expect("should succeed");
+        let resolved = ResolvedSessionCapabilities::resolve(
+            config(SearchCapabilityMode::Delegate),
+            hosted(true),
+            "anthropic",
+        )
+        .expect("should succeed");
         assert!(resolved.hosted.search);
         assert!(!resolved.register_local_search);
     }

@@ -337,8 +337,8 @@ fn encode_request_splits_tool_use_and_tool_result_into_separate_messages() {
 
     // 期望 wire messages：
     //   [0] assistant (text "calling" + tool_calls=[call_1])
-    //   [1] user      (text "see results below")
-    //   [2] tool      (tool_call_id=call_1, content="hello")
+    //   [1] tool      (tool_call_id=call_1, content="hello")
+    //   [2] user      (text "see results below")
     assert_eq!(w.messages.len(), 3);
 
     let wire::ChatCompletionRequestMessage::ChatCompletionRequestAssistantMessage(asst) =
@@ -365,7 +365,18 @@ fn encode_request_splits_tool_use_and_tool_result_into_separate_messages() {
         serde_json::from_str(&call.function.arguments).expect("valid JSON");
     assert_eq!(parsed.get("path"), Some(&json!("/tmp/a")));
 
-    let wire::ChatCompletionRequestMessage::ChatCompletionRequestUserMessage(user) = &w.messages[1]
+    let wire::ChatCompletionRequestMessage::ChatCompletionRequestToolMessage(tool_msg) =
+        &w.messages[1]
+    else {
+        panic!("expected tool");
+    };
+    assert_eq!(tool_msg.tool_call_id, "call_1");
+    assert!(matches!(
+        &tool_msg.content,
+        wire::ChatCompletionRequestToolMessageContent::ChatCompletionRequestToolMessageContentVariant0(s) if s == "hello"
+    ));
+
+    let wire::ChatCompletionRequestMessage::ChatCompletionRequestUserMessage(user) = &w.messages[2]
     else {
         panic!("expected user");
     };
@@ -377,17 +388,6 @@ fn encode_request_splits_tool_use_and_tool_result_into_separate_messages() {
         panic!("expected text part");
     };
     assert_eq!(t.text, "see results below");
-
-    let wire::ChatCompletionRequestMessage::ChatCompletionRequestToolMessage(tool_msg) =
-        &w.messages[2]
-    else {
-        panic!("expected tool");
-    };
-    assert_eq!(tool_msg.tool_call_id, "call_1");
-    assert!(matches!(
-        &tool_msg.content,
-        wire::ChatCompletionRequestToolMessageContent::ChatCompletionRequestToolMessageContentVariant0(s) if s == "hello"
-    ));
 }
 
 #[test]

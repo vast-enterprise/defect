@@ -48,6 +48,7 @@ clap = { version = "4", features = ["derive", "env"] }
 
 # 并发数据结构
 dashmap = "6"
+arc-swap = "1"
 
 # 协议与外部 SDK
 agent-client-protocol = "0.12"

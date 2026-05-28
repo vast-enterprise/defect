@@ -162,6 +162,123 @@ pub struct EffectiveConfig {
     pub tracing: TracingConfig,
     pub mcp: McpConfig,
     pub http: HttpClientConfig,
+    /// 解析后的 hook 配置。详见 `docs/internal/hooks.md`。
+    pub hooks: HooksConfig,
+}
+
+// ---------------------------------------------------------------------------
+// Hooks
+// ---------------------------------------------------------------------------
+
+/// hook 系统的有效配置：按事件类别分桶，组内按声明顺序执行 pipeline。
+///
+/// 详见 `docs/internal/hooks.md` §3.4 / §5。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HooksConfig {
+    pub session_start: Vec<HookEntry>,
+    pub user_prompt_submit: Vec<HookEntry>,
+    pub pre_tool_use: Vec<HookEntry>,
+    pub post_tool_use: Vec<HookEntry>,
+    pub post_tool_use_failure: Vec<HookEntry>,
+}
+
+impl HooksConfig {
+    /// 该配置上是否声明过任何 hook。`false` 时 CLI 装配可直接走 noop 引擎。
+    pub fn is_empty(&self) -> bool {
+        self.session_start.is_empty()
+            && self.user_prompt_submit.is_empty()
+            && self.pre_tool_use.is_empty()
+            && self.post_tool_use.is_empty()
+            && self.post_tool_use_failure.is_empty()
+    }
+}
+
+/// 单条 hook 配置：matcher + handler + 来源层。
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookEntry {
+    pub matcher: HookMatcher,
+    pub handler: HookHandlerSpec,
+    /// 该 hook 的来源层。Phase G 的 trust gating 用它判断是否需要显式信任。
+    pub source: ConfigSource,
+}
+
+/// 事件 matcher。空字段 = 匹配该事件下所有触发；详见
+/// `docs/internal/hooks.md` §5.3。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct HookMatcher {
+    /// 工具名精确匹配（仅 `*ToolUse*` 事件）。
+    pub tool: Option<String>,
+    /// 工具名 glob 匹配（仅 `*ToolUse*` 事件）。
+    pub tool_glob: Option<String>,
+    /// `SafetyClass` 过滤（仅 `PreToolUse`）；任一匹配即命中。空 vec = 不过滤。
+    pub safety: Vec<defect_agent::tool::SafetyClass>,
+}
+
+/// Handler 规格——v0 三种形态。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HookHandlerSpec {
+    /// 进程内 Rust handler，按名字引用 `crate::hooks::builtin::registry()`。
+    Builtin { name: String },
+    /// 外部命令。详见 `docs/internal/hooks.md` §4.2。
+    Command(HookCommandSpec),
+    /// 调用 LLM。详见 `docs/internal/hooks.md` §4.3。
+    Prompt(HookPromptSpec),
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HookCommandSpec {
+    /// 直接 spawn argv，不经任何 shell。
+    Argv {
+        argv: Vec<String>,
+        /// Windows 平台覆盖；`None` 时 fall back 到 `argv`。
+        argv_windows: Option<Vec<String>>,
+        cwd: Option<PathBuf>,
+        env: BTreeMap<String, String>,
+        timeout_sec: Option<u64>,
+    },
+    /// 显式 shell。`shell` 字段必须存在，引擎不再"自动选 sh"。
+    Shell {
+        shell: HookShellKind,
+        command: String,
+        cwd: Option<PathBuf>,
+        env: BTreeMap<String, String>,
+        timeout_sec: Option<u64>,
+    },
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HookShellKind {
+    Sh,
+    Bash,
+    Pwsh,
+    Cmd,
+    /// `program` + 透传 `args`（不含 command 本身）。
+    Custom {
+        program: String,
+        args: Vec<String>,
+    },
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HookPromptSpec {
+    /// `None` = 用 session 默认 model。
+    pub model: Option<String>,
+    pub system: String,
+    pub render: HookPromptRender,
+    pub timeout_sec: Option<u64>,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HookPromptRender {
+    /// 直接喂 `HookEvent` 的 JSON 序列化结果。
+    Json,
+    /// 用 handlebars 模板从 event 字段取值。
+    Template { template: String },
 }
 
 /// 全局 capability 配置入口。

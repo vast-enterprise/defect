@@ -176,15 +176,16 @@ async fn run_fetch(
     // Pre-validate URL scheme so non-http/https fail with InvalidArgs (§10 #7),
     // not Execution.
     if let Err(reason) = validate_scheme(&parsed.url) {
-        return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, reason),
-        )));
+        return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            reason,
+        ))));
     }
 
     let format = parsed.format.unwrap_or(config.default_format);
     let requested_timeout = parsed.timeout_secs.unwrap_or(config.default_timeout_secs);
-    let timeout_clamped_from = (requested_timeout > config.max_timeout_secs)
-        .then_some(requested_timeout);
+    let timeout_clamped_from =
+        (requested_timeout > config.max_timeout_secs).then_some(requested_timeout);
     let timeout_secs = requested_timeout.min(config.max_timeout_secs).max(1);
 
     let request = HttpRequest {
@@ -226,9 +227,7 @@ fn map_http_error(err: HttpClientError, timeout_secs: u32) -> ToolEvent {
             std::io::Error::other(format!("too many redirects ({n})")),
         )),
         HttpClientError::Transport(source) => ToolError::Execution(source),
-        other => ToolError::Execution(BoxError::new(std::io::Error::other(format!(
-            "{other}"
-        )))),
+        other => ToolError::Execution(BoxError::new(std::io::Error::other(format!("{other}")))),
     };
     ToolEvent::Failed(mapped)
 }
@@ -254,9 +253,9 @@ fn finalize(
     let mut text = match render_result {
         Ok(t) => t,
         Err(e) => {
-            return ToolEvent::Failed(ToolError::Execution(BoxError::new(
-                std::io::Error::other(e),
-            )));
+            return ToolEvent::Failed(ToolError::Execution(BoxError::new(std::io::Error::other(
+                e,
+            ))));
         }
     };
 

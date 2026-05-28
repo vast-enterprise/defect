@@ -44,7 +44,13 @@ impl Harness {
     fn ctx(&self) -> ToolContext<'_> {
         let shell: Arc<dyn ShellBackend> = Arc::new(NoopShellBackend);
         let http: Arc<dyn HttpClient> = Arc::new(NoopHttpClient);
-        ToolContext::new(&self.root, self.cancel.clone(), self.fs.clone(), shell, http)
+        ToolContext::new(
+            &self.root,
+            self.cancel.clone(),
+            self.fs.clone(),
+            shell,
+            http,
+        )
     }
 
     fn write_file(&self, name: &str, bytes: impl AsRef<[u8]>) {

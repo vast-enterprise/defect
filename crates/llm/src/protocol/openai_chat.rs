@@ -303,20 +303,8 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
         }
     }
 
-    // OpenAI 的 tool message 必须独立成条 —— 不能跟 user 文本混。
-    // 时序约定：user 文本 / 图片在前，tool 结果在后（模型把 tool 结果
-    // 视为系统态消息，不该影响用户当前发问）。
-    if !user_parts.is_empty() {
-        out.push(wire::ChatCompletionRequestMessage::ChatCompletionRequestUserMessage(
-            wire::ChatCompletionRequestUserMessage {
-                content: wire::ChatCompletionRequestUserMessageContent::ChatCompletionRequestUserMessageContentVariant1(
-                    user_parts,
-                ),
-                role: wire::ChatCompletionRequestUserMessageRole::User,
-                name: None,
-            },
-        ));
-    }
+    // OpenAI / LiteLLM 要求：assistant(tool_calls) 之后必须立刻跟对应的
+    // tool messages；不能先插入下一条 user message。
     for (tool_use_id, text) in tool_results {
         out.push(wire::ChatCompletionRequestMessage::ChatCompletionRequestToolMessage(
             wire::ChatCompletionRequestToolMessage {
@@ -325,6 +313,17 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
                     text,
                 ),
                 tool_call_id: tool_use_id,
+            },
+        ));
+    }
+    if !user_parts.is_empty() {
+        out.push(wire::ChatCompletionRequestMessage::ChatCompletionRequestUserMessage(
+            wire::ChatCompletionRequestUserMessage {
+                content: wire::ChatCompletionRequestUserMessageContent::ChatCompletionRequestUserMessageContentVariant1(
+                    user_parts,
+                ),
+                role: wire::ChatCompletionRequestUserMessageRole::User,
+                name: None,
             },
         ));
     }

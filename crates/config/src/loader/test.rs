@@ -6,10 +6,11 @@ use tempfile::TempDir;
 use crate::loader::{dotenv_updates_from_str, load_config};
 use crate::overrides::{merge_toml_values, parse_cli_override};
 use crate::types::{
-    CliOverrides, ConfigError, ConfigWarning, HttpProxyMode, LoadConfigOptions,
-    PROJECT_LOCAL_CONFIG_RELATIVE, ProviderKind,
+    CliOverrides, ConfigError, ConfigSource, ConfigWarning, HookCommandSpec, HookHandlerSpec,
+    HttpProxyMode, LoadConfigOptions, PROJECT_LOCAL_CONFIG_RELATIVE, ProviderKind,
 };
 use defect_agent::session::SearchCapabilityMode;
+use defect_agent::tool::SafetyClass;
 
 fn test_options(root: &TempDir) -> LoadConfigOptions {
     LoadConfigOptions {
@@ -722,7 +723,10 @@ mode = "local"
         .capabilities
         .merge_into(loaded.effective.capabilities)
         .to_session_capabilities();
-    assert_eq!(anthropic_session.search.mode, SearchCapabilityMode::Delegate);
+    assert_eq!(
+        anthropic_session.search.mode,
+        SearchCapabilityMode::Delegate
+    );
 
     // DeepSeek 覆写为 local，应当压过全局 delegate。
     let deepseek_session = loaded
@@ -917,4 +921,211 @@ items = ["cli"]
         base.get("items").and_then(toml::Value::as_array),
         Some(&vec![toml::Value::String("cli".to_string())])
     );
+}
+
+// ---------------------------------------------------------------------------
+// hooks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parses_hooks_section_full_shape() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[[hooks.session_start]]
+handler = { type = "builtin", name = "preload-readme" }
+
+[[hooks.user_prompt_submit]]
+handler = { type = "builtin", name = "skill-router" }
+
+[[hooks.pre_tool_use]]
+match = { tool = "bash", safety = ["destructive"] }
+handler = { type = "command", argv = ["./scripts/audit.sh"], timeout_sec = 10 }
+
+[[hooks.pre_tool_use]]
+match = { tool_glob = "fs.*" }
+handler = { type = "command", shell = "bash", command = "echo hi" }
+
+[[hooks.post_tool_use]]
+handler = { type = "builtin", name = "tracing-audit" }
+
+[[hooks.post_tool_use_failure]]
+handler = { type = "prompt", system = "diagnose", render = { type = "json" }, timeout_sec = 5 }
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    let hooks = &loaded.effective.hooks;
+
+    assert_eq!(hooks.session_start.len(), 1);
+    assert!(matches!(
+        &hooks.session_start[0].handler,
+        HookHandlerSpec::Builtin { name } if name == "preload-readme"
+    ));
+
+    assert_eq!(hooks.pre_tool_use.len(), 2);
+    let first = &hooks.pre_tool_use[0];
+    assert_eq!(first.matcher.tool.as_deref(), Some("bash"));
+    assert_eq!(first.matcher.safety, vec![SafetyClass::Destructive]);
+    match &first.handler {
+        HookHandlerSpec::Command(HookCommandSpec::Argv {
+            argv, timeout_sec, ..
+        }) => {
+            assert_eq!(argv, &vec!["./scripts/audit.sh".to_string()]);
+            assert_eq!(*timeout_sec, Some(10));
+        }
+        other => panic!("expected argv command, got {other:?}"),
+    }
+
+    let second = &hooks.pre_tool_use[1];
+    assert!(matches!(
+        &second.handler,
+        HookHandlerSpec::Command(HookCommandSpec::Shell { .. })
+    ));
+
+    assert_eq!(hooks.post_tool_use.len(), 1);
+    assert_eq!(hooks.post_tool_use_failure.len(), 1);
+    assert!(matches!(
+        &hooks.post_tool_use_failure[0].handler,
+        HookHandlerSpec::Prompt(_)
+    ));
+
+    assert_eq!(hooks.session_start[0].source, ConfigSource::User);
+
+    // hooks.* 段不应触发 UnknownKey warning
+    let unknowns: Vec<_> = loaded
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            ConfigWarning::UnknownKey { key, .. } if key.starts_with("hooks") => Some(key.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        unknowns.is_empty(),
+        "expected no UnknownKey warnings under hooks.*, got {unknowns:?}"
+    );
+}
+
+#[test]
+fn hooks_append_across_layers_in_declaration_order() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[[hooks.pre_tool_use]]
+handler = { type = "builtin", name = "user-hook" }
+"#,
+    );
+    write(
+        &repo.join(".defect/config.toml"),
+        r#"
+[[hooks.pre_tool_use]]
+handler = { type = "builtin", name = "project-hook" }
+"#,
+    );
+    write(
+        &repo.join(PROJECT_LOCAL_CONFIG_RELATIVE),
+        r#"
+[[hooks.pre_tool_use]]
+handler = { type = "builtin", name = "local-hook" }
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    let names: Vec<&str> = loaded
+        .effective
+        .hooks
+        .pre_tool_use
+        .iter()
+        .map(|e| match &e.handler {
+            HookHandlerSpec::Builtin { name } => name.as_str(),
+            _ => "<other>",
+        })
+        .collect();
+    assert_eq!(names, vec!["user-hook", "project-hook", "local-hook"]);
+
+    let sources: Vec<ConfigSource> = loaded
+        .effective
+        .hooks
+        .pre_tool_use
+        .iter()
+        .map(|e| e.source)
+        .collect();
+    assert_eq!(
+        sources,
+        vec![
+            ConfigSource::User,
+            ConfigSource::Project,
+            ConfigSource::ProjectLocal,
+        ]
+    );
+}
+
+#[test]
+fn hooks_dedupe_identical_entries_across_layers() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    let body = r#"
+[[hooks.post_tool_use]]
+handler = { type = "builtin", name = "tracing-audit" }
+"#;
+    write(&tmp.path().join("xdg/defect/config.toml"), body);
+    write(&repo.join(".defect/config.toml"), body);
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    assert_eq!(loaded.effective.hooks.post_tool_use.len(), 1);
+}
+
+#[test]
+fn hooks_disable_removes_upstream_entry() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[[hooks.post_tool_use]]
+handler = { type = "builtin", name = "tracing-audit" }
+"#,
+    );
+    write(
+        &repo.join(PROJECT_LOCAL_CONFIG_RELATIVE),
+        r#"
+[[hooks.disable]]
+event = "post_tool_use"
+handler = { type = "builtin", name = "tracing-audit" }
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    assert!(loaded.effective.hooks.post_tool_use.is_empty());
+}
+
+#[test]
+fn hooks_invalid_command_handler_errors_loud() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[[hooks.pre_tool_use]]
+handler = { type = "command", argv = [], timeout_sec = 1 }
+"#,
+    );
+
+    let err = load_config(test_options(&tmp)).expect_err("expected invalid");
+    match err {
+        ConfigError::Invalid { message, .. } => {
+            assert!(message.contains("argv"), "unexpected message: {message}");
+        }
+        other => panic!("expected ConfigError::Invalid, got {other:?}"),
+    }
 }

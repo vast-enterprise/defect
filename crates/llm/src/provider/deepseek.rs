@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 use tower::Service;
 
 use super::openai::{OpenAiConfig, OpenAiProvider};
-use defect_http::HttpStackConfig;
 use crate::protocol::deepseek_chat;
+use defect_http::HttpStackConfig;
 
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 const API_KEY_ENV: &str = "DEEPSEEK_API_KEY";

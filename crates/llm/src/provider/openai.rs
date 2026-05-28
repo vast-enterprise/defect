@@ -25,13 +25,13 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
 
-use defect_http::{HttpStack, HttpStackConfig, HttpStackError, build_http_stack};
 use crate::protocol::openai_chat;
 use crate::wire::openai::{
     components as wire,
     operations::{chat::completions as chat_completions, models},
     security,
 };
+use defect_http::{HttpStack, HttpStackConfig, HttpStackError, build_http_stack};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 const API_KEY_ENV: &str = "OPENAI_API_KEY";

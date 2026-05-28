@@ -38,6 +38,7 @@ use tracing::Instrument;
 use crate::error::BoxError;
 use crate::event::PermissionResolution;
 use crate::fs::FsBackend;
+use crate::hooks::{HookCtx, HookEngine, HookEvent, NoopHookEngine, SessionSource};
 use crate::http::{HttpClient, NoopHttpClient};
 use crate::llm::{
     HostedCapabilities, LlmProvider, ModelInfo, ProviderError, ProviderErrorKind, ProviderInfo,
@@ -72,6 +73,10 @@ pub struct DefaultAgentCore {
     ///
     /// [`HttpClientConfig`]: defect_config::HttpClientConfig
     http: Arc<dyn HttpClient>,
+    /// 进程级 hook 引擎。所有 session 共享——hook 配置走全局 + per-session
+    /// matcher（`docs/internal/hooks.md` §5）。CLI 入口装配；不显式注入时走
+    /// [`NoopHookEngine`]，等价"未配置 hook = 主循环不变"。
+    hook_engine: Arc<dyn HookEngine>,
     sessions: DashMap<SessionId, Arc<dyn Session>>,
 }
 
@@ -90,6 +95,7 @@ pub struct DefaultAgentCoreBuilder {
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
     http: Option<Arc<dyn HttpClient>>,
+    hook_engine: Option<Arc<dyn HookEngine>>,
     config: TurnConfig,
     capabilities: SessionCapabilitiesConfig,
 }
@@ -143,6 +149,13 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
+    /// 设置进程级 hook 引擎。未设置时退化为 [`NoopHookEngine`]——所有 hook
+    /// 调用直接返回 `Pass`，主循环行为与未引入 hook 系统时一致。
+    pub fn hook_engine(mut self, hook_engine: Arc<dyn HookEngine>) -> Self {
+        self.hook_engine = Some(hook_engine);
+        self
+    }
+
     /// # Panics
     /// 如果 `provider` 没有设置。
     pub fn build(self) -> DefaultAgentCore {
@@ -160,6 +173,9 @@ impl DefaultAgentCoreBuilder {
             http: self
                 .http
                 .unwrap_or_else(|| Arc::new(NoopHttpClient) as Arc<dyn HttpClient>),
+            hook_engine: self
+                .hook_engine
+                .unwrap_or_else(|| Arc::new(NoopHookEngine) as Arc<dyn HookEngine>),
             config: RwLock::new(self.config),
             capabilities: self.capabilities,
             sessions: DashMap::new(),
@@ -206,6 +222,19 @@ impl AgentCore for DefaultAgentCore {
                 self.process_tools.clone(),
             ));
 
+            // SessionStart hook（Sync 拦截，但 block 字段被引擎丢弃；
+            // 仅吸收 outcome.append 作为系统 prompt 后缀候选）。
+            let session_start_append = {
+                let cancel = CancellationToken::new();
+                let ctx = HookCtx::new(&id, &cwd, cancel);
+                let event = HookEvent::SessionStart {
+                    source: SessionSource::New,
+                    cwd: &cwd,
+                };
+                let outcome = self.hook_engine.fire(event, ctx).await;
+                outcome.append
+            };
+
             let session = Arc::new(DefaultSession {
                 id: id.clone(),
                 cwd,
@@ -226,6 +255,8 @@ impl AgentCore for DefaultAgentCore {
                 fs,
                 shell,
                 http: self.http.clone(),
+                hook_engine: self.hook_engine.clone(),
+                session_start_append,
             }) as Arc<dyn Session>;
 
             let session_info = SessionCreateInfo {
@@ -276,6 +307,21 @@ impl AgentCore for DefaultAgentCore {
                 None => Arc::new(StaticToolRegistry::empty()) as Arc<dyn ToolRegistry>,
             };
 
+            // SessionStart hook（resume 路径）。同 create_session：
+            // block 被引擎丢弃；仅取 append。
+            let session_start_append = {
+                let cancel = CancellationToken::new();
+                let ctx = HookCtx::new(&loaded.info.id, &loaded.info.cwd, cancel);
+                let event = HookEvent::SessionStart {
+                    source: SessionSource::Resume {
+                        session_id: &loaded.info.id,
+                    },
+                    cwd: &loaded.info.cwd,
+                };
+                let outcome = self.hook_engine.fire(event, ctx).await;
+                outcome.append
+            };
+
             let session = Arc::new(DefaultSession {
                 id: loaded.info.id.clone(),
                 cwd: loaded.info.cwd.clone(),
@@ -299,6 +345,8 @@ impl AgentCore for DefaultAgentCore {
                 fs,
                 shell,
                 http: self.http.clone(),
+                hook_engine: self.hook_engine.clone(),
+                session_start_append,
             }) as Arc<dyn Session>;
 
             self.sessions.insert(id, session.clone());
@@ -337,6 +385,17 @@ pub struct DefaultSession {
     /// 进程级 HTTP fetch 后端（多 session 共享，由 [`DefaultAgentCore`]
     /// 一份持有 / clone）。`fetch` 工具通过 [`crate::tool::ToolContext`] 拿它。
     http: Arc<dyn HttpClient>,
+    /// 进程级 hook 引擎（多 session 共享）。`run_turn` 装配
+    /// [`TurnRunner`] 时把 `&dyn HookEngine` 借给主循环。
+    hook_engine: Arc<dyn HookEngine>,
+    /// session 启动期 [`HookEvent::SessionStart`] hook 返回的 append 内容。
+    /// 由 [`AgentCore::create_session`] / `load_session` 在 SessionStart hook
+    /// 跑完之后填进来；目前**保留但暂不消费**——system_prompt 在 turn 装配
+    /// 时由 [`crate::session::prompt::resolve_system_prompt`] 计算，
+    /// SessionStart preload 的落地等系统 prompt 动态拼接落地后接入。
+    /// 详见 `docs/internal/hooks.md` §3.2 / §9.1。
+    #[allow(dead_code)]
+    session_start_append: Vec<agent_client_protocol::schema::ContentBlock>,
 }
 
 impl DefaultSession {}
@@ -513,6 +572,8 @@ impl Session for DefaultSession {
                     shell: self.shell.clone(),
                     http: self.http.clone(),
                     hosted_capabilities: self.hosted_capabilities,
+                    hooks: self.hook_engine.as_ref(),
+                    session_id: &self.id,
                 };
 
                 runner.run(prompt).await

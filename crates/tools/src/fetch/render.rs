@@ -32,7 +32,9 @@ pub(super) fn render(
     if body.is_empty() {
         return Ok(String::new());
     }
-    let mime = content_type.map(parse_main_type).unwrap_or(MainType::Unknown);
+    let mime = content_type
+        .map(parse_main_type)
+        .unwrap_or(MainType::Unknown);
 
     match format {
         FetchFormat::Markdown => render_markdown(body, mime, content_type, config),
@@ -55,54 +57,40 @@ fn render_markdown(
                     "<!-- html_to_markdown disabled in config; returning raw HTML -->\n{html}"
                 ));
             }
-            htmd::convert(html)
-                .map_err(|e| format!("html-to-markdown conversion failed: {e}"))
+            htmd::convert(html).map_err(|e| format!("html-to-markdown conversion failed: {e}"))
         }
         MainType::Text => Ok(body_as_str(body)?.to_string()),
-        MainType::Binary | MainType::Unknown => {
-            Err(format_unsupported("markdown", raw_ct))
-        }
+        MainType::Binary | MainType::Unknown => Err(format_unsupported("markdown", raw_ct)),
     }
 }
 
-fn render_html(
-    body: &[u8],
-    mime: MainType,
-    raw_ct: Option<&str>,
-) -> Result<String, String> {
+fn render_html(body: &[u8], mime: MainType, raw_ct: Option<&str>) -> Result<String, String> {
     match mime {
         MainType::Html => Ok(body_as_str(body)?.to_string()),
         _ => Err(format!("not HTML: {}", raw_ct.unwrap_or("<unset>"))),
     }
 }
 
-fn render_text(
-    body: &[u8],
-    mime: MainType,
-    raw_ct: Option<&str>,
-) -> Result<String, String> {
+fn render_text(body: &[u8], mime: MainType, raw_ct: Option<&str>) -> Result<String, String> {
     match mime {
         MainType::Html => {
             let html = body_as_str(body)?;
             // 简易"去标签"：把 HTML 转成 markdown 后再剥掉残留 markdown 语法
             // 本来就不是富文本，能给出可读 plain text 即可。
-            let md = htmd::convert(html)
-                .map_err(|e| format!("html-to-text conversion failed: {e}"))?;
+            let md =
+                htmd::convert(html).map_err(|e| format!("html-to-text conversion failed: {e}"))?;
             Ok(strip_markdown(&md))
         }
         MainType::Text => Ok(body_as_str(body)?.to_string()),
-        MainType::Binary | MainType::Unknown => {
-            Err(format!(
-                "binary content-type: {}",
-                raw_ct.unwrap_or("<unset>")
-            ))
-        }
+        MainType::Binary | MainType::Unknown => Err(format!(
+            "binary content-type: {}",
+            raw_ct.unwrap_or("<unset>")
+        )),
     }
 }
 
 fn body_as_str(body: &[u8]) -> Result<&str, String> {
-    std::str::from_utf8(body)
-        .map_err(|e| format!("response body is not valid UTF-8: {e}"))
+    std::str::from_utf8(body).map_err(|e| format!("response body is not valid UTF-8: {e}"))
 }
 
 fn format_unsupported(format: &str, raw_ct: Option<&str>) -> String {
@@ -122,7 +110,12 @@ enum MainType {
 
 fn parse_main_type(content_type: &str) -> MainType {
     // 取 ';' 之前的主类型，去空格并小写。
-    let head = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let head = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     if head == "text/html" || head == "application/xhtml+xml" {
         return MainType::Html;
     }

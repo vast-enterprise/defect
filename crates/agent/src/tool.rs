@@ -69,8 +69,13 @@ pub struct ToolCallDescription {
 ///
 /// 仅作为**提示**喂给外部 sandbox policy；最终的 Allow / Deny / Ask
 /// 决策由 policy（结合用户配置、历史授权等）作出，trait 自身不做策略。
+///
+/// `serde` 形态使用 `snake_case`（`read_only` / `mutating` / `destructive` /
+/// `network`），方便 `defect-config` 在 hook matcher 等场景里直接从 TOML
+/// 反序列化。
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SafetyClass {
     /// 纯读：列目录、读文件、查询元数据。
     ReadOnly,

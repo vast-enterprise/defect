@@ -93,10 +93,7 @@ pub enum HttpClientError {
 /// - HTTP status 任何值（含 4xx/5xx）都视为成功（[`HttpResponse::status`]
 ///   照实带回），只有 transport / decode 失败才返回 `Err`。
 pub trait HttpClient: Send + Sync {
-    fn fetch(
-        &self,
-        req: HttpRequest,
-    ) -> BoxFuture<'_, Result<HttpResponse, HttpClientError>>;
+    fn fetch(&self, req: HttpRequest) -> BoxFuture<'_, Result<HttpResponse, HttpClientError>>;
 }
 
 /// 测试 / `echo` provider 的占位实现。任何 `fetch` 调用都返回
@@ -105,10 +102,7 @@ pub trait HttpClient: Send + Sync {
 pub struct NoopHttpClient;
 
 impl HttpClient for NoopHttpClient {
-    fn fetch(
-        &self,
-        _req: HttpRequest,
-    ) -> BoxFuture<'_, Result<HttpResponse, HttpClientError>> {
+    fn fetch(&self, _req: HttpRequest) -> BoxFuture<'_, Result<HttpResponse, HttpClientError>> {
         Box::pin(async move {
             Err(HttpClientError::Transport(BoxError::new(
                 std::io::Error::other("NoopHttpClient: HTTP fetch not configured"),

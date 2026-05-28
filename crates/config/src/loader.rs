@@ -8,6 +8,7 @@ use defect_agent::llm::SamplingParams;
 use defect_agent::session::{BasePromptConfig, PromptConfig, TurnConfig, TurnRequestLimit};
 use toml::Value as TomlValue;
 
+use crate::hooks::{LayerHooks, merge_layer_hooks, parse_layer_hooks};
 use crate::mcp::{is_known_mcp_key, is_known_mcp_prefix, resolve_mcp_config};
 use crate::overrides::{
     build_cli_layer, merge_toml_values, remove_toml_path, remove_toml_table_key,
@@ -18,10 +19,10 @@ use crate::types::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_BASH_MAX_TIMEOUT_MS, DEFAULT_BASH_TIMEOUT_MS,
     DEFAULT_DEEPSEEK_MODEL, DEFAULT_ECHO_MODEL, DEFAULT_FS_READ_LIMIT, DEFAULT_FS_READ_MAX_LIMIT,
     DEFAULT_OPENAI_MODEL, DeepSeekConfigFile, EffectiveConfig, FetchToolConfig, FsToolConfig,
-    HttpClientConfig, HttpProxyConfig, HttpProxySettings, LoadConfigOptions, LoadedConfig,
-    OpenAiConfigFile, OtlpTracingConfig, PROJECT_CONFIG_RELATIVE, PROJECT_LOCAL_CONFIG_RELATIVE,
-    PromptConfigFile, ProviderCapabilityOverrides, ProviderConfigs, ProviderKind, SandboxConfig,
-    SandboxMode, ToolsConfig, TracingConfig, USER_CONFIG_RELATIVE,
+    HooksConfig, HttpClientConfig, HttpProxyConfig, HttpProxySettings, LoadConfigOptions,
+    LoadedConfig, OpenAiConfigFile, OtlpTracingConfig, PROJECT_CONFIG_RELATIVE,
+    PROJECT_LOCAL_CONFIG_RELATIVE, PromptConfigFile, ProviderCapabilityOverrides, ProviderConfigs,
+    ProviderKind, SandboxConfig, SandboxMode, ToolsConfig, TracingConfig, USER_CONFIG_RELATIVE,
 };
 use defect_agent::session::SearchCapabilityConfig;
 
@@ -57,12 +58,18 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
 
     let mut merged = defaults;
     let mut base_prompt: Option<BasePromptConfigFile> = None;
+    // hooks 不能走"先合并再 decode"——数组合并语义是 append+dedupe，详见
+    // `crates/config/src/hooks.rs` 顶部注释。每层先单独抽取，最后 merge_layer_hooks。
+    let mut hook_layers: Vec<LayerHooks> = Vec::new();
 
     if let Some((user_layer, layer_warnings)) = load_optional_layer(ConfigSource::User, user_path)?
     {
         warnings.extend(layer_warnings);
         if let Some(candidate) = extract_base_prompt(&user_layer.value, user_layer.path.as_ref()) {
             base_prompt = Some(candidate);
+        }
+        if let Some(path) = user_layer.path.clone() {
+            hook_layers.push(parse_layer_hooks(path, ConfigSource::User, &user_layer.value)?);
         }
         merge_toml_values(&mut merged, &user_layer.value);
         layers.push(user_layer);
@@ -80,6 +87,9 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
         let (value, layer_warnings) =
             sanitize_shared_project_layer(project_layer.path.as_ref(), &project_layer.value);
         warnings.extend(layer_warnings);
+        if let Some(path) = project_layer.path.clone() {
+            hook_layers.push(parse_layer_hooks(path, ConfigSource::Project, &value)?);
+        }
         merge_toml_values(&mut merged, &value);
         layers.push(ConfigLayerEntry {
             value,
@@ -97,6 +107,13 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
         ) {
             base_prompt = Some(candidate);
         }
+        if let Some(path) = project_local_layer.path.clone() {
+            hook_layers.push(parse_layer_hooks(
+                path,
+                ConfigSource::ProjectLocal,
+                &project_local_layer.value,
+            )?);
+        }
         merge_toml_values(&mut merged, &project_local_layer.value);
         layers.push(project_local_layer);
     }
@@ -105,6 +122,9 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
         if let Some(candidate) = extract_base_prompt(&cli_layer.value, cli_layer.path.as_ref()) {
             base_prompt = Some(candidate);
         }
+        // CLI override 走 dotted-key 形态，无法表达 [[hooks.*]] 数组——hook 不
+        // 能从命令行拼出来。这里不调 parse_layer_hooks，避免误以为 cli 层会有
+        // hook 进入。
         merge_toml_values(&mut merged, &cli_layer.value);
         layers.push(cli_layer);
     }
@@ -116,10 +136,12 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
             path: PathBuf::from("<merged>"),
             message: err.to_string(),
         })?;
+    let hooks = merge_layer_hooks(hook_layers);
     let effective = build_effective_config(
         Path::new("<merged>"),
         parsed,
         base_prompt.unwrap_or_default(),
+        hooks,
     )?;
     collect_inactive_section_warnings(&merged, &effective.capabilities, &mut warnings);
 
@@ -162,6 +184,7 @@ fn build_effective_config(
     path: &Path,
     config: ConfigToml,
     base_prompt: BasePromptConfigFile,
+    hooks: HooksConfig,
 ) -> Result<EffectiveConfig, ConfigError> {
     // `base_prompt` 的最终选择在 `load_config()` 中完成，这里只保留 typed decode
     // 对 schema 的约束，并显式消费字段避免它与 raw-layer 解析脱节。
@@ -384,6 +407,7 @@ fn build_effective_config(
                 })
                 .unwrap_or_default(),
         },
+        hooks,
     })
 }
 
@@ -661,6 +685,7 @@ fn is_known_config_key(key: &str) -> bool {
             | "http.proxy.no_proxy"
     ) || is_known_mcp_key(key)
         || is_known_tools_search_key(key)
+        || is_known_hooks_key(key)
 }
 
 /// `[tools.search]` 段的 schema 在 P1 还没敲定（本地 `search` tool 实现
@@ -669,6 +694,14 @@ fn is_known_config_key(key: &str) -> bool {
 /// 时由 `InactiveSection` warning 提示用户该段实际不会生效。
 fn is_known_tools_search_key(key: &str) -> bool {
     key == "tools.search" || key.starts_with("tools.search.")
+}
+
+/// `[hooks]` 段是数组+联合体的混合形态——逐键枚举意义不大，且字段会随
+/// `HookHandlerSpec`/`HookCommandSpec` 演进。整段视为已知，hook 自己有专门的
+/// 解析器（[`crate::hooks::parse_layer_hooks`]）做 schema 校验，schema 错误
+/// 直接走 `ConfigError::Invalid` 而不是 `UnknownKey` warning。
+fn is_known_hooks_key(key: &str) -> bool {
+    key == "hooks" || key.starts_with("hooks.")
 }
 
 fn is_known_config_prefix(key: &str) -> bool {
@@ -702,6 +735,7 @@ fn is_known_config_prefix(key: &str) -> bool {
             | "http"
             | "http.proxy"
     ) || is_known_mcp_prefix(key)
+        || is_known_hooks_key(key)
 }
 
 fn resolve_user_config_path(opts: &LoadConfigOptions) -> Result<PathBuf, ConfigError> {
