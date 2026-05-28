@@ -87,8 +87,10 @@ ToolSchema {
             },
             "pattern": {
                 "type": "string",
-                "description": "In `content` mode: a Rust regex (RE2 syntax). \
-                                In `files` mode: a glob pattern (e.g. `**/*.rs`, `src/**/foo.{ts,tsx}`)."
+                "description": "**Required.** What to search for. \
+                                In `content` mode (default): a Rust regex (RE2 syntax) — e.g. `\"pub struct \"`, `\"TODO|FIXME\"`. \
+                                In `files` mode: a glob — e.g. `\"**/*.rs\"`, `\"src/**/foo.{ts,tsx}\"`. \
+                                To narrow which files content-mode scans, use `path_glob` (not this field)."
             },
             "path": {
                 "type": "string",
@@ -96,10 +98,11 @@ ToolSchema {
                                 Relative paths resolve against the session cwd. \
                                 Must resolve inside the workspace."
             },
-            "glob": {
+            "path_glob": {
                 "type": "string",
-                "description": "Content mode only. Optional glob restricting which files to scan \
-                                (e.g. `**/*.rs`). Ignored in `files` mode—use `pattern` directly."
+                "description": "Content mode only. Optional glob restricting **which files** to scan \
+                                (e.g. `**/*.rs`). This selects the file set; `pattern` is the regex \
+                                applied to their contents. Ignored in `files` mode—use `pattern` directly."
             },
             "case_insensitive": {
                 "type": "boolean",
@@ -143,7 +146,7 @@ ToolSchema {
 字段取舍：
 
 - **没有 `output_mode` (claw-code 的 `files_with_matches | count | content`)**——P1 单一输出形态：返回带 `path:line: match` 的文本块（content mode）或纯文件列表（files mode）。LLM 想"只要文件名"在 content 模式下也能从输出里抽。多 mode 的 `output_mode` 是真实压力大（context 爆炸）时再加的优化，P1 不做。
-- **没有 `file_type` (`type = "rust"` 这类)**——`glob` 字段足够覆盖（`**/*.rs`）。`file_type` 是 ripgrep 的语法糖，自己实装语言到扩展名的映射对 P1 是噪声。LLM 想限制语言写 glob 就行。
+- **没有 `file_type` (`type = "rust"` 这类)**——`path_glob` 字段足够覆盖（`**/*.rs`）。`file_type` 是 ripgrep 的语法糖，自己实装语言到扩展名的映射对 P1 是噪声。LLM 想限制语言写 glob 就行。
 - **没有 `offset`**——`offset + limit` 是 paging 形态；P1 只做 truncate。LLM 想翻页是较少见的真实场景；有真实压力再加。
 - **没有 `replace_all` / 修改类参数**——`search` 是只读检索，不做替换。「批量替换」走 `bash("sd ..." / "sed ...")` 或 LLM 显式 `read_file → edit_file`。
 - **`pattern` 字段是必填**——空 pattern 没有合理语义。`mode = files` + `pattern = "**/*"` 即"列出所有文件"，LLM 想这么干就显式写 glob。
@@ -343,7 +346,7 @@ hits.truncate(effective_head_limit);
 
 `build_globset` 处理大括号展开：`src/**/foo.{ts,tsx}` → 两个 glob。[`globset`] 的 `Glob::new` **不**自动展开大括号，得自己拆——claw-code 同款 `expand_braces`。
 
-> **注**：files mode 不消费 `args.glob`——`pattern` 已经是 glob，多一个 glob 字段语义重叠。schema 描述上明确"`glob` 仅 content mode 生效"。
+> **注**：files mode 不消费 `args.path_glob`——`pattern` 已经是 glob，多一个文件筛选 glob 字段语义重叠。schema 描述上明确"`path_glob` 仅 content mode 生效"。
 
 ### 6.5 大小 / 取消 / 上限
 
@@ -369,8 +372,8 @@ hits.truncate(effective_head_limit);
 ```rust
 struct SearchOutput {
     mode: SearchMode,                    // "content" | "files"
-    files_scanned: u64,                  // 走到 grep-searcher 的文件数（content）；走 glob 检测的（files）
-    files_matched: u32,                  // 至少有一个 match 的文件数（content）；命中 glob 的（files）
+    files_scanned: u64,                  // 走到 grep-searcher 的文件数（content）；走 path_glob 检测的（files）
+    files_matched: u32,                  // 至少有一个 match 的文件数（content）；命中 pattern glob 的（files）
     matches_total: u32,                  // 全部 match 行数（content 模式才有意义）
     truncated: bool,
     elapsed_ms: u64,
@@ -496,7 +499,7 @@ P1 **不**支持 `[providers.<p>.tools.search]`。`search` 是全局本地工具
 |---|---|---|
 | "搜一下 TODO" | `search { mode: content, pattern: "TODO" }` | 本工具核心场景 |
 | "找出所有 .rs 文件" | `search { mode: files, pattern: "**/*.rs" }` | files mode 直接覆盖 |
-| `rg -n "fn main" -t rust` | `search { mode: content, pattern: "fn main", glob: "**/*.rs" }` | 同上 |
+| `rg -n "fn main" -t rust` | `search { mode: content, pattern: "fn main", path_glob: "**/*.rs" }` | 同上 |
 | 跨进程 / 复杂 ripgrep flags（`-S`, `-w`, `-F`） | `bash("rg ...")` | P1 schema 不暴露这些；走 shell |
 | 替换文本 | `bash("sd ..." / "sed ...")` 或 LLM `read_file → edit_file` | search 是只读 |
 | 打开 / 读单个文件内容 | `fs.read_file` | search 给 path，read_file 给内容 |

@@ -59,10 +59,20 @@ pub(super) fn run(
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
         }
-        if let Some(g) = &glob
-            && !g.is_match(path)
-        {
-            continue;
+        // walker 给的是绝对路径；用户的 glob 通常是相对工作区写的
+        // （`crates/**/*.rs`），所以三种都试一下，命中即收。与 files
+        // 模式（[`super::files::run`]）保持一致。
+        if let Some(g) = &glob {
+            let rel = path.strip_prefix(cwd).unwrap_or(path);
+            let basename = path.file_name();
+            let matched = g.is_match(rel)
+                || g.is_match(path)
+                || basename
+                    .map(|n| g.is_match(std::path::Path::new(n)))
+                    .unwrap_or(false);
+            if !matched {
+                continue;
+            }
         }
 
         files_scanned = files_scanned.saturating_add(1);

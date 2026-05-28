@@ -181,11 +181,37 @@ async fn content_glob_restricts() {
     h.write("a.rs", "TODO rust\n");
     h.write("b.ts", "TODO ts\n");
     let tool = SearchTool::new();
-    let events = drive(tool.execute(json!({"pattern": "TODO", "glob": "**/*.rs"}), h.ctx())).await;
+    let events = drive(tool.execute(
+        json!({"pattern": "TODO", "path_glob": "**/*.rs"}),
+        h.ctx(),
+    ))
+    .await;
     let (fields,) = expect_completed(&events);
     let text = extract_text(fields);
     assert!(text.contains("a.rs"), "{text}");
     assert!(!text.contains("b.ts"), "{text}");
+}
+
+// -- #7b content glob with workspace-relative directory prefix
+//    AI 反馈过 `crates/**/*.rs` 完全 miss——回归这条。
+#[tokio::test]
+async fn content_glob_with_directory_prefix_matches_relative() {
+    let h = Harness::new();
+    h.write("crates/a/src/lib.rs", "pub struct Foo;\n");
+    h.write("crates/b/src/main.rs", "pub struct Bar;\n");
+    h.write("docs/note.md", "pub struct WrongFile;\n");
+    let tool = SearchTool::new();
+    let events = drive(tool.execute(
+        json!({"pattern": "pub struct ", "path_glob": "crates/**/*.rs"}),
+        h.ctx(),
+    ))
+    .await;
+    let (fields,) = expect_completed(&events);
+    let text = extract_text(fields);
+    assert!(text.contains("crates/a/src/lib.rs"), "{text}");
+    assert!(text.contains("crates/b/src/main.rs"), "{text}");
+    assert!(!text.contains("docs/note.md"), "{text}");
+    assert_eq!(extract_raw(fields)["matches_total"], 2);
 }
 
 // -- #8 gitignore default-on

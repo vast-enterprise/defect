@@ -84,8 +84,10 @@ impl SearchTool {
                     },
                     "pattern": {
                         "type": "string",
-                        "description": "In `content` mode: a Rust regex (RE2 syntax). \
-                                        In `files` mode: a glob pattern (e.g. `**/*.rs`, `src/**/foo.{ts,tsx}`)."
+                        "description": "**Required.** What to search for. \
+                                        In `content` mode (default): a Rust regex (RE2 syntax) — e.g. `\"pub struct \"`, `\"TODO|FIXME\"`. \
+                                        In `files` mode: a glob — e.g. `\"**/*.rs\"`, `\"src/**/foo.{ts,tsx}\"`. \
+                                        To narrow which files content-mode scans, use `path_glob` (not this field)."
                     },
                     "path": {
                         "type": "string",
@@ -93,10 +95,11 @@ impl SearchTool {
                                         Relative paths resolve against the session cwd. \
                                         Must resolve inside the workspace."
                     },
-                    "glob": {
+                    "path_glob": {
                         "type": "string",
-                        "description": "Content mode only. Optional glob restricting which files to scan \
-                                        (e.g. `**/*.rs`). Ignored in `files` mode—use `pattern` directly."
+                        "description": "Content mode only. Optional glob restricting **which files** to scan \
+                                        (e.g. `**/*.rs`). This selects the file set; `pattern` is the regex \
+                                        applied to their contents. Ignored in `files` mode—use `pattern` directly."
                     },
                     "case_insensitive": {
                         "type": "boolean",
@@ -165,8 +168,8 @@ struct SearchArgs {
     mode: Option<SearchMode>,
     #[serde(default)]
     path: Option<String>,
-    #[serde(default)]
-    glob: Option<String>,
+    #[serde(default, rename = "path_glob")]
+    path_glob: Option<String>,
     #[serde(default)]
     case_insensitive: Option<bool>,
     #[serde(default)]
@@ -321,7 +324,7 @@ fn run_search_blocking(
                 }
             };
 
-            let content_glob = match parsed.glob.as_deref() {
+            let content_glob = match parsed.path_glob.as_deref() {
                 Some(spec) => match glob::build_globset(spec) {
                     Ok(set) => Some(set),
                     Err(err) => {
