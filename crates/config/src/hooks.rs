@@ -15,7 +15,7 @@
 //! 跨层合并逻辑（append + dedupe + apply disable）在 [`crate::loader`] 里。
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use defect_agent::tool::SafetyClass;
 use serde::Deserialize;
@@ -77,14 +77,13 @@ pub(crate) fn parse_layer_hooks(
     let Some(hooks_value) = value.get("hooks") else {
         return Ok(LayerHooks::default());
     };
-    let raw: HooksSection =
-        hooks_value
-            .clone()
-            .try_into()
-            .map_err(|err: toml::de::Error| ConfigError::Invalid {
-                path: path.clone(),
-                message: format!("invalid [hooks] section: {err}"),
-            })?;
+    let raw: HooksSection = hooks_value
+        .clone()
+        .try_into()
+        .map_err(|err: toml::de::Error| ConfigError::Invalid {
+            path: path.clone(),
+            message: format!("invalid [hooks] section: {err}"),
+        })?;
 
     let mut entries = HooksConfig::default();
     let attach = |dst: &mut Vec<HookEntry>,
@@ -291,13 +290,9 @@ enum HookHandlerRaw {
 }
 
 impl HookHandlerRaw {
-    fn into_typed(
-        self,
-        event: HookEventTag,
-        path: &PathBuf,
-    ) -> Result<HookHandlerSpec, ConfigError> {
+    fn into_typed(self, event: HookEventTag, path: &Path) -> Result<HookHandlerSpec, ConfigError> {
         let invalid = |message: String| ConfigError::Invalid {
-            path: path.clone(),
+            path: path.to_path_buf(),
             message,
         };
         match self {
@@ -315,9 +310,7 @@ impl HookHandlerRaw {
                 let spec = match (argv, shell, command) {
                     (Some(argv), None, None) => {
                         if argv.is_empty() {
-                            return Err(invalid(
-                                "command handler `argv` must not be empty".into(),
-                            ));
+                            return Err(invalid("command handler `argv` must not be empty".into()));
                         }
                         HookCommandSpec::Argv {
                             argv,

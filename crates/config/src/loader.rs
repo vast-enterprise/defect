@@ -69,7 +69,11 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
             base_prompt = Some(candidate);
         }
         if let Some(path) = user_layer.path.clone() {
-            hook_layers.push(parse_layer_hooks(path, ConfigSource::User, &user_layer.value)?);
+            hook_layers.push(parse_layer_hooks(
+                path,
+                ConfigSource::User,
+                &user_layer.value,
+            )?);
         }
         merge_toml_values(&mut merged, &user_layer.value);
         layers.push(user_layer);

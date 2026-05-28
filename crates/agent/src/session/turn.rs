@@ -45,6 +45,11 @@ use agent_client_protocol::schema::SessionId;
 
 const DEFAULT_PROMPT_FILE: &str = "AGENTS.md";
 
+#[path = "turn/request_audit.rs"]
+mod request_audit;
+
+pub(crate) use request_audit::RequestAuditTracker;
+
 /// LLM 调用次数上限策略。详见 `docs/internal/turn-loop.md` §6.1。
 #[derive(Debug, Clone, Copy)]
 pub enum TurnRequestLimit {
@@ -168,6 +173,9 @@ pub struct TurnRunner<'a> {
     pub hooks: &'a dyn HookEngine,
     /// 当前 session id。`HookCtx` 注入用——hook handler 按 session 维度路由 / 审计。
     pub session_id: &'a SessionId,
+    /// 请求稳定性诊断：对比相邻两次实际发给 provider 的请求快照，
+    /// 帮助定位 prompt cache 低命中率的高波动来源。
+    pub(crate) request_audit: &'a RequestAuditTracker,
 }
 
 impl<'a> TurnRunner<'a> {
@@ -281,7 +289,7 @@ impl<'a> TurnRunner<'a> {
     }
 
     fn build_request(&self) -> CompletionRequest {
-        CompletionRequest {
+        let req = CompletionRequest {
             model: self.config.model.clone(),
             system: self.system_prompt.clone(),
             messages: self.history.snapshot(),
@@ -289,7 +297,9 @@ impl<'a> TurnRunner<'a> {
             tool_choice: ToolChoice::Auto,
             sampling: self.config.sampling.clone(),
             hosted_capabilities: self.hosted_capabilities,
-        }
+        };
+        self.request_audit.record(&req);
+        req
     }
 
     async fn maybe_compact(&self) -> Result<(), TurnError> {

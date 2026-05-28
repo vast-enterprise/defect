@@ -49,7 +49,7 @@ use crate::session::events::EventEmitter;
 use crate::session::permissions::PermissionGate;
 use crate::session::prompt::resolve_system_prompt;
 use crate::session::tool_registry::{CompositeRegistry, StaticToolRegistry};
-use crate::session::turn::{TurnConfig, TurnRunner};
+use crate::session::turn::{RequestAuditTracker, TurnConfig, TurnRunner};
 use crate::session::{
     AgentCore, AgentError, EventStream, History, Session, SessionCreateInfo, SessionLoader,
     SessionObserver, SessionToolFactory, ToolRegistry, TurnError, VecHistory,
@@ -257,6 +257,7 @@ impl AgentCore for DefaultAgentCore {
                 http: self.http.clone(),
                 hook_engine: self.hook_engine.clone(),
                 session_start_append,
+                request_audit: RequestAuditTracker::new(),
             }) as Arc<dyn Session>;
 
             let session_info = SessionCreateInfo {
@@ -347,6 +348,7 @@ impl AgentCore for DefaultAgentCore {
                 http: self.http.clone(),
                 hook_engine: self.hook_engine.clone(),
                 session_start_append,
+                request_audit: RequestAuditTracker::new(),
             }) as Arc<dyn Session>;
 
             self.sessions.insert(id, session.clone());
@@ -396,6 +398,9 @@ pub struct DefaultSession {
     /// 详见 `docs/internal/hooks.md` §3.2 / §9.1。
     #[allow(dead_code)]
     session_start_append: Vec<agent_client_protocol::schema::ContentBlock>,
+    /// 相邻请求稳定性诊断器。每次实际发给 provider 的请求都会产一条
+    /// tracing 记录，帮助定位 cache miss 来源。
+    request_audit: RequestAuditTracker,
 }
 
 impl DefaultSession {}
@@ -574,6 +579,7 @@ impl Session for DefaultSession {
                     hosted_capabilities: self.hosted_capabilities,
                     hooks: self.hook_engine.as_ref(),
                     session_id: &self.id,
+                    request_audit: &self.request_audit,
                 };
 
                 runner.run(prompt).await
