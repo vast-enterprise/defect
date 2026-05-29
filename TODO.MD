@@ -73,6 +73,7 @@
 | internal | Skill 加载机制（glob 条件匹配 + always 的 markdown skill 注入到 system prompt，附 `skill` 工具供模型按需加载） | `docs/internal/skills.md` | 🕒 未开始 |
 | internal | LSP 语义理解（诊断注入、跳转定义、查找引用；P1 可用 hook 跑 linter 过渡） | `docs/internal/lsp.md` | 🕒 未开始 |
 | internal | Checkpoint / Undo（工具执行前自动快照，支持回滚；可复用 git stash 或文件级快照） | `docs/internal/checkpoint.md` | 🕒 未开始 |
+| internal | 配置 key 校验去重（`is_known_config_key` 手维护 100+ 行字面量白名单，与 `XxxSection` struct 是两份真相源，每加字段要改多处、漏抄会静默误报 UnknownKey；倾向 serde `deny_unknown_fields` 根治，不喜欢的配置我直接报错） | `docs/internal/config.md` §11.1 | ✅ 已完成 |
 
 ---
 

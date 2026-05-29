@@ -807,21 +807,17 @@ fn decorate_with_provider_display(mut model: ModelInfo, provider: &ProviderInfo)
     model
 }
 
-/// v0 的 session id 生成：进程内单调递增 + 时间戳。引入 uuid crate 时再换。
+/// session id 生成：随机 UUID v4。
 ///
 /// `defect-acp` 的 `session/new` handler 在调用
 /// [`AgentCore::create_session`] 之前需要 `SessionId`（用于构造
 /// `AcpFsBackend`，详见 `docs/inbound/acp-fs.md` §3.2）；这个函数对外公开，
 /// 让 acp / 测试都能拿到一致格式的 id。
-pub fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("session-{ts:x}-{n:x}")
+///
+/// 用全局唯一的 UUID 而非进程内计数 + 时间戳：跨进程重启、并发实例都不撞，
+/// 也让下游（storage 落盘目录、可观测性 trace 关联）能拿它当稳定主键。
+pub fn new_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// 给 tracing span 用的 session id 短形：按字符取前 12 个。仅诊断用。

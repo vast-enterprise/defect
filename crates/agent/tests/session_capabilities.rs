@@ -15,7 +15,7 @@ use defect_agent::llm::{
 };
 use defect_agent::session::{
     AgentCore, AgentError, DefaultAgentCore, SessionCapabilitiesConfig, SessionInitError,
-    TurnConfig, WebSearchCapabilityConfig, WebSearchCapabilityMode, uuid_like,
+    TurnConfig, WebSearchCapabilityConfig, WebSearchCapabilityMode, new_session_id,
 };
 use defect_agent::shell::{NoopShellBackend, ShellBackend};
 use futures::future::BoxFuture;
@@ -117,7 +117,7 @@ async fn delegate_with_unsupported_provider_fails_session_init() {
     let cwd = std::env::current_dir().expect("cwd");
     let result = core
         .create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
@@ -150,7 +150,7 @@ async fn delegate_with_supported_provider_creates_session() {
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
         .create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
@@ -179,7 +179,7 @@ async fn disabled_mode_succeeds_regardless_of_provider() {
         );
         let cwd = std::env::current_dir().expect("cwd");
         core.create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,

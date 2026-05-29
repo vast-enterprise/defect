@@ -6,7 +6,7 @@ use tempfile::TempDir;
 use crate::loader::{dotenv_updates_from_str, load_config};
 use crate::overrides::{merge_toml_values, parse_cli_override};
 use crate::types::{
-    CliOverrides, ConfigError, ConfigSource, ConfigWarning, HookCommandSpec, HookHandlerSpec,
+    CliOverrides, ConfigError, ConfigSource, HookCommandSpec, HookHandlerSpec,
     HttpProxyMode, LoadConfigOptions, PROJECT_LOCAL_CONFIG_RELATIVE, ProviderKind,
     ProviderProtocol, ReasoningEffort,
 };
@@ -480,7 +480,9 @@ file = "prompts/base.md"
 }
 
 #[test]
-fn shared_project_layer_denylist_warns_and_ignores() {
+fn shared_project_layer_can_set_provider_and_endpoint() {
+    // 设计宗旨是最小化：不再帮用户审查仓库共享配置是否劫持流量/凭据。
+    // 仓库内 .defect/config.toml 与本地层一样，可设 provider / base_url 等。
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
@@ -497,13 +499,12 @@ base_url = "https://example.invalid/v1"
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
-    assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
-    assert_eq!(loaded.warnings.len(), 2);
-    assert!(loaded.warnings.iter().any(|warning| matches!(
-        warning,
-        ConfigWarning::IgnoredProjectKey { key, .. } if key == "default.provider"
-    )));
-    assert_eq!(loaded.effective.providers.openai.base_url, None);
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Openai);
+    assert_eq!(
+        loaded.effective.providers.openai.base_url.as_deref(),
+        Some("https://example.invalid/v1")
+    );
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 }
 
 #[test]
@@ -654,7 +655,41 @@ enabled_servers = ["missing"]
 }
 
 #[test]
-fn warns_on_unknown_keys_with_source_path() {
+fn custom_provider_name_accepted_but_unknown_field_rejected() {
+    // flatten 让 `[providers.<任意名>]` 开放，但内层 ProviderSection 的
+    // deny_unknown_fields 仍然校验字段名。详见 docs/internal/config.md §11.1。
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    let config_path = tmp.path().join("xdg/defect/config.toml");
+    write(
+        &config_path,
+        r#"
+[default]
+provider = "siliconflow"
+
+[providers.siliconflow]
+protocol = "openai-chat"
+default_model = "deepseek-ai/DeepSeek-V3"
+bogus_field = "value"
+"#,
+    );
+
+    let err = load_config(test_options(&tmp)).expect_err("unknown provider field must fail");
+    match err {
+        ConfigError::Invalid { path, message } => {
+            assert_eq!(path, config_path);
+            assert!(
+                message.contains("bogus_field"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_unknown_keys_with_source_path() {
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
@@ -668,13 +703,15 @@ bogus = "value"
 "#,
     );
 
-    let loaded = load_config(test_options(&tmp)).expect("load config");
-
-    assert!(loaded.warnings.iter().any(|warning| matches!(
-        warning,
-        ConfigWarning::UnknownKey { path, key }
-            if path == &config_path && key == "default.bogus"
-    )));
+    // 未知 key 现在直接报错（不再是 warning），且错误带上声明它的文件路径。
+    let err = load_config(test_options(&tmp)).expect_err("unknown key must fail");
+    match err {
+        ConfigError::Invalid { path, message } => {
+            assert_eq!(path, config_path);
+            assert!(message.contains("bogus"), "unexpected message: {message}");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -774,7 +811,8 @@ fn http_section_default_proxy_is_from_env() {
 }
 
 #[test]
-fn shared_project_layer_strips_http_proxy_but_keeps_other_http_fields() {
+fn shared_project_layer_can_set_http_proxy() {
+    // 最小化：仓库共享配置可设 http.proxy（与其它 http 字段一视同仁）。
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
@@ -787,25 +825,23 @@ user_agent = "team-agent/2.0"
 
 [http.proxy]
 mode = "explicit"
-http_proxy = "http://attacker.invalid:8080"
+http_proxy = "http://proxy.internal:8080"
 "#,
     );
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
-    // 出站重定向被去掉，仍按 FromEnv（默认）。
-    assert_eq!(loaded.effective.http.proxy.mode, HttpProxyMode::FromEnv);
-    assert!(loaded.effective.http.proxy.explicit.http_proxy.is_none());
-    // 共享配置可以调超时与 UA。
+    assert_eq!(loaded.effective.http.proxy.mode, HttpProxyMode::Explicit);
+    assert_eq!(
+        loaded.effective.http.proxy.explicit.http_proxy.as_deref(),
+        Some("http://proxy.internal:8080")
+    );
     assert_eq!(loaded.effective.http.total_timeout_ms, Some(30_000));
     assert_eq!(
         loaded.effective.http.user_agent.as_deref(),
         Some("team-agent/2.0")
     );
-    assert!(loaded.warnings.iter().any(|warning| matches!(
-        warning,
-        ConfigWarning::IgnoredProjectKey { key, .. } if key == "http.proxy"
-    )));
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 }
 
 #[test]
@@ -1158,19 +1194,8 @@ handler = { type = "prompt", system = "diagnose", render = { type = "json" }, ti
 
     assert_eq!(hooks.session_start[0].source, ConfigSource::User);
 
-    // hooks.* 段不应触发 UnknownKey warning
-    let unknowns: Vec<_> = loaded
-        .warnings
-        .iter()
-        .filter_map(|w| match w {
-            ConfigWarning::UnknownKey { key, .. } if key.starts_with("hooks") => Some(key.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        unknowns.is_empty(),
-        "expected no UnknownKey warnings under hooks.*, got {unknowns:?}"
-    );
+    // `[hooks]` 段被 `ConfigToml::hooks` 吸收字段放过，不会触发未知 key 报错。
+    // load_config 成功本身即证明这一点（deny_unknown_fields 不会误杀 hooks）。
 }
 
 #[test]
@@ -1291,4 +1316,64 @@ handler = { type = "command", argv = [], timeout_sec = 1 }
         }
         other => panic!("expected ConfigError::Invalid, got {other:?}"),
     }
+}
+
+#[test]
+fn parses_langfuse_from_user_config() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[tracing.langfuse]
+enabled = true
+host = "https://eu.cloud.langfuse.com"
+public_key = "pk-lf-xxx"
+secret_key = "sk-lf-yyy"
+flush_interval_ms = 5000
+max_batch = 50
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    let lf = loaded
+        .effective
+        .tracing
+        .langfuse
+        .expect("langfuse config present");
+    assert!(lf.enabled);
+    assert_eq!(lf.host.as_deref(), Some("https://eu.cloud.langfuse.com"));
+    assert_eq!(lf.public_key.as_deref(), Some("pk-lf-xxx"));
+    assert_eq!(lf.secret_key.as_deref(), Some("sk-lf-yyy"));
+    assert_eq!(lf.flush_interval_ms, Some(5000));
+    assert_eq!(lf.max_batch, Some(50));
+}
+
+#[test]
+fn shared_project_config_can_set_langfuse() {
+    // 最小化：不再剥离仓库共享配置里的 langfuse 段，原样生效。
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &repo.join(".defect/config.toml"),
+        r#"
+[tracing.langfuse]
+enabled = true
+host = "https://eu.cloud.langfuse.com"
+secret_key = "sk-lf-team"
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    let lf = loaded
+        .effective
+        .tracing
+        .langfuse
+        .expect("langfuse config present");
+    assert!(lf.enabled);
+    assert_eq!(lf.host.as_deref(), Some("https://eu.cloud.langfuse.com"));
+    assert_eq!(lf.secret_key.as_deref(), Some("sk-lf-team"));
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 }

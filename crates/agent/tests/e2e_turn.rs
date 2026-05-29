@@ -25,7 +25,7 @@ use defect_agent::llm::{
 use defect_agent::policy::{AskWritesPolicy, OpenPolicy, SandboxPolicy};
 use defect_agent::session::{
     AgentCore, DefaultAgentCore, LoadedSession, Session, SessionCreateInfo, SessionLoader,
-    SessionObserver, StaticToolRegistry, ToolRegistry, TurnConfig, uuid_like,
+    SessionObserver, StaticToolRegistry, ToolRegistry, TurnConfig, new_session_id,
 };
 use defect_agent::shell::{NoopShellBackend, ShellBackend};
 use defect_agent::tool::{
@@ -261,7 +261,7 @@ async fn full_turn_with_one_tool_call() {
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
         .create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
@@ -367,7 +367,7 @@ async fn second_run_turn_while_first_in_flight_returns_in_progress() {
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
         .create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
@@ -404,7 +404,7 @@ async fn load_session_restores_history_for_next_turn() {
     let provider = Arc::new(ScriptedProvider::new()) as Arc<dyn LlmProvider>;
     let loaded = LoadedSession {
         info: SessionCreateInfo {
-            id: SessionId::new(uuid_like()),
+            id: SessionId::new(new_session_id()),
             cwd: std::env::current_dir().expect("cwd"),
             mcp_servers: Vec::new(),
         },
@@ -449,7 +449,7 @@ async fn load_session_triggers_observers() {
     let provider = Arc::new(ScriptedProvider::new()) as Arc<dyn LlmProvider>;
     let loaded = LoadedSession {
         info: SessionCreateInfo {
-            id: SessionId::new(uuid_like()),
+            id: SessionId::new(new_session_id()),
             cwd: std::env::current_dir().expect("cwd"),
             mcp_servers: Vec::new(),
         },
@@ -553,7 +553,7 @@ async fn ask_writes_policy_runs_after_allow_once() {
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
         .create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
@@ -652,7 +652,7 @@ async fn ask_writes_policy_cancel_during_ask_returns_cancelled() {
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
         .create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
@@ -746,7 +746,7 @@ async fn deny_during_ask_completes_cleanly() {
     let cwd = std::env::current_dir().expect("cwd");
     let session = core
         .create_session(
-            SessionId::new(uuid_like()),
+            SessionId::new(new_session_id()),
             cwd,
             vec![],
             Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,

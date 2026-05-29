@@ -39,6 +39,7 @@ defect-http.workspace = true
 defect-llm.workspace = true
 http.workspace = true
 defect-mcp.workspace = true
+defect-obs.workspace = true
 defect-storage.workspace = true
 defect-tools.workspace = true
 thiserror.workspace = true

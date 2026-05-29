@@ -114,15 +114,6 @@ pub struct ConfigLayerStack {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigWarning {
-    IgnoredProjectKey {
-        path: PathBuf,
-        key: String,
-        reason: &'static str,
-    },
-    UnknownKey {
-        path: PathBuf,
-        key: String,
-    },
     DeprecatedKey {
         path: PathBuf,
         old: String,
@@ -611,6 +602,7 @@ pub struct ProviderConfigFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderAwsConfigFile {
     pub profile: Option<String>,
     pub region: Option<String>,
@@ -701,11 +693,28 @@ pub struct HttpProxySettings {
 pub struct TracingConfig {
     pub filter: Option<String>,
     pub otlp: Option<OtlpTracingConfig>,
+    pub langfuse: Option<LangfuseConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct OtlpTracingConfig {
     pub endpoint: Option<String>,
+}
+
+/// Langfuse 上报配置。详见 `docs/internal/observability-langfuse.md` §6。
+///
+/// 默认关闭；`enabled = true` 但缺 key 时由装配层告警并禁用（不静默成功）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LangfuseConfig {
+    pub enabled: bool,
+    /// Langfuse host，如 `https://cloud.langfuse.com`。`None` 用装配层默认。
+    pub host: Option<String>,
+    pub public_key: Option<String>,
+    pub secret_key: Option<String>,
+    /// 周期冲刷间隔（毫秒）。`None` 用装配层默认。
+    pub flush_interval_ms: Option<u64>,
+    /// 单批最大事件数。`None` 用装配层默认。
+    pub max_batch: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -743,6 +752,7 @@ pub(crate) enum McpTransportKind {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ConfigToml {
     #[serde(default)]
     pub(crate) default: DefaultSection,
@@ -766,36 +776,48 @@ pub(crate) struct ConfigToml {
     pub(crate) mcp: McpSection,
     #[serde(default)]
     pub(crate) http: HttpSection,
+    /// `[hooks]` 段不走 `ConfigToml::try_into`（数组语义是 append+dedupe，详见
+    /// `crate::hooks`）。这里用 `toml::Value` 吸收它，避免 `deny_unknown_fields`
+    /// 把 `[[hooks.*]]` 误判为未知段；hooks 自己的解析器做 schema 校验。
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) hooks: Option<TomlValue>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CapabilitiesSection {
     pub(crate) web_search: Option<WebSearchCapabilitySection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct WebSearchCapabilitySection {
     pub(crate) mode: Option<defect_agent::session::WebSearchCapabilityMode>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ProviderCapabilitiesSection {
     pub(crate) web_search: Option<WebSearchCapabilitySection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DefaultSection {
     pub(crate) provider: Option<ProviderKind>,
     pub(crate) model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BasePromptSection {
     pub(crate) file: Option<String>,
     pub(crate) text: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TurnSection {
     pub(crate) system_prompt: Option<String>,
     pub(crate) request_limit: Option<u32>,
@@ -805,6 +827,7 @@ pub(crate) struct TurnSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PromptSection {
     pub(crate) file: Option<String>,
     pub(crate) text: Option<String>,
@@ -813,6 +836,7 @@ pub(crate) struct PromptSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PromptOverlaySection {
     pub(crate) text: Option<String>,
 }
@@ -833,6 +857,7 @@ pub(crate) type DeepSeekProviderSection = ProviderSection;
 pub(crate) type LiteLlmProviderSection = ProviderSection;
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ProviderSection {
     pub(crate) protocol: Option<ProviderProtocol>,
     pub(crate) base_url: Option<String>,
@@ -849,6 +874,7 @@ pub(crate) struct ProviderSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ToolsSection {
     pub(crate) bash: Option<BashToolSection>,
     pub(crate) fs: Option<FsToolSection>,
@@ -859,6 +885,7 @@ pub(crate) struct ToolsSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SearchToolSection {
     pub(crate) enabled: Option<bool>,
     pub(crate) default_head_limit: Option<u32>,
@@ -870,6 +897,7 @@ pub(crate) struct SearchToolSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FetchToolSection {
     pub(crate) enabled: Option<bool>,
     pub(crate) default_timeout_secs: Option<u32>,
@@ -881,40 +909,59 @@ pub(crate) struct FetchToolSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BashToolSection {
     pub(crate) default_timeout_ms: Option<u64>,
     pub(crate) max_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FsToolSection {
     pub(crate) read_default_limit: Option<u32>,
     pub(crate) read_max_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SandboxSection {
     pub(crate) mode: Option<SandboxMode>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TracingSection {
     pub(crate) filter: Option<String>,
     pub(crate) otlp: Option<OtlpTracingSection>,
+    pub(crate) langfuse: Option<LangfuseSection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OtlpTracingSection {
     pub(crate) endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct LangfuseSection {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) host: Option<String>,
+    pub(crate) public_key: Option<String>,
+    pub(crate) secret_key: Option<String>,
+    pub(crate) flush_interval_ms: Option<u64>,
+    pub(crate) max_batch: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct McpSection {
     pub(crate) enabled_servers: Option<Vec<String>>,
     pub(crate) servers: Option<BTreeMap<String, McpServerSection>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct HttpSection {
     pub(crate) total_timeout_ms: Option<u64>,
     pub(crate) transport_retries: Option<u8>,
@@ -924,6 +971,7 @@ pub(crate) struct HttpSection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct HttpProxySection {
     pub(crate) mode: Option<HttpProxyMode>,
     pub(crate) http_proxy: Option<String>,
@@ -932,6 +980,7 @@ pub(crate) struct HttpProxySection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct McpServerSection {
     pub(crate) transport: Option<McpTransportKind>,
     pub(crate) command: Option<String>,

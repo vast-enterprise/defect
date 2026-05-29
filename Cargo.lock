@@ -1186,6 +1186,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1202,6 +1203,7 @@ dependencies = [
  "defect-http",
  "defect-llm",
  "defect-mcp",
+ "defect-obs",
  "defect-storage",
  "defect-tools",
  "futures",
@@ -1317,6 +1319,31 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "defect-obs"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "defect-agent",
+ "defect-http",
+ "futures",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper 1.9.0",
+ "serde",
+ "serde_json",
+ "toac",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

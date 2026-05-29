@@ -12,7 +12,7 @@ use defect_agent::fs::{FsBackend, NoopFsBackend};
 use defect_agent::llm::LlmProvider;
 use defect_agent::policy::{OpenPolicy, SandboxPolicy};
 use defect_agent::session::{
-    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig, uuid_like,
+    AgentCore, DefaultAgentCore, Session, StaticToolRegistry, ToolRegistry, TurnConfig, new_session_id,
 };
 use defect_agent::shell::{NoopShellBackend, ShellBackend};
 use defect_agent::tool::{
@@ -136,7 +136,7 @@ pub async fn build_session(provider: Arc<dyn LlmProvider>, model: &str) -> Arc<d
         .build();
     let cwd = std::env::current_dir().expect("cwd");
     core.create_session(
-        SessionId::new(uuid_like()),
+        SessionId::new(new_session_id()),
         cwd,
         vec![],
         Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,

@@ -12,8 +12,8 @@
 //!   `defect_http::HttpStackConfig`
 //! - [`tools::build_process_tools`] / [`mcp_servers::build_default_mcp_servers`]
 //! - [`hooks::build_engine_arc`]：装配 hook 引擎
-//! - [`policy::build_policy`] / [`paths::default_sessions_root`] /
-//!   [`tracing_init::init_tracing`]
+//! - [`policy::build_policy`] / [`paths::default_sessions_root`]
+//! - tracing 初始化已搬到 `defect-obs`（`defect_obs::init_tracing`）
 //!
 //! 主二进制 `src/bin/cli.rs` 仅做拼装，不持有任何 helper 实现——下游可以
 //! 替换其中任何一步而不必 fork 整套 helper。
@@ -27,11 +27,11 @@ pub mod args;
 pub mod hooks;
 pub mod http_stack;
 pub mod mcp_servers;
+pub mod observability;
 pub mod paths;
 pub mod policy;
 pub mod providers;
 pub mod tools;
-pub mod tracing_init;
 
 #[cfg(test)]
 mod test;

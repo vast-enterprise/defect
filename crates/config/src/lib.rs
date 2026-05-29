@@ -19,7 +19,7 @@ pub use types::{
     DeepSeekConfigFile, EffectiveConfig, FetchFormat, FetchToolConfig, FsToolConfig,
     HookCommandSpec, HookEntry, HookHandlerSpec, HookMatcher, HookPromptRender, HookPromptSpec,
     HookShellKind, HooksConfig, HttpClientConfig, HttpProxyConfig, HttpProxyMode,
-    HttpProxySettings, LiteLlmConfigFile, LoadConfigOptions, LoadedConfig, McpConfig,
+    HttpProxySettings, LangfuseConfig, LiteLlmConfigFile, LoadConfigOptions, LoadedConfig, McpConfig,
     McpRemoteServerConfig, McpServerConfig, McpStdioServerConfig, OpenAiConfigFile,
     OtlpTracingConfig, PromptConfigFile, ProviderAwsConfigFile, ProviderCapabilityOverrides,
     ProviderConfigFile, ProviderConfigs, ProviderKind, ProviderProtocol, ReasoningEffort,

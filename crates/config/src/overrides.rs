@@ -123,27 +123,3 @@ pub(crate) fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlV
         }
     }
 }
-
-pub(crate) fn remove_toml_path(value: &mut TomlValue, path: &[&str]) -> bool {
-    if path.is_empty() {
-        return false;
-    }
-    let Some((last, parents)) = path.split_last() else {
-        return false;
-    };
-    let mut current = value;
-    for segment in parents {
-        let Some(next) = current.get_mut(*segment) else {
-            return false;
-        };
-        current = next;
-    }
-    remove_toml_table_key(current, last)
-}
-
-pub(crate) fn remove_toml_table_key(value: &mut TomlValue, key: &str) -> bool {
-    match value {
-        TomlValue::Table(table) => table.remove(key).is_some(),
-        _ => false,
-    }
-}

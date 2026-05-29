@@ -19,7 +19,7 @@ use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
 use defect_agent::fs::FsBackend;
 use defect_agent::llm::{ModelCandidate, ModelInfo, ProviderError, ProviderInfo};
-use defect_agent::session::{AgentCore, AgentError, Session, TurnError, uuid_like};
+use defect_agent::session::{AgentCore, AgentError, Session, TurnError, new_session_id};
 use defect_agent::shell::ShellBackend;
 use defect_tools::{LocalFsBackend, LocalShellBackend};
 use futures::StreamExt;
@@ -431,7 +431,7 @@ impl ServeState {
         cx: ConnectionTo<Client>,
     ) -> Result<(), agent_client_protocol::Error> {
         let cwd_for_log = req.cwd.clone();
-        let session_id = SessionId::new(uuid_like());
+        let session_id = SessionId::new(new_session_id());
         let fs = self.fs_backend(&cx, &session_id, &req.cwd);
         let shell = self.shell_backend(&cx, &session_id, &req.cwd);
         match self

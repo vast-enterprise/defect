@@ -39,7 +39,7 @@ pub use capabilities::{
     ResolvedSessionCapabilities, SessionCapabilitiesConfig, WebSearchCapabilityConfig,
     WebSearchCapabilityMode,
 };
-pub use default::{DefaultAgentCore, DefaultAgentCoreBuilder, DefaultSession, uuid_like};
+pub use default::{DefaultAgentCore, DefaultAgentCoreBuilder, DefaultSession, new_session_id};
 pub use events::EventEmitter;
 pub use history::VecHistory;
 pub use permissions::PermissionGate;

@@ -23,12 +23,13 @@ use defect_cli::{
     hooks::{self, HookEngineCtx},
     http_stack::build_http_stack_config,
     mcp_servers::build_default_mcp_servers,
+    observability,
     paths::default_sessions_root,
     policy::build_policy,
     providers::build_registry,
     tools::build_process_tools,
-    tracing_init::init_tracing,
 };
+use defect_obs::init_tracing;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -66,6 +67,16 @@ async fn main() -> anyhow::Result<()> {
     let tools = build_process_tools(&config);
     let storage = Arc::new(StorageObserver::new(default_sessions_root()?));
 
+    // 可观测性：langfuse 上报（默认关闭，需 [tracing.langfuse].enabled + key）。
+    let langfuse = observability::build_langfuse_observer(
+        config.effective.tracing.langfuse.as_ref(),
+        build_http_stack_config(&config.effective.http)?,
+    )?
+    .map(Arc::new);
+    if langfuse.is_some() {
+        tracing::info!("langfuse reporting enabled");
+    }
+
     let builtin_registry = BuiltinRegistry::defaults();
     let hook_engine = hooks::build_engine_arc(
         &config.effective.hooks,
@@ -78,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("hook engine build failed: {e}"))?;
 
     // 3) 拼装 AgentCore，启 stdio ACP server
-    let agent = DefaultAgentCore::builder()
+    let mut builder = DefaultAgentCore::builder()
         .registry(registry)
         .process_tools(tools)
         .policy(build_policy(config.effective.sandbox.mode))
@@ -89,8 +100,11 @@ async fn main() -> anyhow::Result<()> {
         )))
         .config(turn_config)
         .http(http_client)
-        .hook_engine(hook_engine)
-        .build();
+        .hook_engine(hook_engine);
+    if let Some(langfuse) = langfuse {
+        builder = builder.observe_session(langfuse);
+    }
+    let agent = builder.build();
 
     defect_acp::serve(Arc::new(agent) as Arc<dyn AgentCore>).await?;
     Ok(())

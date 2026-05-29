@@ -9,10 +9,8 @@ use defect_agent::session::{BasePromptConfig, PromptConfig, TurnConfig, TurnRequ
 use toml::Value as TomlValue;
 
 use crate::hooks::{LayerHooks, merge_layer_hooks, parse_layer_hooks};
-use crate::mcp::{is_known_mcp_key, is_known_mcp_prefix, resolve_mcp_config};
-use crate::overrides::{
-    build_cli_layer, merge_toml_values, remove_toml_path, remove_toml_table_key,
-};
+use crate::mcp::resolve_mcp_config;
+use crate::overrides::{build_cli_layer, merge_toml_values};
 use crate::types::{
     BasePromptConfigFile, BashToolConfig, CapabilitiesConfig, CliConfig, ConfigError,
     ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigToml, ConfigWarning,
@@ -20,7 +18,8 @@ use crate::types::{
     DEFAULT_DEEPSEEK_MODEL, DEFAULT_ECHO_MODEL, DEFAULT_FS_READ_LIMIT, DEFAULT_FS_READ_MAX_LIMIT,
     DEFAULT_OPENAI_MODEL, EffectiveConfig, FetchToolConfig, FsToolConfig, HooksConfig,
     HttpClientConfig, HttpProxyConfig, HttpProxySettings, LoadConfigOptions, LoadedConfig,
-    OtlpTracingConfig, PROJECT_CONFIG_RELATIVE, PROJECT_LOCAL_CONFIG_RELATIVE, PromptConfigFile,
+    LangfuseConfig, OtlpTracingConfig, PROJECT_CONFIG_RELATIVE, PROJECT_LOCAL_CONFIG_RELATIVE,
+    PromptConfigFile,
     ProviderCapabilityOverrides, ProviderConfigFile, ProviderConfigs, ProviderKind,
     ProviderSection, SandboxConfig, SandboxMode, SearchToolConfig, ToolsConfig, TracingConfig,
     USER_CONFIG_RELATIVE,
@@ -89,17 +88,15 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
         {
             base_prompt = Some(candidate);
         }
-        let (value, layer_warnings) =
-            sanitize_shared_project_layer(project_layer.path.as_ref(), &project_layer.value);
-        warnings.extend(layer_warnings);
         if let Some(path) = project_layer.path.clone() {
-            hook_layers.push(parse_layer_hooks(path, ConfigSource::Project, &value)?);
+            hook_layers.push(parse_layer_hooks(
+                path,
+                ConfigSource::Project,
+                &project_layer.value,
+            )?);
         }
-        merge_toml_values(&mut merged, &value);
-        layers.push(ConfigLayerEntry {
-            value,
-            ..project_layer
-        });
+        merge_toml_values(&mut merged, &project_layer.value);
+        layers.push(project_layer);
     }
 
     if let Some((project_local_layer, layer_warnings)) =
@@ -389,6 +386,14 @@ fn build_effective_config(
             otlp: config.tracing.otlp.map(|otlp| OtlpTracingConfig {
                 endpoint: otlp.endpoint,
             }),
+            langfuse: config.tracing.langfuse.map(|lf| LangfuseConfig {
+                enabled: lf.enabled.unwrap_or(false),
+                host: lf.host,
+                public_key: lf.public_key,
+                secret_key: lf.secret_key,
+                flush_interval_ms: lf.flush_interval_ms,
+                max_batch: lf.max_batch,
+            }),
         },
         mcp: resolve_mcp_config(path, config.mcp).map_err(|message| ConfigError::Invalid {
             path: path.to_path_buf(),
@@ -533,72 +538,6 @@ fn provider_capability_overrides(
     )
 }
 
-fn sanitize_shared_project_layer(
-    path: Option<&PathBuf>,
-    value: &TomlValue,
-) -> (TomlValue, Vec<ConfigWarning>) {
-    let mut sanitized = value.clone();
-    let mut warnings = Vec::new();
-    let Some(path) = path.cloned() else {
-        return (sanitized, warnings);
-    };
-
-    if remove_toml_path(&mut sanitized, &["default", "provider"]) {
-        warnings.push(ConfigWarning::IgnoredProjectKey {
-            path: path.clone(),
-            key: "default.provider".into(),
-            reason: "shared project config must not redirect model traffic",
-        });
-    }
-
-    if let Some(providers) = sanitized
-        .get_mut("providers")
-        .and_then(TomlValue::as_table_mut)
-    {
-        for (provider_name, provider_value) in providers.iter_mut() {
-            for key in [
-                "protocol",
-                "base_url",
-                "organization",
-                "project",
-                "api_key",
-                "api_key_env",
-                "token",
-                "headers",
-                "aws",
-            ] {
-                if remove_toml_table_key(provider_value, key) {
-                    warnings.push(ConfigWarning::IgnoredProjectKey {
-                        path: path.clone(),
-                        key: format!("providers.{provider_name}.{key}"),
-                        reason: "shared project config must not redirect endpoints or credentials",
-                    });
-                }
-            }
-        }
-    }
-
-    if remove_toml_path(&mut sanitized, &["tracing", "otlp"]) {
-        warnings.push(ConfigWarning::IgnoredProjectKey {
-            path: path.clone(),
-            key: "tracing.otlp".into(),
-            reason: "shared project config must not redirect observability sinks",
-        });
-    }
-
-    // 仓库内共享配置不能静默把出站流量改到第三方代理；timeout / retries /
-    // user_agent 等不会改变流量目的地，仍然允许仓库统一调优。
-    if remove_toml_path(&mut sanitized, &["http", "proxy"]) {
-        warnings.push(ConfigWarning::IgnoredProjectKey {
-            path,
-            key: "http.proxy".into(),
-            reason: "shared project config must not redirect outbound HTTP traffic",
-        });
-    }
-
-    (sanitized, warnings)
-}
-
 fn load_optional_layer(
     source: ConfigSource,
     path: PathBuf,
@@ -627,8 +566,11 @@ fn load_optional_layer_opt(
         path: path.clone(),
         source: BoxError::new(err),
     })?;
-    let mut warnings = Vec::new();
-    collect_unknown_keys(&path, None, &value, &mut warnings);
+    // 未知 key 校验在此逐层单独跑：`deny_unknown_fields` 由 serde 在 decode 时
+    // 报错，错误能带上该层文件路径（合并后再 decode 只能报 `<merged>`）。详见
+    // `docs/internal/config.md` §11.1。
+    reject_unknown_keys(&path, &value)?;
+    let warnings = Vec::new();
     Ok(Some((
         ConfigLayerEntry {
             source,
@@ -640,32 +582,18 @@ fn load_optional_layer_opt(
     )))
 }
 
-fn collect_unknown_keys(
-    path: &Path,
-    prefix: Option<&str>,
-    value: &TomlValue,
-    warnings: &mut Vec<ConfigWarning>,
-) {
-    let Some(table) = value.as_table() else {
-        return;
-    };
-    for (key, nested) in table {
-        let full_key = prefix
-            .map(|prefix| format!("{prefix}.{key}"))
-            .unwrap_or_else(|| key.clone());
-        if is_known_config_key(&full_key) {
-            collect_unknown_keys(path, Some(&full_key), nested, warnings);
-            continue;
-        }
-        if nested.is_table() && is_known_config_prefix(&full_key) {
-            collect_unknown_keys(path, Some(&full_key), nested, warnings);
-            continue;
-        }
-        warnings.push(ConfigWarning::UnknownKey {
+/// 逐层 typed-decode 校验：撞到未知 key 时 serde 直接报错，转成
+/// [`ConfigError::Invalid`] 并带上该层文件路径。`[hooks]` 段由
+/// `ConfigToml::hooks` 吸收字段放过，自有解析器做 schema 校验。
+fn reject_unknown_keys(path: &Path, value: &TomlValue) -> Result<(), ConfigError> {
+    value
+        .clone()
+        .try_into::<ConfigToml>()
+        .map(|_| ())
+        .map_err(|err| ConfigError::Invalid {
             path: path.to_path_buf(),
-            key: full_key,
-        });
-    }
+            message: err.to_string(),
+        })
 }
 
 pub(crate) fn dotenv_updates_from_str(
@@ -708,234 +636,6 @@ fn strip_quotes(s: &str) -> &str {
         return &s[1..s.len() - 1];
     }
     s
-}
-
-fn is_known_config_key(key: &str) -> bool {
-    matches!(
-        key,
-        "base_prompt.file"
-            | "base_prompt.text"
-            | "default.provider"
-            | "default.model"
-            | "prompt.file"
-            | "prompt.text"
-            | "prompt.providers"
-            | "prompt.models"
-            | "turn.system_prompt"
-            | "turn.request_limit"
-            | "turn.compact_threshold_tokens"
-            | "turn.max_llm_retries"
-            | "turn.max_concurrent_tools"
-            | "capabilities.web_search.mode"
-            | "providers.anthropic.protocol"
-            | "providers.anthropic.base_url"
-            | "providers.anthropic.default_model"
-            | "providers.anthropic.models"
-            | "providers.anthropic.display_name"
-            | "providers.anthropic.api_key_env"
-            | "providers.anthropic.organization"
-            | "providers.anthropic.project"
-            | "providers.anthropic.aws.profile"
-            | "providers.anthropic.aws.region"
-            | "providers.anthropic.headers"
-            | "providers.anthropic.capabilities.web_search.mode"
-            | "providers.anthropic.reasoning_effort"
-            | "providers.openai.protocol"
-            | "providers.openai.base_url"
-            | "providers.openai.default_model"
-            | "providers.openai.models"
-            | "providers.openai.display_name"
-            | "providers.openai.api_key_env"
-            | "providers.openai.organization"
-            | "providers.openai.project"
-            | "providers.openai.aws.profile"
-            | "providers.openai.aws.region"
-            | "providers.openai.headers"
-            | "providers.openai.capabilities.web_search.mode"
-            | "providers.openai.reasoning_effort"
-            | "providers.deepseek.protocol"
-            | "providers.deepseek.base_url"
-            | "providers.deepseek.default_model"
-            | "providers.deepseek.models"
-            | "providers.deepseek.display_name"
-            | "providers.deepseek.api_key_env"
-            | "providers.deepseek.organization"
-            | "providers.deepseek.project"
-            | "providers.deepseek.aws.profile"
-            | "providers.deepseek.aws.region"
-            | "providers.deepseek.headers"
-            | "providers.deepseek.capabilities.web_search.mode"
-            | "providers.deepseek.reasoning_effort"
-            | "providers.litellm.protocol"
-            | "providers.litellm.base_url"
-            | "providers.litellm.default_model"
-            | "providers.litellm.models"
-            | "providers.litellm.display_name"
-            | "providers.litellm.api_key_env"
-            | "providers.litellm.organization"
-            | "providers.litellm.project"
-            | "providers.litellm.aws.profile"
-            | "providers.litellm.aws.region"
-            | "providers.litellm.headers"
-            | "providers.litellm.capabilities.web_search.mode"
-            | "providers.litellm.reasoning_effort"
-            | "tools.bash.default_timeout_ms"
-            | "tools.bash.max_timeout_ms"
-            | "tools.fs.read_default_limit"
-            | "tools.fs.read_max_limit"
-            | "tools.fetch.enabled"
-            | "tools.fetch.default_timeout_secs"
-            | "tools.fetch.max_timeout_secs"
-            | "tools.fetch.max_response_bytes"
-            | "tools.fetch.default_format"
-            | "tools.fetch.html_to_markdown"
-            | "tools.fetch.follow_redirects"
-            | "tools.search.enabled"
-            | "tools.search.default_head_limit"
-            | "tools.search.max_head_limit"
-            | "tools.search.max_file_size_bytes"
-            | "tools.search.max_result_bytes"
-            | "tools.search.max_walk_files"
-            | "tools.search.respect_gitignore_default"
-            | "sandbox.mode"
-            | "tracing.filter"
-            | "tracing.otlp.endpoint"
-            | "mcp.enabled_servers"
-            | "http.total_timeout_ms"
-            | "http.transport_retries"
-            | "http.initial_backoff_ms"
-            | "http.user_agent"
-            | "http.proxy.mode"
-            | "http.proxy.http_proxy"
-            | "http.proxy.https_proxy"
-            | "http.proxy.no_proxy"
-    ) || is_known_provider_dynamic_key(key)
-        || is_known_custom_provider_key(key)
-        || is_known_mcp_key(key)
-        || is_known_hooks_key(key)
-}
-
-fn is_known_provider_dynamic_key(key: &str) -> bool {
-    let Some((_provider_name, field)) = split_provider_field(key) else {
-        return false;
-    };
-    field.starts_with("headers.")
-}
-
-fn is_known_custom_provider_key(key: &str) -> bool {
-    let Some((provider_name, field)) = split_provider_field(key) else {
-        return false;
-    };
-    !provider_name.is_empty()
-        && !matches!(provider_name, "anthropic" | "openai" | "deepseek")
-        && provider_name != "litellm"
-        && is_provider_field(field)
-}
-
-fn is_provider_field(field: &str) -> bool {
-    matches!(
-        field,
-        "protocol"
-            | "base_url"
-            | "default_model"
-            | "models"
-            | "display_name"
-            | "api_key_env"
-            | "organization"
-            | "project"
-            | "aws.profile"
-            | "aws.region"
-            | "headers"
-            | "reasoning_effort"
-            | "capabilities.web_search.mode"
-    ) || field.starts_with("headers.")
-}
-
-/// `[hooks]` 段是数组+联合体的混合形态——逐键枚举意义不大，且字段会随
-/// `HookHandlerSpec`/`HookCommandSpec` 演进。整段视为已知，hook 自己有专门的
-/// 解析器（[`crate::hooks::parse_layer_hooks`]）做 schema 校验，schema 错误
-/// 直接走 `ConfigError::Invalid` 而不是 `UnknownKey` warning。
-fn is_known_hooks_key(key: &str) -> bool {
-    key == "hooks" || key.starts_with("hooks.")
-}
-
-fn is_known_config_prefix(key: &str) -> bool {
-    matches!(
-        key,
-        "default"
-            | "base_prompt"
-            | "prompt"
-            | "turn"
-            | "capabilities"
-            | "capabilities.web_search"
-            | "providers"
-            | "providers.anthropic"
-            | "providers.anthropic.aws"
-            | "providers.anthropic.capabilities"
-            | "providers.anthropic.capabilities.web_search"
-            | "providers.openai"
-            | "providers.openai.aws"
-            | "providers.openai.capabilities"
-            | "providers.openai.capabilities.web_search"
-            | "providers.deepseek"
-            | "providers.deepseek.aws"
-            | "providers.deepseek.capabilities"
-            | "providers.deepseek.capabilities.web_search"
-            | "providers.litellm"
-            | "providers.litellm.aws"
-            | "providers.litellm.capabilities"
-            | "providers.litellm.capabilities.web_search"
-            | "tools"
-            | "tools.bash"
-            | "tools.fs"
-            | "tools.fetch"
-            | "tools.search"
-            | "sandbox"
-            | "tracing"
-            | "tracing.otlp"
-            | "mcp"
-            | "http"
-            | "http.proxy"
-    ) || is_known_provider_dynamic_prefix(key)
-        || is_known_custom_provider_prefix(key)
-        || is_known_mcp_prefix(key)
-        || is_known_hooks_key(key)
-}
-
-fn is_known_provider_dynamic_prefix(key: &str) -> bool {
-    let Some((_provider_name, field)) = split_provider_field(key) else {
-        return false;
-    };
-    field == "headers"
-}
-
-fn is_known_custom_provider_prefix(key: &str) -> bool {
-    let Some(rest) = key.strip_prefix("providers.") else {
-        return false;
-    };
-    if rest.is_empty() || !rest.contains('.') {
-        return true;
-    }
-    let Some((provider_name, field)) = split_once_dot(rest) else {
-        return false;
-    };
-    !provider_name.is_empty()
-        && !matches!(provider_name, "anthropic" | "openai" | "deepseek")
-        && provider_name != "litellm"
-        && matches!(
-            field,
-            "aws" | "capabilities" | "capabilities.web_search" | "headers"
-        )
-}
-
-fn split_provider_field(key: &str) -> Option<(&str, &str)> {
-    let rest = key.strip_prefix("providers.")?;
-    split_once_dot(rest)
-}
-
-fn split_once_dot(input: &str) -> Option<(&str, &str)> {
-    let (head, tail) = input.split_once('.')?;
-    Some((head, tail))
 }
 
 fn resolve_user_config_path(opts: &LoadConfigOptions) -> Result<PathBuf, ConfigError> {
