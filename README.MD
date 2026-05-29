@@ -78,4 +78,4 @@ file = "AGENTS.md"
 - 不需要 hook 系统？传 `Arc::new(NoopHookEngine)` 即可，引擎本身零开销
 - 不需要 MCP？skip `session_tool_factory`
 - 不需要持久化？skip `observe_session` / `session_loader`
-- 想缩二进制体积？参考 `Cargo.toml` 里 `__test-servers` feature 的 gating 风格——把不需要的 provider / tool 用 feature 包起来，编译期裁掉
+- 想缩二进制体积？我们后续会给 `defect-cli` 加可选 feature，按 provider / tool 维度编译期裁剪——届时跟着 feature flag 关即可，不需要自己在 `Cargo.toml` 里改
