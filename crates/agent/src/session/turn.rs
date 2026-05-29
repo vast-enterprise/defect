@@ -592,11 +592,18 @@ impl<'a> TurnRunner<'a> {
                 self.http.clone(),
             );
             let description = tool.describe(&args, describe_ctx).await;
+            // raw_input 由主循环在外层填充原始 args（见 tool.rs 注释：工具自己不塞）。
+            // 不填则 ACP wire 上的 tool_call 与 langfuse span 都没有 input。
+            let mut started_fields =
+                with_status(description.fields.clone(), ToolCallStatus::Pending);
+            if started_fields.raw_input.is_none() {
+                started_fields.raw_input = Some(args.clone());
+            }
             self.events
                 .emit(AgentEvent::ToolCallStarted {
                     id: id.clone(),
                     name: tu.name.clone(),
-                    fields: with_status(description.fields.clone(), ToolCallStatus::Pending),
+                    fields: started_fields,
                 })
                 .await;
 

@@ -289,7 +289,15 @@ async fn full_turn_with_one_tool_call() {
         match ev {
             AgentEvent::UserPromptCommitted { .. } => got_user_prompt_committed = true,
             AgentEvent::AssistantText { .. } => got_text = true,
-            AgentEvent::ToolCallStarted { .. } => got_tool_call_started = true,
+            AgentEvent::ToolCallStarted { fields, .. } => {
+                got_tool_call_started = true;
+                // raw_input 必须带上 LLM 给的原始参数（主循环外层填充）。
+                assert_eq!(
+                    fields.raw_input,
+                    Some(serde_json::json!({ "msg": "hi" })),
+                    "ToolCallStarted should carry the tool args as raw_input"
+                );
+            }
             AgentEvent::ToolCallFinished { .. } => got_tool_call_finished = true,
             AgentEvent::TurnEnded { usage, .. } => {
                 got_turn_ended = true;
