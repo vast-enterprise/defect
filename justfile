@@ -3,13 +3,13 @@
 default:
     @just --list
 
-# 将 defect-cli 安装为 `defect` 二进制（来自本地工作区源码）
+# 将 defect-cli 安装为 `defect` 二进制（dist profile：体积最小，编译慢）
 install:
-    cargo install --path crates/cli --bin defect --locked
+    cargo install --path crates/cli --bin defect --profile dist --locked
 
 # 强制覆盖已有的 defect 安装
 install-force:
-    cargo install --path crates/cli --bin defect --locked --force
+    cargo install --path crates/cli --bin defect --profile dist --locked --force
 
 # 卸载 `defect` 二进制
 uninstall:
@@ -32,6 +32,10 @@ test:
 build:
     cargo build --workspace
 
-# 发布构建
+# 优化构建（编译快、体积适中，日常用）
 build-release:
     cargo build --workspace --release
+
+# 发布构建（dist profile：fat LTO + 单 CGU，体积最小、编译慢）
+build-dist:
+    cargo build --bin defect --profile dist
