@@ -7,11 +7,12 @@ default-members = ["crates/*"]
 [profile.release]
 opt-level = "s"       # 体积优先（比 "z" 温和，不会激进到影响性能热点）
 lto = "thin"          # ThinLTO：体积收益明显，编译时间可控
-codegen-units = 16    # 多 CGU 并行编译，开发期重链快
+codegen-units = 1     # 单 CGU：实测比 16 CGU 二进制更小（18M vs 21M）且重链更快——
+                      # thin LTO 阶段本身是瓶颈，多 CGU 只减少跨单元去重、徒增体积
 strip = "symbols"     # 去符号，体积优化
 
 # 发布构建：体积最小、编译慢。`cargo build --profile dist` / `cargo install --profile dist`。
-# 在 release 基础上叠 fat LTO + 单 CGU：跨 crate 全局内联/死代码消除，比 thin 再省 ~2.5MiB，
+# 在 release 基础上只把 lto 升到 fat：跨 crate 全局内联/死代码消除，再省 ~2.5MiB（18M→16M），
 # 代价是全量编译 ~2min（vs release ~40s）。
 [profile.dist]
 inherits = "release"
