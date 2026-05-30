@@ -1220,6 +1220,7 @@ version = "0.1.0"
 dependencies = [
  "defect-agent",
  "serde",
+ "serde_yaml",
  "tempfile",
  "thiserror",
  "toml",

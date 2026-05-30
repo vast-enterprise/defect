@@ -46,6 +46,10 @@ pub use permissions::PermissionGate;
 pub use prompt::resolve_system_prompt;
 pub use tool_registry::{CompositeRegistry, StaticToolRegistry, StaticToolRegistryBuilder};
 pub use turn::{BasePromptConfig, PromptConfig, TurnConfig, TurnRequestLimit, TurnRunner};
+/// crate 内部复用：`spawn_agent` 子 agent 工具构造嵌套 [`TurnRunner`] 时需要
+/// 一个 `RequestAuditTracker` 实例。它对外不公开（诊断用内部状态），但同 crate
+/// 的 `crate::tool::spawn_agent` 要能 `new()`。
+pub(crate) use turn::RequestAuditTracker;
 
 /// 进程级 agent 根对象。
 ///

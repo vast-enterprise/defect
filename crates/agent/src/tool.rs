@@ -31,6 +31,9 @@ use crate::fs::FsBackend;
 use crate::http::HttpClient;
 use crate::shell::ShellBackend;
 
+mod spawn_agent;
+pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
+
 /// 工具的"对外名片"：只描述参数形状，不带任何执行能力。
 ///
 /// [`crate::llm::CompletionRequest::tools`] 接受 `Vec<ToolSchema>`，
@@ -154,6 +157,12 @@ pub struct ToolContext<'a> {
     ///
     /// [`HttpClientConfig`]: defect_config::HttpClientConfig
     pub http: Arc<dyn HttpClient>,
+    /// 当前 turn 选中的 model id。绝大多数工具用不到；`spawn_agent`
+    /// 子 agent 工具用它做"model 回落到父会话当前选择"——`ToolContext`
+    /// 不携带 provider registry，但携带这个字符串就够 `spawn_agent` 在
+    /// 自己捕获的 registry 上 `entry_for_model` 解析出父此刻用的 provider。
+    /// 由 [`crate::session::turn::TurnRunner`] 构造 ctx 时填入 `config.model`。
+    pub current_model: &'a str,
 }
 
 impl<'a> ToolContext<'a> {
@@ -166,6 +175,7 @@ impl<'a> ToolContext<'a> {
         fs: Arc<dyn FsBackend>,
         shell: Arc<dyn ShellBackend>,
         http: Arc<dyn HttpClient>,
+        current_model: &'a str,
     ) -> Self {
         Self {
             cwd,
@@ -173,6 +183,7 @@ impl<'a> ToolContext<'a> {
             fs,
             shell,
             http,
+            current_model,
         }
     }
 }

@@ -25,6 +25,13 @@ pub struct CliArgs {
     #[arg(long, env = "DEFECT_MODEL")]
     pub model: Option<String>,
 
+    /// Run the whole session as a named subagent profile (from
+    /// `.defect/agents/<name>/` or `~/.config/defect/agents/<name>/`).
+    /// Applies the profile's model, system prompt, and tool allowlist as the
+    /// session root. CLI flag wins over DEFECT_PROFILE env.
+    #[arg(long, env = "DEFECT_PROFILE")]
+    pub profile: Option<String>,
+
     /// Additional dotted-path config overrides. May be repeated.
     #[arg(long = "config", value_name = "KEY=VALUE")]
     pub config_override: Vec<String>,

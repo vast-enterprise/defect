@@ -50,6 +50,7 @@ impl Harness {
             self.fs.clone(),
             shell,
             http,
+            "test-model",
         )
     }
 
@@ -533,7 +534,7 @@ async fn case23_edit_detects_external_modification_between_read_and_write() {
     });
     let shell: Arc<dyn ShellBackend> = Arc::new(NoopShellBackend);
     let http: Arc<dyn HttpClient> = Arc::new(NoopHttpClient);
-    let ctx = ToolContext::new(&h.root, h.cancel.clone(), advancer, shell, http);
+    let ctx = ToolContext::new(&h.root, h.cancel.clone(), advancer, shell, http, "test-model");
 
     let tool = EditFileTool::new();
     let events = drive(tool.execute(

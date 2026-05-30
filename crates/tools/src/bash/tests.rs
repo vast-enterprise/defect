@@ -29,7 +29,7 @@ fn ctx_with(cwd: &std::path::Path, cancel: CancellationToken) -> ToolContext<'_>
     let fs: Arc<dyn FsBackend> = Arc::new(LocalFsBackend::new(cwd.to_path_buf()));
     let shell: Arc<dyn ShellBackend> = Arc::new(LocalShellBackend::new());
     let http: Arc<dyn HttpClient> = Arc::new(NoopHttpClient);
-    ToolContext::new(cwd, cancel, fs, shell, http)
+    ToolContext::new(cwd, cancel, fs, shell, http, "test-model")
 }
 
 fn extract_text(event: &ToolEvent) -> String {

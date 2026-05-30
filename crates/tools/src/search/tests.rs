@@ -47,6 +47,7 @@ impl Harness {
             self.fs.clone(),
             shell,
             http,
+            "test-model",
         )
     }
 

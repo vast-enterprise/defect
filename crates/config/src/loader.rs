@@ -657,7 +657,7 @@ fn resolve_user_config_path(opts: &LoadConfigOptions) -> Result<PathBuf, ConfigE
     })
 }
 
-fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
     for dir in cwd.ancestors() {
         let git_dir = dir.join(".git");
         if git_dir.exists() {

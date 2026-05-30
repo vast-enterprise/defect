@@ -27,7 +27,9 @@ use defect_cli::{
     paths::default_sessions_root,
     policy::build_policy,
     providers::build_registry,
-    tools::build_process_tools,
+    tools::{
+        build_process_tools, build_process_tools_with_subagents, filter_tools_by_allowlist,
+    },
 };
 use defect_obs::init_tracing;
 
@@ -38,24 +40,50 @@ async fn main() -> anyhow::Result<()> {
     load_dotenv_compat(&cwd).map_err(|e| anyhow::anyhow!("dotenv load failed: {e}"))?;
 
     let cli = CliArgs::parse();
-    let config = defect_config::load_config(LoadConfigOptions {
+    let load_opts = LoadConfigOptions {
         cwd,
         cli: cli.to_overrides()?,
         ..LoadConfigOptions::default()
-    })
-    .map_err(|e| anyhow::anyhow!("config load failed: {e}"))?;
+    };
+    let config = defect_config::load_config(load_opts.clone())
+        .map_err(|e| anyhow::anyhow!("config load failed: {e}"))?;
     init_tracing(config.effective.tracing.filter.as_deref())?;
 
     for warning in &config.warnings {
         tracing::warn!("{warning:?}");
     }
 
+    // subagent profile 发现（与主配置同源分层；同名项目层覆盖用户层）。
+    let profiles = defect_config::discover_profiles(&load_opts)
+        .map_err(|e| anyhow::anyhow!("profile discovery failed: {e}"))?;
+
     // 2) 装 provider registry / HTTP 栈 / 工具集合 / 存储 / hook 引擎
-    let (registry, turn_config) = build_registry(&config).await?;
+    let (registry, mut turn_config) = build_registry(&config).await?;
+    let policy = build_policy(config.effective.sandbox.mode);
+
+    // 继承给子 agent 的 base_prompt 文本（"你是会用工具的 agent"那段底座）。
+    let base_prompt_text = resolve_base_prompt_text(&config)?;
+
+    // 顶层 --profile：把整个会话跑成某个 profile（叶子 agent，不派生子 agent）。
+    // 与嵌套 subagent 不同，这里有人在场（ACP 客户端），故保留正常 policy。
+    if let Some(profile_name) = cli.profile.as_deref() {
+        let spec = profiles.get(profile_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown --profile `{profile_name}`; available: {}",
+                profiles.keys().cloned().collect::<Vec<_>>().join(", ")
+            )
+        })?;
+        if let Some(model) = &spec.model {
+            turn_config.model = model.clone();
+        }
+        // profile 角色 prompt 作为 session overlay 叠加。
+        turn_config.system_prompt = Some(spec.system_prompt_text.clone());
+    }
 
     tracing::info!(
         provider = %registry.default_entry().provider().info().vendor,
         model = %turn_config.model,
+        profile = cli.profile.as_deref().unwrap_or("<none>"),
         "starting defect ACP server on stdio"
     );
 
@@ -63,7 +91,23 @@ async fn main() -> anyhow::Result<()> {
         defect_http::build_fetch_client_arc(&build_http_stack_config(&config.effective.http)?)
             .map_err(|e| anyhow::anyhow!("fetch http client init failed: {e}"))?;
 
-    let tools = build_process_tools(&config);
+    // 工具集：顶层 --profile 时按其白名单裁；否则 base + (有 profile 则) spawn_agent。
+    let tools = if let Some(profile_name) = cli.profile.as_deref() {
+        let spec = profiles
+            .get(profile_name)
+            .expect("profile existence checked above");
+        let base = build_process_tools(&config);
+        filter_tools_by_allowlist(&base, &spec.tool_allow)
+            .map_err(|name| anyhow::anyhow!("profile `{profile_name}` allows unknown tool `{name}`"))?
+    } else {
+        build_process_tools_with_subagents(
+            &config,
+            &profiles,
+            &registry,
+            &policy,
+            base_prompt_text,
+        )
+    };
     let storage = Arc::new(StorageObserver::new(default_sessions_root()?));
 
     // 可观测性：langfuse 上报（默认关闭，需 [tracing.langfuse].enabled + key）。
@@ -91,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     let mut builder = DefaultAgentCore::builder()
         .registry(registry)
         .process_tools(tools)
-        .policy(build_policy(config.effective.sandbox.mode))
+        .policy(policy)
         .observe_session(storage.clone())
         .session_loader(storage)
         .session_tool_factory(Arc::new(McpToolFactory::with_default_servers(
@@ -107,4 +151,24 @@ async fn main() -> anyhow::Result<()> {
 
     defect_acp::serve(Arc::new(agent) as Arc<dyn AgentCore>).await?;
     Ok(())
+}
+
+/// 解析继承给 subagent 的 base_prompt 文本：`[base_prompt] file` 读文件 +
+/// `text` 内联，按"文件在前、内联在后"拼接（与
+/// `defect_agent::session::resolve_system_prompt` 的 base 段顺序一致）。
+/// 两者都没配 ⇒ `None`。
+fn resolve_base_prompt_text(
+    config: &defect_config::LoadedConfig,
+) -> anyhow::Result<Option<String>> {
+    let bp = &config.effective.base_prompt;
+    let mut sections = Vec::new();
+    if let Some(file) = bp.file.as_deref() {
+        let text = std::fs::read_to_string(file)
+            .map_err(|e| anyhow::anyhow!("base_prompt file {} read failed: {e}", file.display()))?;
+        sections.push(text);
+    }
+    if let Some(text) = bp.text.as_deref() {
+        sections.push(text.to_owned());
+    }
+    Ok((!sections.is_empty()).then(|| sections.join("\n\n")))
 }

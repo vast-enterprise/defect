@@ -41,7 +41,7 @@ fn ctx<'a>(
 ) -> ToolContext<'a> {
     let fs: Arc<dyn FsBackend> = Arc::new(LocalFsBackend::new(cwd.to_path_buf()));
     let shell: Arc<dyn ShellBackend> = Arc::new(NoopShellBackend);
-    ToolContext::new(cwd, cancel, fs, shell, http)
+    ToolContext::new(cwd, cancel, fs, shell, http, "test-model")
 }
 
 async fn drive(stream: ToolStream) -> Vec<ToolEvent> {

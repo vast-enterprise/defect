@@ -18,7 +18,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{PermissionOptionId, PermissionOptionKind};
 use serde::{Deserialize, Serialize};
@@ -205,6 +205,39 @@ impl SandboxPolicy for AskWritesPolicy {
             table.insert(ctx.tool_name.to_string());
         }
     }
+}
+
+/// 把任意内层策略适配成"非交互"语义：内层返回 [`PolicyDecision::Ask`]
+/// 时一律降级为 [`PolicyDecision::Deny`]，`Allow` / `Deny` 原样透传。
+///
+/// 用于 subagent（`spawn_agent`）的嵌套 turn——子 agent 没有人在场回答
+/// 权限请求，若放任 `Ask` 进入主循环会在 [`crate::session::permissions::PermissionGate`]
+/// 上永久挂死。包一层本策略即可保证子 turn **永不阻塞、永不提权**：
+/// 子 agent 的实际授权恒 ≤ 它包装的父策略（父会 Ask 的，子直接 Deny）。
+///
+/// 这与"工具白名单裁剪"是两道独立闸门：白名单决定子 agent **看得到**哪些
+/// 工具，本策略决定在这些工具上**运行时**放行到什么程度。详见
+/// `project-subagent-design` 设计记录。
+pub struct NonInteractivePolicy {
+    inner: Arc<dyn SandboxPolicy>,
+}
+
+impl NonInteractivePolicy {
+    pub fn new(inner: Arc<dyn SandboxPolicy>) -> Self {
+        Self { inner }
+    }
+}
+
+impl SandboxPolicy for NonInteractivePolicy {
+    fn classify(&self, ctx: PolicyCtx<'_>) -> PolicyDecision {
+        match self.inner.classify(ctx) {
+            PolicyDecision::Ask(_) => PolicyDecision::Deny,
+            other => other,
+        }
+    }
+
+    // 本策略永不返回 Ask，主循环也就不会回喂 record——空实现即可。
+    fn record(&self, _ctx: PolicyCtx<'_>, _outcome: RecordedOutcome) {}
 }
 
 const ALLOW_ONCE_ID: &str = "allow_once";

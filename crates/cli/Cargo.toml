@@ -27,13 +27,24 @@ required-features = ["__test-servers"]
 # `cargo build --no-default-features --features provider-anthropic`。
 # echo provider 在 defect-acp，零额外依赖，永不 gate（兜底）；
 # litellm 复用 openai provider 实现，跟随 provider-openai。
-default = ["provider-anthropic", "provider-bedrock", "provider-openai", "provider-deepseek"]
+default = [
+    "provider-anthropic",
+    "provider-bedrock",
+    "provider-openai",
+    "provider-deepseek",
+    "yaml",
+]
 
 # 转发给 defect-llm 的同名 feature。
 provider-anthropic = ["defect-llm/provider-anthropic"]
 provider-bedrock = ["defect-llm/provider-bedrock"]
 provider-openai = ["defect-llm/provider-openai"]
 provider-deepseek = ["defect-llm/provider-deepseek"]
+
+# 转发给 defect-config：单文件 profile / 未来 skill 的 YAML frontmatter 支持。
+# defect-config 默认即开 yaml 且本 crate 未关其 default，故去掉本行仍带 yaml；
+# 显式转发是为了让 `--no-default-features` 能裁出无 yaml 的二进制。
+yaml = ["defect-config/yaml"]
 
 # 仅给集成测试用：拉起内嵌 MCP server 校验 client/transport round-trip。
 # 主 release bin 不需要——开启后会拖入 rmcp 的完整 server side（schema 派生 +

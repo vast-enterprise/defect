@@ -137,3 +137,38 @@ fn deny_all_denies() {
         PolicyDecision::Deny
     ));
 }
+
+#[test]
+fn non_interactive_maps_ask_to_deny_passes_allow_deny() {
+    use std::sync::Arc;
+
+    // 包 AskWritesPolicy：ReadOnly 透传 Allow，写类被降级为 Deny（而非 Ask）。
+    let policy = NonInteractivePolicy::new(Arc::new(AskWritesPolicy::new()));
+    let cwd = PathBuf::from("/");
+    let args = json!({});
+
+    assert!(matches!(
+        policy.classify(ctx("fs.read", SafetyClass::ReadOnly, &args, &cwd)),
+        PolicyDecision::Allow
+    ));
+    for hint in [
+        SafetyClass::Mutating,
+        SafetyClass::Destructive,
+        SafetyClass::Network,
+    ] {
+        assert!(
+            matches!(
+                policy.classify(ctx("t", hint, &args, &cwd)),
+                PolicyDecision::Deny
+            ),
+            "inner Ask must be downgraded to Deny for {hint:?}"
+        );
+    }
+
+    // 包 DenyAllPolicy：Deny 原样透传。
+    let deny = NonInteractivePolicy::new(Arc::new(DenyAllPolicy));
+    assert!(matches!(
+        deny.classify(ctx("fs.read", SafetyClass::ReadOnly, &args, &cwd)),
+        PolicyDecision::Deny
+    ));
+}

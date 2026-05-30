@@ -9,6 +9,9 @@ use defect_config::ProviderConfigFile;
 use defect_config::SandboxMode;
 use serde_json::json;
 
+#[path = "test/subagents.rs"]
+mod subagents;
+
 #[test]
 fn read_only_policy_denies_mutating_tools() {
     let policy = build_policy(SandboxMode::ReadOnly);

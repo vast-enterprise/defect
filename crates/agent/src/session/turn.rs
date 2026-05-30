@@ -598,6 +598,7 @@ impl<'a> TurnRunner<'a> {
                 self.fs.clone(),
                 self.shell.clone(),
                 self.http.clone(),
+                &self.config.model,
             );
             let description = tool.describe(&args, describe_ctx).await;
             // raw_input 由主循环在外层填充原始 args（见 tool.rs 注释：工具自己不塞）。
@@ -740,6 +741,7 @@ impl<'a> TurnRunner<'a> {
                     let fs = self.fs.clone();
                     let shell = self.shell.clone();
                     let http = self.http.clone();
+                    let model = self.config.model.clone();
                     let name = tool.schema().name.clone();
                     let span = tracing::info_span!(
                         "tool_call",
@@ -759,6 +761,7 @@ impl<'a> TurnRunner<'a> {
                             fs,
                             shell,
                             http,
+                            model,
                         )
                         .instrument(span),
                     );
@@ -1323,6 +1326,7 @@ async fn drive_tool_stream(
     fs: Arc<dyn FsBackend>,
     shell: Arc<dyn ShellBackend>,
     http: Arc<dyn HttpClient>,
+    model: String,
 ) -> ToolResult {
     let ctx = ToolContext::new(
         &cwd,
@@ -1330,6 +1334,7 @@ async fn drive_tool_stream(
         fs.clone(),
         shell.clone(),
         http.clone(),
+        &model,
     );
     let mut stream = tool.execute(args, ctx);
 

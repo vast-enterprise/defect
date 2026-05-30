@@ -4,9 +4,19 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
+[features]
+# YAML frontmatter 支持（单文件 profile 的 `---` 头，社区标准；未来 skill
+# 加载也要面对带 YAML 头的文档）。默认开启；裁剪时
+# `--no-default-features` 后 `---` 头会以可操作错误 hard fail，`+++`（TOML）
+# 仍可用。serde_yaml 0.9 已是 workspace 依赖（codegen / oas3 在用），开启本
+# feature 不新增第三方依赖。
+default = ["yaml"]
+yaml = ["dep:serde_yaml"]
+
 [dependencies]
 defect-agent.workspace = true
 serde.workspace = true
+serde_yaml = { workspace = true, optional = true }
 thiserror.workspace = true
 toml = "0.8"
 
