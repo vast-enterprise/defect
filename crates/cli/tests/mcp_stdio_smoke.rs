@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::AcpAgent;
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     ContentBlock, EnvVariable, InitializeRequest, McpServer, McpServerSse, McpServerStdio,
     NewSessionRequest, PromptRequest, ProtocolVersion, SessionNotification, SessionUpdate,
     StopReason, ToolCallContent, ToolCallStatus,
@@ -365,7 +365,7 @@ async fn sse_mcp_tool_round_trip() {
 
             let mcp_server = McpServer::Sse(
                 McpServerSse::new("mcp-sse", format!("{}/mcp", server.mcp_base_url)).headers(vec![
-                    agent_client_protocol::schema::HttpHeader::new("x-mcp-test", "enabled"),
+                    agent_client_protocol_schema::HttpHeader::new("x-mcp-test", "enabled"),
                 ]),
             );
             let session = cx

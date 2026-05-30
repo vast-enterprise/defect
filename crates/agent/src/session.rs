@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{ContentBlock, McpServer, SessionId, StopReason, ToolCallId};
+use agent_client_protocol_schema::{ContentBlock, McpServer, SessionId, StopReason, ToolCallId};
 use futures::future::BoxFuture;
 
 use crate::error::BoxError;
@@ -84,8 +84,8 @@ pub trait AgentCore: Send + Sync {
     ///
     /// MCP 启动失败、cwd 不存在、id 重复等。
     ///
-    /// [`FileSystemCapabilities`]: agent_client_protocol::schema::FileSystemCapabilities
-    /// [`ClientCapabilities::terminal`]: agent_client_protocol::schema::ClientCapabilities
+    /// [`FileSystemCapabilities`]: agent_client_protocol_schema::FileSystemCapabilities
+    /// [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
     fn create_session(
         &self,
         id: SessionId,

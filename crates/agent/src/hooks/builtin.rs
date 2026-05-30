@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::ContentBlock;
+use agent_client_protocol_schema::ContentBlock;
 use futures::future::BoxFuture;
 use serde_json::{Map, Value};
 
@@ -274,12 +274,12 @@ mod test {
     use super::*;
     use crate::hooks::{HookEvent, SessionSource};
     use crate::tool::SafetyClass;
-    use agent_client_protocol::schema::{ToolCallId, ToolCallUpdateFields};
+    use agent_client_protocol_schema::{ToolCallId, ToolCallUpdateFields};
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     fn ctx<'a>(
-        session_id: &'a agent_client_protocol::schema::SessionId,
+        session_id: &'a agent_client_protocol_schema::SessionId,
         cwd: &'a std::path::Path,
     ) -> HookCtx<'a> {
         HookCtx::new(session_id, cwd, CancellationToken::new())
@@ -302,7 +302,7 @@ mod test {
     #[tokio::test]
     async fn tracing_audit_passes_through() {
         let h = TracingAuditHook;
-        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let id = ToolCallId::new("c1");
         let fields = ToolCallUpdateFields::default();
@@ -320,7 +320,7 @@ mod test {
     #[tokio::test]
     async fn tracing_audit_silently_passes_other_events() {
         let h = TracingAuditHook;
-        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let ev = HookEvent::SessionStart {
             source: SessionSource::New,
@@ -333,7 +333,7 @@ mod test {
     #[tokio::test]
     async fn redact_replaces_password_field() {
         let h = RedactSecretsHook;
-        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let id = ToolCallId::new("c1");
         let args = serde_json::json!({"password": "hunter2", "user": "alice"});
@@ -354,7 +354,7 @@ mod test {
     #[tokio::test]
     async fn redact_no_op_when_no_secret_key() {
         let h = RedactSecretsHook;
-        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let id = ToolCallId::new("c1");
         let args = serde_json::json!({"command": "echo hi"});
@@ -392,7 +392,7 @@ mod test {
         let mut skills = BTreeMap::new();
         skills.insert("code-review".to_string(), skill_entry("review Rust diffs"));
         let h = SkillManifestHook::new(Arc::new(skills));
-        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let ev = HookEvent::SessionStart {
             source: SessionSource::New,
@@ -410,7 +410,7 @@ mod test {
     #[tokio::test]
     async fn skill_manifest_empty_index_injects_nothing() {
         let h = SkillManifestHook::new(Arc::new(BTreeMap::new()));
-        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let ev = HookEvent::SessionStart {
             source: SessionSource::New,
@@ -425,7 +425,7 @@ mod test {
         let mut skills = BTreeMap::new();
         skills.insert("x".to_string(), skill_entry("d"));
         let h = SkillManifestHook::new(Arc::new(skills));
-        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let ev = HookEvent::UserPromptSubmit { content: &[] };
         let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");

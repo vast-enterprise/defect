@@ -12,7 +12,7 @@
 //!
 //! 设计详见 `docs/internal/tools-fs.md` §2 与 `docs/inbound/acp-fs.md`。
 //!
-//! [`FileSystemCapabilities`]: agent_client_protocol::schema::FileSystemCapabilities
+//! [`FileSystemCapabilities`]: agent_client_protocol_schema::FileSystemCapabilities
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

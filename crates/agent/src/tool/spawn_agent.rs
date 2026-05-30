@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content, ContentBlock, SessionId, TextContent, ToolCallContent, ToolCallUpdateFields, ToolKind,
 };
 use futures::future::BoxFuture;
@@ -340,8 +340,10 @@ async fn run_subagent(
 
     let mut fields = ToolCallUpdateFields::default();
     fields.content = Some(vec![ToolCallContent::Content(Content::new(
-        ContentBlock::Text(TextContent::new(answer)),
+        ContentBlock::Text(TextContent::new(answer.clone())),
     ))]);
+    // raw_output 给遥测（langfuse projector 只读 raw_output 作 observation output）。
+    fields.raw_output = Some(serde_json::Value::String(answer));
     ToolEvent::Completed(fields)
 }
 

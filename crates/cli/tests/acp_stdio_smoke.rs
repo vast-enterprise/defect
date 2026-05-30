@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::AcpAgent;
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion,
     SessionNotification, SessionUpdate, StopReason,
 };
@@ -79,7 +79,7 @@ async fn stdio_echo_round_trip() {
             _ => None,
         })
         .filter_map(|content| match content {
-            agent_client_protocol::schema::ContentBlock::Text(text) => Some(text.text.as_str()),
+            agent_client_protocol_schema::ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         })
         .collect();

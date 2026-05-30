@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-agent-client-protocol.workspace = true
+agent-client-protocol-schema.workspace = true
 arc-swap.workspace = true
 dashmap.workspace = true
 futures.workspace = true

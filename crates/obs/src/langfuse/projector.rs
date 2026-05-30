@@ -31,7 +31,7 @@
 
 use std::collections::HashMap;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     ContentBlock, StopReason, ToolCallStatus, ToolCallUpdateFields,
 };
 use defect_agent::event::{AgentEvent, LlmRequestSnapshot};

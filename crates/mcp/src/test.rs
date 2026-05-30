@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content as AcpContent, McpServer, McpServerSse, McpServerStdio, ToolCallContent,
 };
 use rmcp::model::{CallToolResult, Content};

@@ -11,15 +11,15 @@
 //! 主循环把工具产出的字段拼上 [`ToolCallId`]、[`raw_input`] 等元信息后
 //! 转手发出 `session/update` 与 `session/request_permission`。
 //!
-//! [`ToolCallId`]: agent_client_protocol::schema::ToolCallId
-//! [`ToolCallUpdateFields`]: agent_client_protocol::schema::ToolCallUpdateFields
-//! [`raw_input`]: agent_client_protocol::schema::ToolCallUpdateFields::raw_input
+//! [`ToolCallId`]: agent_client_protocol_schema::ToolCallId
+//! [`ToolCallUpdateFields`]: agent_client_protocol_schema::ToolCallUpdateFields
+//! [`raw_input`]: agent_client_protocol_schema::ToolCallUpdateFields::raw_input
 
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::ToolCallUpdateFields;
+use agent_client_protocol_schema::ToolCallUpdateFields;
 use futures::Stream;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,7 @@ pub struct ToolSchema {
 /// - `status` 由 [`ToolEvent`] 的 variant 推断：`Progress` → `InProgress`，
 ///   `Completed` → `Completed`，`Failed` → `Failed`。工具不应自行设置。
 ///
-/// [`ToolCallUpdateFields`]: agent_client_protocol::schema::ToolCallUpdateFields
+/// [`ToolCallUpdateFields`]: agent_client_protocol_schema::ToolCallUpdateFields
 #[derive(Debug, Clone)]
 pub struct ToolCallDescription {
     pub fields: ToolCallUpdateFields,
@@ -103,7 +103,7 @@ pub enum ToolEvent {
     /// 进度增量：主循环转手发 ACP `session/update` 的 `tool_call_update`。
     /// 仅含本次变化的字段，符合 [`ToolCallUpdateFields`] 的"patch"语义。
     ///
-    /// [`ToolCallUpdateFields`]: agent_client_protocol::schema::ToolCallUpdateFields
+    /// [`ToolCallUpdateFields`]: agent_client_protocol_schema::ToolCallUpdateFields
     Progress(ToolCallUpdateFields),
 
     /// 成功结束。`fields` 是最终态的剩余字段（如最终 content / locations /
@@ -140,7 +140,7 @@ pub struct ToolContext<'a> {
     /// 用 [`Arc`] 而非借用：`Tool::execute` 返回 `'static` future / stream,
     /// 工具内部通常 `clone` 一份 fs 进入异步任务。借用形式无法跨过 await。
     ///
-    /// [`FileSystemCapabilities`]: agent_client_protocol::schema::FileSystemCapabilities
+    /// [`FileSystemCapabilities`]: agent_client_protocol_schema::FileSystemCapabilities
     pub fs: Arc<dyn FsBackend>,
     /// Shell 执行后端。`bash` 工具通过它创建 terminal 跑命令；装配时由
     /// `defect-acp` 按客户端协商的 [`ClientCapabilities::terminal`] 选择
@@ -148,7 +148,7 @@ pub struct ToolContext<'a> {
     ///
     /// 与 `fs` 同款 `Arc` 取舍——`Tool::execute` 是 `'static` future。
     ///
-    /// [`ClientCapabilities::terminal`]: agent_client_protocol::schema::ClientCapabilities
+    /// [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
     /// [`LocalShellBackend`]: defect_tools::shell::LocalShellBackend
     /// [`AcpShellBackend`]: defect_acp::shell::AcpShellBackend
     pub shell: Arc<dyn ShellBackend>,

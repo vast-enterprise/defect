@@ -5,7 +5,7 @@
 //!
 //! 设计详见 `docs/internal/session.md` §3.4 与 `docs/internal/turn-loop.md` §3.3 / §5。
 
-use agent_client_protocol::schema::ToolCallId;
+use agent_client_protocol_schema::ToolCallId;
 use dashmap::DashMap;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;

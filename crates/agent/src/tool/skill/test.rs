@@ -2,7 +2,7 @@ use super::*;
 
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::schema::ContentBlock;
+use agent_client_protocol_schema::ContentBlock;
 use futures::StreamExt;
 
 use crate::fs::{FsBackend, NoopFsBackend};

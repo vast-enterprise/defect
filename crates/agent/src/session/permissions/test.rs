@@ -1,6 +1,6 @@
 use super::*;
 
-use agent_client_protocol::schema::PermissionOptionId;
+use agent_client_protocol_schema::PermissionOptionId;
 
 fn id(s: &str) -> ToolCallId {
     ToolCallId::new(s.to_string())

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content, ContentBlock, Diff, TextContent, ToolCallContent, ToolCallLocation,
     ToolCallUpdateFields, ToolKind,
 };

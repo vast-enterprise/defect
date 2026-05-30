@@ -2,7 +2,7 @@ use super::*;
 
 use std::path::Path;
 
-use agent_client_protocol::schema::ToolCallUpdateFields;
+use agent_client_protocol_schema::ToolCallUpdateFields;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream;

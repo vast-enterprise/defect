@@ -32,7 +32,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
-use agent_client_protocol::schema::{ContentBlock, McpServer, SessionId, StopReason, ToolCallId};
+use agent_client_protocol_schema::{ContentBlock, McpServer, SessionId, StopReason, ToolCallId};
 use dashmap::DashMap;
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
@@ -524,7 +524,7 @@ pub struct DefaultSession {
     /// SessionStart preload 的落地等系统 prompt 动态拼接落地后接入。
     /// 详见 `docs/internal/hooks.md` §3.2 / §9.1。
     #[allow(dead_code)]
-    session_start_append: Vec<agent_client_protocol::schema::ContentBlock>,
+    session_start_append: Vec<agent_client_protocol_schema::ContentBlock>,
     /// 相邻请求稳定性诊断器。每次实际发给 provider 的请求都会产一条
     /// tracing 记录，帮助定位 cache miss 来源。
     request_audit: RequestAuditTracker,

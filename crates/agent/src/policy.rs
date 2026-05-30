@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::{PermissionOptionId, PermissionOptionKind};
+use agent_client_protocol_schema::{PermissionOptionId, PermissionOptionKind};
 use serde::{Deserialize, Serialize};
 
 use crate::tool::SafetyClass;

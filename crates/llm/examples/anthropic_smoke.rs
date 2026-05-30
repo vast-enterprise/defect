@@ -18,7 +18,7 @@ mod common;
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::StopReason as AcpStopReason;
+use agent_client_protocol_schema::StopReason as AcpStopReason;
 use defect_agent::llm::{LlmProvider, SamplingParams};
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 

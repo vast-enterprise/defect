@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerSse, McpServerStdio,
 };
 use defect_config::{LoadedConfig, McpServerConfig as ConfigMcpServerConfig};

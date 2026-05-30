@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
+use agent_client_protocol_schema::{ContentBlock, ToolCallContent};
 use defect_agent::fs::FsBackend;
 use defect_agent::http::{HttpClient, NoopHttpClient};
 use defect_agent::shell::{NoopShellBackend, ShellBackend};
@@ -66,7 +66,7 @@ async fn drive(stream: defect_agent::tool::ToolStream) -> Vec<ToolEvent> {
 
 fn expect_completed(
     events: &[ToolEvent],
-) -> (&agent_client_protocol::schema::ToolCallUpdateFields,) {
+) -> (&agent_client_protocol_schema::ToolCallUpdateFields,) {
     assert_eq!(events.len(), 1, "expected exactly one event: {events:?}");
     match &events[0] {
         ToolEvent::Completed(f) => (f,),
@@ -82,7 +82,7 @@ fn expect_failed(events: &[ToolEvent]) -> &ToolError {
     }
 }
 
-fn extract_text(fields: &agent_client_protocol::schema::ToolCallUpdateFields) -> String {
+fn extract_text(fields: &agent_client_protocol_schema::ToolCallUpdateFields) -> String {
     let content = fields.content.as_ref().expect("content");
     let mut out = String::new();
     for c in content {
@@ -95,7 +95,7 @@ fn extract_text(fields: &agent_client_protocol::schema::ToolCallUpdateFields) ->
     out
 }
 
-fn extract_raw(fields: &agent_client_protocol::schema::ToolCallUpdateFields) -> serde_json::Value {
+fn extract_raw(fields: &agent_client_protocol_schema::ToolCallUpdateFields) -> serde_json::Value {
     fields.raw_output.clone().expect("raw_output")
 }
 

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::{Instant, SystemTime};
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content, ContentBlock, TextContent, ToolCallContent, ToolCallLocation, ToolCallUpdateFields,
     ToolKind,
 };

@@ -336,7 +336,7 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let arc = build_engine_arc(&HooksConfig::default(), &builtins, &ctx(&reg)).expect("ok");
-        let session_id = agent_client_protocol::schema::SessionId::new("s");
+        let session_id = agent_client_protocol_schema::SessionId::new("s");
         let cwd = std::path::Path::new("/");
         let hctx = defect_agent::hooks::HookCtx::new(&session_id, cwd, CancellationToken::new());
         let ev = defect_agent::hooks::HookEvent::SessionStart {

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::StopReason as AcpStopReason;
+use agent_client_protocol_schema::StopReason as AcpStopReason;
 use defect_agent::event::AgentEvent;
 use defect_agent::llm::LlmProvider;
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};

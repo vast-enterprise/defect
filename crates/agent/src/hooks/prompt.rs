@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::ContentBlock;
+use agent_client_protocol_schema::ContentBlock;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 
@@ -269,7 +269,7 @@ mod test {
         Capabilities, FeatureSupport, ModelInfo, ProtocolId, ProviderChunk, ProviderError,
         ProviderErrorKind, ProviderInfo, ProviderStream, StopReason, ThinkingEcho,
     };
-    use agent_client_protocol::schema::{SessionId, ToolCallId};
+    use agent_client_protocol_schema::{SessionId, ToolCallId};
     use futures::stream;
     use std::path::Path;
     use tokio_util::sync::CancellationToken;

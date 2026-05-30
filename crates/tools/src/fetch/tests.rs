@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
+use agent_client_protocol_schema::{ContentBlock, ToolCallContent};
 use defect_agent::http::HttpClient;
 use defect_agent::tool::{SafetyClass, Tool, ToolContext, ToolError, ToolEvent, ToolStream};
 use defect_config::{FetchFormat, FetchToolConfig};

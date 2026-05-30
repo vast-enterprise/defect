@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content as AcpContent, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
     ResourceLink, StopReason as AcpStopReason, TextContent, TextResourceContents, ToolCallContent,
     ToolCallId, ToolCallStatus, ToolCallUpdateFields,
@@ -41,7 +41,7 @@ use crate::session::permissions::PermissionGate;
 use crate::session::{History, ToolRegistry, TurnError};
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolContext, ToolError, ToolEvent};
-use agent_client_protocol::schema::SessionId;
+use agent_client_protocol_schema::SessionId;
 
 const DEFAULT_PROMPT_FILE: &str = "AGENTS.md";
 

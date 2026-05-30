@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Error, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     McpServer, SessionId, StopReason as AcpStopReason, ToolCallContent, ToolCallStatus,
     ToolCallUpdateFields,
 };
@@ -556,13 +556,13 @@ impl RecordProjector {
             }
             AgentEvent::AssistantText { content } => {
                 append_if_some(&mut records, self.flush_tool_results());
-                if let agent_client_protocol::schema::ContentBlock::Text(text) = content {
+                if let agent_client_protocol_schema::ContentBlock::Text(text) = content {
                     self.current_assistant().text.push_str(text.text.as_str());
                 }
             }
             AgentEvent::AssistantThought { content } => {
                 append_if_some(&mut records, self.flush_tool_results());
-                if let agent_client_protocol::schema::ContentBlock::Text(text) = content {
+                if let agent_client_protocol_schema::ContentBlock::Text(text) = content {
                     self.current_assistant()
                         .thinking_text
                         .push_str(text.text.as_str());
@@ -666,10 +666,10 @@ fn append_if_some(records: &mut Vec<SessionRecord>, record: Option<SessionRecord
 }
 
 fn content_block_to_message_content(
-    block: agent_client_protocol::schema::ContentBlock,
+    block: agent_client_protocol_schema::ContentBlock,
 ) -> MessageContent {
     match block {
-        agent_client_protocol::schema::ContentBlock::Text(text) => {
+        agent_client_protocol_schema::ContentBlock::Text(text) => {
             MessageContent::Text { text: text.text }
         }
         _ => MessageContent::Text {
@@ -688,7 +688,7 @@ fn tool_call_output(fields: &ToolCallUpdateFields) -> ToolResultBody {
         .iter()
         .filter_map(|item| match item {
             ToolCallContent::Content(inner) => match &inner.content {
-                agent_client_protocol::schema::ContentBlock::Text(text) => Some(text.text.as_str()),
+                agent_client_protocol_schema::ContentBlock::Text(text) => Some(text.text.as_str()),
                 _ => None,
             },
             _ => None,

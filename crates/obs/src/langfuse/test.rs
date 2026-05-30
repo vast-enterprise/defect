@@ -3,7 +3,7 @@
 //! model 测试锁定 wire 契约（字段名 camelCase、type 判别值、None 跳过）；
 //! projector 测试锁定事件翻译（trace/generation/span 结构、usage 映射、id 配对）。
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     ContentBlock, StopReason, TextContent, ToolCallId, ToolCallStatus, ToolCallUpdateFields,
 };
 use defect_agent::event::{AgentEvent, LlmRequestSnapshot};

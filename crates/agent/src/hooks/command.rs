@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use agent_client_protocol::schema::ContentBlock;
+use agent_client_protocol_schema::ContentBlock;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -510,7 +510,7 @@ fn io_invalid(msg: impl Into<String>, detail: impl std::fmt::Display) -> std::io
 #[cfg(test)]
 mod test {
     use super::*;
-    use agent_client_protocol::schema::{SessionId, ToolCallId};
+    use agent_client_protocol_schema::{SessionId, ToolCallId};
     use std::path::Path;
     use tokio_util::sync::CancellationToken;
 
@@ -698,7 +698,7 @@ mod test {
         let session_id = SessionId::new("s1");
         let cwd = Path::new("/");
         let id = ToolCallId::new("c1");
-        let fields = agent_client_protocol::schema::ToolCallUpdateFields::default();
+        let fields = agent_client_protocol_schema::ToolCallUpdateFields::default();
         let ev = HookEvent::PostToolUse {
             id: &id,
             name: "bash",

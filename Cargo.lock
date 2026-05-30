@@ -1168,7 +1168,7 @@ dependencies = [
 name = "defect-agent"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
+ "agent-client-protocol-schema",
  "arc-swap",
  "dashmap",
  "futures",
@@ -1188,6 +1188,7 @@ name = "defect-cli"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-schema",
  "anyhow",
  "axum",
  "clap",
@@ -1255,7 +1256,7 @@ dependencies = [
 name = "defect-llm"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
+ "agent-client-protocol-schema",
  "aws-config",
  "aws-sdk-bedrockruntime",
  "aws-smithy-runtime-api",
@@ -1298,7 +1299,7 @@ dependencies = [
 name = "defect-mcp"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
+ "agent-client-protocol-schema",
  "bytes",
  "defect-agent",
  "defect-http",
@@ -1321,7 +1322,7 @@ dependencies = [
 name = "defect-obs"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
+ "agent-client-protocol-schema",
  "anyhow",
  "base64",
  "bytes",
@@ -1350,7 +1351,7 @@ version = "0.1.0"
 name = "defect-storage"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
+ "agent-client-protocol-schema",
  "defect-agent",
  "futures",
  "serde",
@@ -1365,7 +1366,7 @@ dependencies = [
 name = "defect-tools"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
+ "agent-client-protocol-schema",
  "defect-agent",
  "defect-config",
  "defect-http",

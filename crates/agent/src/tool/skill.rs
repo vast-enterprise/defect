@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content, ContentBlock, TextContent, ToolCallContent, ToolCallUpdateFields, ToolKind,
 };
 use futures::future::BoxFuture;
@@ -160,8 +160,10 @@ impl Tool for SkillTool {
             let output = render_skill(&parsed.name, skill);
             let mut fields = ToolCallUpdateFields::default();
             fields.content = Some(vec![ToolCallContent::Content(Content::new(
-                ContentBlock::Text(TextContent::new(output)),
+                ContentBlock::Text(TextContent::new(output.clone())),
             ))]);
+            // raw_output 给遥测（langfuse projector 只读 raw_output 作 observation output）。
+            fields.raw_output = Some(serde_json::Value::String(output));
             ToolEvent::Completed(fields)
         };
         let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =

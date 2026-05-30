@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content, ContentBlock, SessionId, StopReason, TextContent, ToolCallContent, ToolCallStatus,
     ToolCallUpdateFields,
 };

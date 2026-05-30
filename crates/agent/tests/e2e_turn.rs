@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use agent_client_protocol::schema::SessionId;
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::SessionId;
+use agent_client_protocol_schema::{
     ContentBlock, PermissionOptionId, StopReason, TextContent, ToolCallUpdateFields,
 };
 use defect_agent::event::{AgentEvent, PermissionResolution};
@@ -230,8 +230,8 @@ impl Tool for EchoTool {
             .to_string();
         let mut completed = ToolCallUpdateFields::default();
         completed.content = Some(vec![
-            agent_client_protocol::schema::ToolCallContent::Content(
-                agent_client_protocol::schema::Content::new(text),
+            agent_client_protocol_schema::ToolCallContent::Content(
+                agent_client_protocol_schema::Content::new(text),
             ),
         ]);
         let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
@@ -526,8 +526,8 @@ async fn ask_writes_policy_runs_after_allow_once() {
                 .to_string();
             let mut completed = ToolCallUpdateFields::default();
             completed.content = Some(vec![
-                agent_client_protocol::schema::ToolCallContent::Content(
-                    agent_client_protocol::schema::Content::new(text),
+                agent_client_protocol_schema::ToolCallContent::Content(
+                    agent_client_protocol_schema::Content::new(text),
                 ),
             ]);
             let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =

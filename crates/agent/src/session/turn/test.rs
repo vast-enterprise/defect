@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     BlobResourceContents, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
     ResourceLink, TextContent, TextResourceContents,
 };
@@ -106,7 +106,7 @@ fn text_resource_becomes_text_with_source_header() {
 #[test]
 fn audio_content_is_rejected() {
     let err = content_block_to_message_content(ContentBlock::Audio(
-        agent_client_protocol::schema::AudioContent::new("aGVsbG8=", "audio/wav"),
+        agent_client_protocol_schema::AudioContent::new("aGVsbG8=", "audio/wav"),
     ))
     .expect_err("audio should be rejected");
 

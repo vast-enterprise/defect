@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     ContentBlock, RequestPermissionRequest, SessionId, StopReason as AcpStopReason, ToolCallId,
     ToolCallUpdateFields,
 };
@@ -850,7 +850,7 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 #[cfg(test)]
 mod test {
     use super::*;
-    use agent_client_protocol::schema::ContentBlock;
+    use agent_client_protocol_schema::ContentBlock;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

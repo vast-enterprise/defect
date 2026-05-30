@@ -12,7 +12,7 @@
 //!
 //! 设计详见 `docs/inbound/acp-shell.md`。
 //!
-//! [`ClientCapabilities::terminal`]: agent_client_protocol::schema::ClientCapabilities
+//! [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
 
 use std::path::PathBuf;
 

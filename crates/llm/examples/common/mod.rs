@@ -11,7 +11,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content, ContentBlock, SessionId, StopReason as AcpStopReason, TextContent, ToolCallContent,
     ToolCallUpdateFields,
 };
@@ -234,7 +234,7 @@ fn first_text_content(fields: &ToolCallUpdateFields) -> Option<String> {
     let content = fields.content.as_ref()?;
     for c in content {
         if let ToolCallContent::Content(inner) = c
-            && let agent_client_protocol::schema::ContentBlock::Text(t) = &inner.content
+            && let agent_client_protocol_schema::ContentBlock::Text(t) = &inner.content
         {
             return Some(t.text.clone());
         }

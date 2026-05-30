@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::StopReason as AcpStopReason;
+use agent_client_protocol_schema::StopReason as AcpStopReason;
 use defect_agent::event::AgentEvent;
 use defect_agent::llm::LlmProvider;
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};

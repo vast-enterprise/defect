@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
+use agent_client_protocol_schema::{ContentBlock, ToolCallContent};
 use defect_agent::fs::FsBackend;
 use defect_agent::http::{HttpClient, NoopHttpClient};
 use defect_agent::shell::{NoopShellBackend, ShellBackend};
@@ -567,7 +567,7 @@ async fn case23_edit_detects_external_modification_between_read_and_write() {
 
 #[tokio::test]
 async fn case27_write_describe_attaches_old_text_when_file_exists() {
-    use agent_client_protocol::schema::ToolCallContent;
+    use agent_client_protocol_schema::ToolCallContent;
 
     let h = Harness::new();
     h.write_file("doc.txt", "old content\n");
@@ -590,7 +590,7 @@ async fn case27_write_describe_attaches_old_text_when_file_exists() {
 
 #[tokio::test]
 async fn case28_write_describe_old_text_none_for_new_file() {
-    use agent_client_protocol::schema::ToolCallContent;
+    use agent_client_protocol_schema::ToolCallContent;
 
     let h = Harness::new();
     let tool = WriteFileTool::new();

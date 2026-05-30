@@ -10,7 +10,7 @@
     clippy::large_enum_variant,
     clippy::enum_variant_names,
     dead_code,
-    unused_imports,
+    unused_imports
 )]
 
 /// # Anthropic Messages API
@@ -31,15 +31,7 @@ pub mod components {
     #![allow(non_camel_case_types)]
     #![allow(non_snake_case)]
     #![allow(clippy::all, clippy::pedantic)]
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ModelInfoType {
         #[serde(rename = "model")]
         Model,
@@ -68,15 +60,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub last_id: Option<String>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ErrorResponseType {
         #[serde(rename = "error")]
         Error,
@@ -102,15 +86,7 @@ pub mod components {
         pub r#type: ErrorResponseType,
         pub error: ErrorResponseError,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CacheControlEphemeralType {
         #[serde(rename = "ephemeral")]
         Ephemeral,
@@ -123,15 +99,7 @@ pub mod components {
         }
     }
     /// 缓存断点 TTL，默认 5m。
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CacheControlEphemeralTtl {
         #[serde(rename = "5m")]
         _5m,
@@ -154,15 +122,7 @@ pub mod components {
         /// 缓存断点 TTL，默认 5m。
         pub ttl: Option<CacheControlEphemeralTtl>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ModelVariant0 {
         #[serde(rename = "claude-opus-4-7")]
         ClaudeOpus4Minus7,
@@ -280,15 +240,7 @@ pub mod components {
         ModelVariant0(ModelVariant0),
         ModelVariant1(String),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationCharLocationParamType {
         #[serde(rename = "char_location")]
         CharLocation,
@@ -309,15 +261,7 @@ pub mod components {
         pub start_char_index: i64,
         pub r#type: CitationCharLocationParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationPageLocationParamType {
         #[serde(rename = "page_location")]
         PageLocation,
@@ -338,15 +282,7 @@ pub mod components {
         pub start_page_number: i64,
         pub r#type: CitationPageLocationParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationContentBlockLocationParamType {
         #[serde(rename = "content_block_location")]
         ContentBlockLocation,
@@ -369,15 +305,7 @@ pub mod components {
         pub start_block_index: i64,
         pub r#type: CitationContentBlockLocationParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationWebSearchResultLocationParamType {
         #[serde(rename = "web_search_result_location")]
         WebSearchResultLocation,
@@ -399,15 +327,7 @@ pub mod components {
         pub r#type: CitationWebSearchResultLocationParamType,
         pub url: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationSearchResultLocationParamType {
         #[serde(rename = "search_result_location")]
         SearchResultLocation,
@@ -442,9 +362,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: TextCitationParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: TextCitationParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 TextCitationParam::CitationCharLocationParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -464,9 +382,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: TextCitationParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: TextCitationParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 TextCitationParam::CitationPageLocationParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -480,16 +396,13 @@ pub mod components {
             TextCitationParam::CitationContentBlockLocationParam(value)
         }
     }
-    impl ::std::convert::TryFrom<TextCitationParam>
-    for CitationContentBlockLocationParam {
+    impl ::std::convert::TryFrom<TextCitationParam> for CitationContentBlockLocationParam {
         type Error = TextCitationParam;
         /// # Errors
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: TextCitationParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: TextCitationParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 TextCitationParam::CitationContentBlockLocationParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -498,22 +411,18 @@ pub mod components {
             }
         }
     }
-    impl ::std::convert::From<CitationWebSearchResultLocationParam>
-    for TextCitationParam {
+    impl ::std::convert::From<CitationWebSearchResultLocationParam> for TextCitationParam {
         fn from(value: CitationWebSearchResultLocationParam) -> Self {
             TextCitationParam::CitationWebSearchResultLocationParam(value)
         }
     }
-    impl ::std::convert::TryFrom<TextCitationParam>
-    for CitationWebSearchResultLocationParam {
+    impl ::std::convert::TryFrom<TextCitationParam> for CitationWebSearchResultLocationParam {
         type Error = TextCitationParam;
         /// # Errors
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: TextCitationParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: TextCitationParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 TextCitationParam::CitationWebSearchResultLocationParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -527,16 +436,13 @@ pub mod components {
             TextCitationParam::CitationSearchResultLocationParam(value)
         }
     }
-    impl ::std::convert::TryFrom<TextCitationParam>
-    for CitationSearchResultLocationParam {
+    impl ::std::convert::TryFrom<TextCitationParam> for CitationSearchResultLocationParam {
         type Error = TextCitationParam;
         /// # Errors
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: TextCitationParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: TextCitationParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 TextCitationParam::CitationSearchResultLocationParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -554,15 +460,7 @@ pub mod components {
         CitationWebSearchResultLocationParam(CitationWebSearchResultLocationParam),
         CitationSearchResultLocationParam(CitationSearchResultLocationParam),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationCharLocationType {
         #[serde(rename = "char_location")]
         CharLocation,
@@ -585,15 +483,7 @@ pub mod components {
         pub file_id: Option<String>,
         pub r#type: CitationCharLocationType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationPageLocationType {
         #[serde(rename = "page_location")]
         PageLocation,
@@ -616,15 +506,7 @@ pub mod components {
         pub file_id: Option<String>,
         pub r#type: CitationPageLocationType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationContentBlockLocationType {
         #[serde(rename = "content_block_location")]
         ContentBlockLocation,
@@ -649,15 +531,7 @@ pub mod components {
         pub file_id: Option<String>,
         pub r#type: CitationContentBlockLocationType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationsWebSearchResultLocationType {
         #[serde(rename = "web_search_result_location")]
         WebSearchResultLocation,
@@ -679,15 +553,7 @@ pub mod components {
         pub r#type: CitationsWebSearchResultLocationType,
         pub url: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationsSearchResultLocationType {
         #[serde(rename = "search_result_location")]
         SearchResultLocation,
@@ -724,9 +590,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: TextCitation) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                TextCitation::CitationCharLocation(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                TextCitation::CitationCharLocation(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -744,9 +608,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: TextCitation) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                TextCitation::CitationPageLocation(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                TextCitation::CitationPageLocation(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -829,15 +691,7 @@ pub mod components {
     pub struct CitationsConfig {
         pub enabled: bool,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum DirectCallerType {
         #[serde(rename = "direct")]
         Direct,
@@ -854,15 +708,7 @@ pub mod components {
     pub struct DirectCaller {
         pub r#type: DirectCallerType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ServerToolCallerType {
         #[serde(rename = "code_execution_20250825")]
         CodeExecution20250825,
@@ -882,15 +728,7 @@ pub mod components {
         pub tool_id: String,
         pub r#type: ServerToolCallerType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ServerToolCaller20260120Type {
         #[serde(rename = "code_execution_20260120")]
         CodeExecution20260120,
@@ -958,9 +796,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: Caller) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                Caller::ServerToolCaller20260120(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                Caller::ServerToolCaller20260120(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -972,15 +808,7 @@ pub mod components {
         ServerToolCaller(ServerToolCaller),
         ServerToolCaller20260120(ServerToolCaller20260120),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum Base64ImageSourceMediaType {
         #[serde(rename = "image/jpeg")]
         ImageJpeg,
@@ -1001,15 +829,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum Base64ImageSourceType {
         #[serde(rename = "base64")]
         Base64,
@@ -1027,15 +847,7 @@ pub mod components {
         pub media_type: Base64ImageSourceMediaType,
         pub r#type: Base64ImageSourceType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum UrlImageSourceType {
         #[serde(rename = "url")]
         Url,
@@ -1095,15 +907,7 @@ pub mod components {
         #[serde(rename = "URLImageSource")]
         UrlImageSource(UrlImageSource),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum Base64PdfSourceMediaType {
         #[serde(rename = "application/pdf")]
         ApplicationPdf,
@@ -1115,15 +919,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum Base64PdfSourceType {
         #[serde(rename = "base64")]
         Base64,
@@ -1141,15 +937,7 @@ pub mod components {
         pub media_type: Base64PdfSourceMediaType,
         pub r#type: Base64PdfSourceType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum PlainTextSourceMediaType {
         #[serde(rename = "text/plain")]
         TextPlain,
@@ -1161,15 +949,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum PlainTextSourceType {
         #[serde(rename = "text")]
         Text,
@@ -1187,15 +967,7 @@ pub mod components {
         pub media_type: PlainTextSourceMediaType,
         pub r#type: PlainTextSourceType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextBlockParamType {
         #[serde(rename = "text")]
         Text,
@@ -1216,15 +988,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub citations: Option<Vec<TextCitationParam>>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ImageBlockParamType {
         #[serde(rename = "image")]
         Image,
@@ -1254,9 +1018,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockSourceContent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockSourceContent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockSourceContent::TextBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -1276,9 +1038,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockSourceContent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockSourceContent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockSourceContent::ImageBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -1314,21 +1074,19 @@ pub mod components {
             value: ContentBlockSourceContent66,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockSourceContent66::ContentBlockSourceContent66Variant0(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                ContentBlockSourceContent66::ContentBlockSourceContent66Variant0(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
     }
-    impl ::std::convert::From<Vec<ContentBlockSourceContent>>
-    for ContentBlockSourceContent66 {
+    impl ::std::convert::From<Vec<ContentBlockSourceContent>> for ContentBlockSourceContent66 {
         fn from(value: Vec<ContentBlockSourceContent>) -> Self {
             ContentBlockSourceContent66::ContentBlockSourceContent66Variant1(value)
         }
     }
-    impl ::std::convert::TryFrom<ContentBlockSourceContent66>
-    for Vec<ContentBlockSourceContent> {
+    impl ::std::convert::TryFrom<ContentBlockSourceContent66> for Vec<ContentBlockSourceContent> {
         type Error = ContentBlockSourceContent66;
         /// # Errors
         ///
@@ -1338,22 +1096,14 @@ pub mod components {
             value: ContentBlockSourceContent66,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockSourceContent66::ContentBlockSourceContent66Variant1(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                ContentBlockSourceContent66::ContentBlockSourceContent66Variant1(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ContentBlockSourceType {
         #[serde(rename = "content")]
         Content,
@@ -1370,15 +1120,7 @@ pub mod components {
         pub content: ContentBlockSourceContent66,
         pub r#type: ContentBlockSourceType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum UrlpdfSourceType {
         #[serde(rename = "url")]
         Url,
@@ -1408,9 +1150,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: DocumentSource) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                DocumentSource::Base64PdfSource(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                DocumentSource::Base64PdfSource(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -1428,9 +1168,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: DocumentSource) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                DocumentSource::PlainTextSource(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                DocumentSource::PlainTextSource(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -1448,9 +1186,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: DocumentSource) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                DocumentSource::ContentBlockSource(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                DocumentSource::ContentBlockSource(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -1494,13 +1230,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: WebFetchDocumentSource,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: WebFetchDocumentSource) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                WebFetchDocumentSource::Base64PdfSource(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                WebFetchDocumentSource::Base64PdfSource(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -1516,13 +1248,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: WebFetchDocumentSource,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: WebFetchDocumentSource) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                WebFetchDocumentSource::PlainTextSource(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                WebFetchDocumentSource::PlainTextSource(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -1534,15 +1262,7 @@ pub mod components {
         Base64PdfSource(Base64PdfSource),
         PlainTextSource(PlainTextSource),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum DocumentBlockParamType {
         #[serde(rename = "document")]
         Document,
@@ -1567,15 +1287,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub title: Option<String>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum SearchResultBlockParamType {
         #[serde(rename = "search_result")]
         SearchResult,
@@ -1598,15 +1310,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub citations: Option<CitationsConfigParam>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingBlockParamType {
         #[serde(rename = "thinking")]
         Thinking,
@@ -1624,15 +1328,7 @@ pub mod components {
         pub thinking: String,
         pub r#type: ThinkingBlockParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum RedactedThinkingBlockParamType {
         #[serde(rename = "redacted_thinking")]
         RedactedThinking,
@@ -1649,15 +1345,7 @@ pub mod components {
         pub data: String,
         pub r#type: RedactedThinkingBlockParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolUseBlockParamType {
         #[serde(rename = "tool_use")]
         ToolUse,
@@ -1680,15 +1368,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub caller: Option<Caller>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolReferenceBlockParamType {
         #[serde(rename = "tool_reference")]
         ToolReference,
@@ -1757,8 +1437,7 @@ pub mod components {
             ToolResultBlockParamContent::SearchResultBlockParam(value)
         }
     }
-    impl ::std::convert::TryFrom<ToolResultBlockParamContent>
-    for SearchResultBlockParam {
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent> for SearchResultBlockParam {
         type Error = ToolResultBlockParamContent;
         /// # Errors
         ///
@@ -1802,8 +1481,7 @@ pub mod components {
             ToolResultBlockParamContent::ToolReferenceBlockParam(value)
         }
     }
-    impl ::std::convert::TryFrom<ToolResultBlockParamContent>
-    for ToolReferenceBlockParam {
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent> for ToolReferenceBlockParam {
         type Error = ToolResultBlockParamContent;
         /// # Errors
         ///
@@ -1829,15 +1507,7 @@ pub mod components {
         DocumentBlockParam(DocumentBlockParam),
         ToolReferenceBlockParam(ToolReferenceBlockParam),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolResultBlockParamType {
         #[serde(rename = "tool_result")]
         ToolResult,
@@ -1870,21 +1540,19 @@ pub mod components {
             value: ToolResultBlockParamContent102,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant0(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant0(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
     }
-    impl ::std::convert::From<Vec<ToolResultBlockParamContent>>
-    for ToolResultBlockParamContent102 {
+    impl ::std::convert::From<Vec<ToolResultBlockParamContent>> for ToolResultBlockParamContent102 {
         fn from(value: Vec<ToolResultBlockParamContent>) -> Self {
             ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant1(value)
         }
     }
-    impl ::std::convert::TryFrom<ToolResultBlockParamContent102>
-    for Vec<ToolResultBlockParamContent> {
+    impl ::std::convert::TryFrom<ToolResultBlockParamContent102> for Vec<ToolResultBlockParamContent> {
         type Error = ToolResultBlockParamContent102;
         /// # Errors
         ///
@@ -1894,9 +1562,9 @@ pub mod components {
             value: ToolResultBlockParamContent102,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant1(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant1(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -1912,15 +1580,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub is_error: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ServerToolUseBlockParamName {
         #[serde(rename = "web_search")]
         WebSearch,
@@ -1952,15 +1612,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ServerToolUseBlockParamType {
         #[serde(rename = "server_tool_use")]
         ServerToolUse,
@@ -1983,15 +1635,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub caller: Option<Caller>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchResultBlockParamType {
         #[serde(rename = "web_search_result")]
         WebSearchResult,
@@ -2012,15 +1656,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub page_age: Option<String>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchToolRequestErrorErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -2047,15 +1683,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchToolRequestErrorType {
         #[serde(rename = "web_search_tool_result_error")]
         WebSearchToolResultError,
@@ -2074,8 +1702,7 @@ pub mod components {
         pub error_code: WebSearchToolRequestErrorErrorCode,
         pub r#type: WebSearchToolRequestErrorType,
     }
-    impl ::std::convert::From<Vec<WebSearchResultBlockParam>>
-    for WebSearchToolResultBlockParamContent {
+    impl ::std::convert::From<Vec<WebSearchResultBlockParam>> for WebSearchToolResultBlockParamContent {
         fn from(value: Vec<WebSearchResultBlockParam>) -> Self {
             WebSearchToolResultBlockParamContent::WebSearchToolResultBlockParamContentVariant0(
                 value,
@@ -2083,7 +1710,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<WebSearchToolResultBlockParamContent>
-    for Vec<WebSearchResultBlockParam> {
+        for Vec<WebSearchResultBlockParam>
+    {
         type Error = WebSearchToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2100,14 +1728,12 @@ pub mod components {
             }
         }
     }
-    impl ::std::convert::From<WebSearchToolRequestError>
-    for WebSearchToolResultBlockParamContent {
+    impl ::std::convert::From<WebSearchToolRequestError> for WebSearchToolResultBlockParamContent {
         fn from(value: WebSearchToolRequestError) -> Self {
             WebSearchToolResultBlockParamContent::WebSearchToolRequestError(value)
         }
     }
-    impl ::std::convert::TryFrom<WebSearchToolResultBlockParamContent>
-    for WebSearchToolRequestError {
+    impl ::std::convert::TryFrom<WebSearchToolResultBlockParamContent> for WebSearchToolRequestError {
         type Error = WebSearchToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2117,9 +1743,9 @@ pub mod components {
             value: WebSearchToolResultBlockParamContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                WebSearchToolResultBlockParamContent::WebSearchToolRequestError(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                WebSearchToolResultBlockParamContent::WebSearchToolRequestError(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -2130,15 +1756,7 @@ pub mod components {
         WebSearchToolResultBlockParamContentVariant0(Vec<WebSearchResultBlockParam>),
         WebSearchToolRequestError(WebSearchToolRequestError),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchToolResultBlockParamType {
         #[serde(rename = "web_search_tool_result")]
         WebSearchToolResult,
@@ -2160,15 +1778,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub caller: Option<Caller>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchToolResultErrorBlockParamErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -2203,15 +1813,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchToolResultErrorBlockParamType {
         #[serde(rename = "web_fetch_tool_result_error")]
         WebFetchToolResultError,
@@ -2230,15 +1832,7 @@ pub mod components {
         pub error_code: WebFetchToolResultErrorBlockParamErrorCode,
         pub r#type: WebFetchToolResultErrorBlockParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchBlockParamType {
         #[serde(rename = "web_fetch_result")]
         WebFetchResult,
@@ -2261,13 +1855,15 @@ pub mod components {
         pub retrieved_at: Option<String>,
     }
     impl ::std::convert::From<WebFetchToolResultErrorBlockParam>
-    for WebFetchToolResultBlockParamContent {
+        for WebFetchToolResultBlockParamContent
+    {
         fn from(value: WebFetchToolResultErrorBlockParam) -> Self {
             WebFetchToolResultBlockParamContent::WebFetchToolResultErrorBlockParam(value)
         }
     }
     impl ::std::convert::TryFrom<WebFetchToolResultBlockParamContent>
-    for WebFetchToolResultErrorBlockParam {
+        for WebFetchToolResultErrorBlockParam
+    {
         type Error = WebFetchToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2277,21 +1873,19 @@ pub mod components {
             value: WebFetchToolResultBlockParamContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                WebFetchToolResultBlockParamContent::WebFetchToolResultErrorBlockParam(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                WebFetchToolResultBlockParamContent::WebFetchToolResultErrorBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
     }
-    impl ::std::convert::From<WebFetchBlockParam>
-    for WebFetchToolResultBlockParamContent {
+    impl ::std::convert::From<WebFetchBlockParam> for WebFetchToolResultBlockParamContent {
         fn from(value: WebFetchBlockParam) -> Self {
             WebFetchToolResultBlockParamContent::WebFetchBlockParam(value)
         }
     }
-    impl ::std::convert::TryFrom<WebFetchToolResultBlockParamContent>
-    for WebFetchBlockParam {
+    impl ::std::convert::TryFrom<WebFetchToolResultBlockParamContent> for WebFetchBlockParam {
         type Error = WebFetchToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2314,15 +1908,7 @@ pub mod components {
         WebFetchToolResultErrorBlockParam(WebFetchToolResultErrorBlockParam),
         WebFetchBlockParam(WebFetchBlockParam),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchToolResultBlockParamType {
         #[serde(rename = "web_fetch_tool_result")]
         WebFetchToolResult,
@@ -2344,15 +1930,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub caller: Option<Caller>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionOutputBlockParamType {
         #[serde(rename = "code_execution_output")]
         CodeExecutionOutput,
@@ -2369,15 +1947,7 @@ pub mod components {
         pub file_id: String,
         pub r#type: CodeExecutionOutputBlockParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionToolResultErrorParamErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -2400,15 +1970,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionToolResultErrorParamType {
         #[serde(rename = "code_execution_tool_result_error")]
         CodeExecutionToolResultError,
@@ -2427,15 +1989,7 @@ pub mod components {
         pub error_code: CodeExecutionToolResultErrorParamErrorCode,
         pub r#type: CodeExecutionToolResultErrorParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionResultBlockParamType {
         #[serde(rename = "code_execution_result")]
         CodeExecutionResult,
@@ -2455,15 +2009,7 @@ pub mod components {
         pub stdout: String,
         pub r#type: CodeExecutionResultBlockParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum EncryptedCodeExecutionResultBlockParamType {
         #[serde(rename = "encrypted_code_execution_result")]
         EncryptedCodeExecutionResult,
@@ -2487,15 +2033,15 @@ pub mod components {
         pub r#type: EncryptedCodeExecutionResultBlockParamType,
     }
     impl ::std::convert::From<CodeExecutionToolResultErrorParam>
-    for CodeExecutionToolResultBlockParamContent {
+        for CodeExecutionToolResultBlockParamContent
+    {
         fn from(value: CodeExecutionToolResultErrorParam) -> Self {
-            CodeExecutionToolResultBlockParamContent::CodeExecutionToolResultErrorParam(
-                value,
-            )
+            CodeExecutionToolResultBlockParamContent::CodeExecutionToolResultErrorParam(value)
         }
     }
     impl ::std::convert::TryFrom<CodeExecutionToolResultBlockParamContent>
-    for CodeExecutionToolResultErrorParam {
+        for CodeExecutionToolResultErrorParam
+    {
         type Error = CodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2513,15 +2059,15 @@ pub mod components {
         }
     }
     impl ::std::convert::From<CodeExecutionResultBlockParam>
-    for CodeExecutionToolResultBlockParamContent {
+        for CodeExecutionToolResultBlockParamContent
+    {
         fn from(value: CodeExecutionResultBlockParam) -> Self {
-            CodeExecutionToolResultBlockParamContent::CodeExecutionResultBlockParam(
-                value,
-            )
+            CodeExecutionToolResultBlockParamContent::CodeExecutionResultBlockParam(value)
         }
     }
     impl ::std::convert::TryFrom<CodeExecutionToolResultBlockParamContent>
-    for CodeExecutionResultBlockParam {
+        for CodeExecutionResultBlockParam
+    {
         type Error = CodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2531,23 +2077,23 @@ pub mod components {
             value: CodeExecutionToolResultBlockParamContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                CodeExecutionToolResultBlockParamContent::CodeExecutionResultBlockParam(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                CodeExecutionToolResultBlockParamContent::CodeExecutionResultBlockParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
     }
     impl ::std::convert::From<EncryptedCodeExecutionResultBlockParam>
-    for CodeExecutionToolResultBlockParamContent {
+        for CodeExecutionToolResultBlockParamContent
+    {
         fn from(value: EncryptedCodeExecutionResultBlockParam) -> Self {
-            CodeExecutionToolResultBlockParamContent::EncryptedCodeExecutionResultBlockParam(
-                value,
-            )
+            CodeExecutionToolResultBlockParamContent::EncryptedCodeExecutionResultBlockParam(value)
         }
     }
     impl ::std::convert::TryFrom<CodeExecutionToolResultBlockParamContent>
-    for EncryptedCodeExecutionResultBlockParam {
+        for EncryptedCodeExecutionResultBlockParam
+    {
         type Error = CodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2571,15 +2117,7 @@ pub mod components {
         CodeExecutionResultBlockParam(CodeExecutionResultBlockParam),
         EncryptedCodeExecutionResultBlockParam(EncryptedCodeExecutionResultBlockParam),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionToolResultBlockParamType {
         #[serde(rename = "code_execution_tool_result")]
         CodeExecutionToolResult,
@@ -2601,15 +2139,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cache_control: Option<CacheControlEphemeral>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionOutputBlockParamType {
         #[serde(rename = "bash_code_execution_output")]
         BashCodeExecutionOutput,
@@ -2628,15 +2158,7 @@ pub mod components {
         pub file_id: String,
         pub r#type: BashCodeExecutionOutputBlockParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionToolResultErrorParamErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -2662,15 +2184,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionToolResultErrorParamType {
         #[serde(rename = "bash_code_execution_tool_result_error")]
         BashCodeExecutionToolResultError,
@@ -2689,15 +2203,7 @@ pub mod components {
         pub error_code: BashCodeExecutionToolResultErrorParamErrorCode,
         pub r#type: BashCodeExecutionToolResultErrorParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionResultBlockParamType {
         #[serde(rename = "bash_code_execution_result")]
         BashCodeExecutionResult,
@@ -2720,7 +2226,8 @@ pub mod components {
         pub r#type: BashCodeExecutionResultBlockParamType,
     }
     impl ::std::convert::From<BashCodeExecutionToolResultErrorParam>
-    for BashCodeExecutionToolResultBlockParamContent {
+        for BashCodeExecutionToolResultBlockParamContent
+    {
         fn from(value: BashCodeExecutionToolResultErrorParam) -> Self {
             BashCodeExecutionToolResultBlockParamContent::BashCodeExecutionToolResultErrorParam(
                 value,
@@ -2728,7 +2235,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockParamContent>
-    for BashCodeExecutionToolResultErrorParam {
+        for BashCodeExecutionToolResultErrorParam
+    {
         type Error = BashCodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2746,15 +2254,15 @@ pub mod components {
         }
     }
     impl ::std::convert::From<BashCodeExecutionResultBlockParam>
-    for BashCodeExecutionToolResultBlockParamContent {
+        for BashCodeExecutionToolResultBlockParamContent
+    {
         fn from(value: BashCodeExecutionResultBlockParam) -> Self {
-            BashCodeExecutionToolResultBlockParamContent::BashCodeExecutionResultBlockParam(
-                value,
-            )
+            BashCodeExecutionToolResultBlockParamContent::BashCodeExecutionResultBlockParam(value)
         }
     }
     impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockParamContent>
-    for BashCodeExecutionResultBlockParam {
+        for BashCodeExecutionResultBlockParam
+    {
         type Error = BashCodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -2777,15 +2285,7 @@ pub mod components {
         BashCodeExecutionToolResultErrorParam(BashCodeExecutionToolResultErrorParam),
         BashCodeExecutionResultBlockParam(BashCodeExecutionResultBlockParam),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionToolResultBlockParamType {
         #[serde(rename = "bash_code_execution_tool_result")]
         BashCodeExecutionToolResult,
@@ -2807,15 +2307,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cache_control: Option<CacheControlEphemeral>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionToolResultErrorParamErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -2841,15 +2333,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionToolResultErrorParamType {
         #[serde(rename = "text_editor_code_execution_tool_result_error")]
         TextEditorCodeExecutionToolResultError,
@@ -2870,15 +2354,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub error_message: Option<String>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionViewResultBlockParamFileType {
         #[serde(rename = "text")]
         Text,
@@ -2896,15 +2372,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionViewResultBlockParamType {
         #[serde(rename = "text_editor_code_execution_view_result")]
         TextEditorCodeExecutionViewResult,
@@ -2930,15 +2398,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub total_lines: Option<i64>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionCreateResultBlockParamType {
         #[serde(rename = "text_editor_code_execution_create_result")]
         TextEditorCodeExecutionCreateResult,
@@ -2957,15 +2417,7 @@ pub mod components {
         pub is_file_update: bool,
         pub r#type: TextEditorCodeExecutionCreateResultBlockParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionStrReplaceResultBlockParamType {
         #[serde(rename = "text_editor_code_execution_str_replace_result")]
         TextEditorCodeExecutionStrReplaceResult,
@@ -2994,7 +2446,8 @@ pub mod components {
         pub old_start: Option<i64>,
     }
     impl ::std::convert::From<TextEditorCodeExecutionToolResultErrorParam>
-    for TextEditorCodeExecutionToolResultBlockParamContent {
+        for TextEditorCodeExecutionToolResultBlockParamContent
+    {
         fn from(value: TextEditorCodeExecutionToolResultErrorParam) -> Self {
             TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionToolResultErrorParam(
                 value,
@@ -3002,7 +2455,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
-    for TextEditorCodeExecutionToolResultErrorParam {
+        for TextEditorCodeExecutionToolResultErrorParam
+    {
         type Error = TextEditorCodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -3020,7 +2474,8 @@ pub mod components {
         }
     }
     impl ::std::convert::From<TextEditorCodeExecutionViewResultBlockParam>
-    for TextEditorCodeExecutionToolResultBlockParamContent {
+        for TextEditorCodeExecutionToolResultBlockParamContent
+    {
         fn from(value: TextEditorCodeExecutionViewResultBlockParam) -> Self {
             TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionViewResultBlockParam(
                 value,
@@ -3028,7 +2483,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
-    for TextEditorCodeExecutionViewResultBlockParam {
+        for TextEditorCodeExecutionViewResultBlockParam
+    {
         type Error = TextEditorCodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -3046,7 +2502,8 @@ pub mod components {
         }
     }
     impl ::std::convert::From<TextEditorCodeExecutionCreateResultBlockParam>
-    for TextEditorCodeExecutionToolResultBlockParamContent {
+        for TextEditorCodeExecutionToolResultBlockParamContent
+    {
         fn from(value: TextEditorCodeExecutionCreateResultBlockParam) -> Self {
             TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionCreateResultBlockParam(
                 value,
@@ -3054,7 +2511,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
-    for TextEditorCodeExecutionCreateResultBlockParam {
+        for TextEditorCodeExecutionCreateResultBlockParam
+    {
         type Error = TextEditorCodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -3072,7 +2530,8 @@ pub mod components {
         }
     }
     impl ::std::convert::From<TextEditorCodeExecutionStrReplaceResultBlockParam>
-    for TextEditorCodeExecutionToolResultBlockParamContent {
+        for TextEditorCodeExecutionToolResultBlockParamContent
+    {
         fn from(value: TextEditorCodeExecutionStrReplaceResultBlockParam) -> Self {
             TextEditorCodeExecutionToolResultBlockParamContent::TextEditorCodeExecutionStrReplaceResultBlockParam(
                 value,
@@ -3080,7 +2539,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockParamContent>
-    for TextEditorCodeExecutionStrReplaceResultBlockParam {
+        for TextEditorCodeExecutionStrReplaceResultBlockParam
+    {
         type Error = TextEditorCodeExecutionToolResultBlockParamContent;
         /// # Errors
         ///
@@ -3100,12 +2560,8 @@ pub mod components {
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
     #[serde(untagged)]
     pub enum TextEditorCodeExecutionToolResultBlockParamContent {
-        TextEditorCodeExecutionToolResultErrorParam(
-            TextEditorCodeExecutionToolResultErrorParam,
-        ),
-        TextEditorCodeExecutionViewResultBlockParam(
-            TextEditorCodeExecutionViewResultBlockParam,
-        ),
+        TextEditorCodeExecutionToolResultErrorParam(TextEditorCodeExecutionToolResultErrorParam),
+        TextEditorCodeExecutionViewResultBlockParam(TextEditorCodeExecutionViewResultBlockParam),
         TextEditorCodeExecutionCreateResultBlockParam(
             TextEditorCodeExecutionCreateResultBlockParam,
         ),
@@ -3113,15 +2569,7 @@ pub mod components {
             TextEditorCodeExecutionStrReplaceResultBlockParam,
         ),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionToolResultBlockParamType {
         #[serde(rename = "text_editor_code_execution_tool_result")]
         TextEditorCodeExecutionToolResult,
@@ -3143,15 +2591,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cache_control: Option<CacheControlEphemeral>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolResultErrorParamErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -3174,15 +2614,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolResultErrorParamType {
         #[serde(rename = "tool_search_tool_result_error")]
         ToolSearchToolResultError,
@@ -3201,15 +2633,7 @@ pub mod components {
         pub error_code: ToolSearchToolResultErrorParamErrorCode,
         pub r#type: ToolSearchToolResultErrorParamType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolSearchResultBlockParamType {
         #[serde(rename = "tool_search_tool_search_result")]
         ToolSearchToolSearchResult,
@@ -3229,13 +2653,15 @@ pub mod components {
         pub r#type: ToolSearchToolSearchResultBlockParamType,
     }
     impl ::std::convert::From<ToolSearchToolResultErrorParam>
-    for ToolSearchToolResultBlockParamContent {
+        for ToolSearchToolResultBlockParamContent
+    {
         fn from(value: ToolSearchToolResultErrorParam) -> Self {
             ToolSearchToolResultBlockParamContent::ToolSearchToolResultErrorParam(value)
         }
     }
     impl ::std::convert::TryFrom<ToolSearchToolResultBlockParamContent>
-    for ToolSearchToolResultErrorParam {
+        for ToolSearchToolResultErrorParam
+    {
         type Error = ToolSearchToolResultBlockParamContent;
         /// # Errors
         ///
@@ -3245,23 +2671,23 @@ pub mod components {
             value: ToolSearchToolResultBlockParamContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolSearchToolResultBlockParamContent::ToolSearchToolResultErrorParam(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                ToolSearchToolResultBlockParamContent::ToolSearchToolResultErrorParam(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
     }
     impl ::std::convert::From<ToolSearchToolSearchResultBlockParam>
-    for ToolSearchToolResultBlockParamContent {
+        for ToolSearchToolResultBlockParamContent
+    {
         fn from(value: ToolSearchToolSearchResultBlockParam) -> Self {
-            ToolSearchToolResultBlockParamContent::ToolSearchToolSearchResultBlockParam(
-                value,
-            )
+            ToolSearchToolResultBlockParamContent::ToolSearchToolSearchResultBlockParam(value)
         }
     }
     impl ::std::convert::TryFrom<ToolSearchToolResultBlockParamContent>
-    for ToolSearchToolSearchResultBlockParam {
+        for ToolSearchToolSearchResultBlockParam
+    {
         type Error = ToolSearchToolResultBlockParamContent;
         /// # Errors
         ///
@@ -3284,15 +2710,7 @@ pub mod components {
         ToolSearchToolResultErrorParam(ToolSearchToolResultErrorParam),
         ToolSearchToolSearchResultBlockParam(ToolSearchToolSearchResultBlockParam),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolResultBlockParamType {
         #[serde(rename = "tool_search_tool_result")]
         ToolSearchToolResult,
@@ -3314,15 +2732,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cache_control: Option<CacheControlEphemeral>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ContainerUploadBlockParamType {
         #[serde(rename = "container_upload")]
         ContainerUpload,
@@ -3353,13 +2763,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockParam::TextBlockParam(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockParam::TextBlockParam(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -3375,13 +2781,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockParam::ImageBlockParam(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockParam::ImageBlockParam(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -3397,13 +2799,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockParam::DocumentBlockParam(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockParam::DocumentBlockParam(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -3419,9 +2817,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::SearchResultBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3441,13 +2837,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockParam::ThinkingBlockParam(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockParam::ThinkingBlockParam(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -3463,9 +2855,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::RedactedThinkingBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3485,13 +2875,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockParam::ToolUseBlockParam(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockParam::ToolUseBlockParam(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -3507,13 +2893,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockParam::ToolResultBlockParam(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockParam::ToolResultBlockParam(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -3529,9 +2911,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::ServerToolUseBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3551,9 +2931,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::WebSearchToolResultBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3573,9 +2951,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::WebFetchToolResultBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3589,16 +2965,13 @@ pub mod components {
             ContentBlockParam::CodeExecutionToolResultBlockParam(value)
         }
     }
-    impl ::std::convert::TryFrom<ContentBlockParam>
-    for CodeExecutionToolResultBlockParam {
+    impl ::std::convert::TryFrom<ContentBlockParam> for CodeExecutionToolResultBlockParam {
         type Error = ContentBlockParam;
         /// # Errors
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::CodeExecutionToolResultBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3607,22 +2980,18 @@ pub mod components {
             }
         }
     }
-    impl ::std::convert::From<BashCodeExecutionToolResultBlockParam>
-    for ContentBlockParam {
+    impl ::std::convert::From<BashCodeExecutionToolResultBlockParam> for ContentBlockParam {
         fn from(value: BashCodeExecutionToolResultBlockParam) -> Self {
             ContentBlockParam::BashCodeExecutionToolResultBlockParam(value)
         }
     }
-    impl ::std::convert::TryFrom<ContentBlockParam>
-    for BashCodeExecutionToolResultBlockParam {
+    impl ::std::convert::TryFrom<ContentBlockParam> for BashCodeExecutionToolResultBlockParam {
         type Error = ContentBlockParam;
         /// # Errors
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::BashCodeExecutionToolResultBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3631,22 +3000,18 @@ pub mod components {
             }
         }
     }
-    impl ::std::convert::From<TextEditorCodeExecutionToolResultBlockParam>
-    for ContentBlockParam {
+    impl ::std::convert::From<TextEditorCodeExecutionToolResultBlockParam> for ContentBlockParam {
         fn from(value: TextEditorCodeExecutionToolResultBlockParam) -> Self {
             ContentBlockParam::TextEditorCodeExecutionToolResultBlockParam(value)
         }
     }
-    impl ::std::convert::TryFrom<ContentBlockParam>
-    for TextEditorCodeExecutionToolResultBlockParam {
+    impl ::std::convert::TryFrom<ContentBlockParam> for TextEditorCodeExecutionToolResultBlockParam {
         type Error = ContentBlockParam;
         /// # Errors
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::TextEditorCodeExecutionToolResultBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3666,9 +3031,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::ToolSearchToolResultBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3688,9 +3051,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockParam::ContainerUploadBlockParam(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3715,9 +3076,7 @@ pub mod components {
         WebFetchToolResultBlockParam(WebFetchToolResultBlockParam),
         CodeExecutionToolResultBlockParam(CodeExecutionToolResultBlockParam),
         BashCodeExecutionToolResultBlockParam(BashCodeExecutionToolResultBlockParam),
-        TextEditorCodeExecutionToolResultBlockParam(
-            TextEditorCodeExecutionToolResultBlockParam,
-        ),
+        TextEditorCodeExecutionToolResultBlockParam(TextEditorCodeExecutionToolResultBlockParam),
         ToolSearchToolResultBlockParam(ToolSearchToolResultBlockParam),
         ContainerUploadBlockParam(ContainerUploadBlockParam),
     }
@@ -3732,9 +3091,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageParamContent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageParamContent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 MessageParamContent::MessageParamContentVariant0(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3754,9 +3111,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageParamContent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageParamContent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 MessageParamContent::MessageParamContentVariant1(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -3771,15 +3126,7 @@ pub mod components {
         MessageParamContentVariant0(String),
         MessageParamContentVariant1(Vec<ContentBlockParam>),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageParamRole {
         #[serde(rename = "user")]
         User,
@@ -3805,15 +3152,7 @@ pub mod components {
         /// 用户外部标识（uuid / hash），不要塞 PII。
         pub user_id: Option<String>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum JsonOutputFormatType {
         #[serde(rename = "json_schema")]
         JsonSchema,
@@ -3831,15 +3170,7 @@ pub mod components {
         pub schema: ::std::collections::BTreeMap<String, ::serde_json::Value>,
         pub r#type: JsonOutputFormatType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum OutputConfigEffort {
         #[serde(rename = "low")]
         Low,
@@ -3870,15 +3201,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub format: Option<JsonOutputFormat>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingConfigEnabledType {
         #[serde(rename = "enabled")]
         Enabled,
@@ -3890,15 +3213,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingConfigEnabledDisplay {
         #[serde(rename = "summarized")]
         Summarized,
@@ -3921,15 +3236,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub display: Option<ThinkingConfigEnabledDisplay>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingConfigDisabledType {
         #[serde(rename = "disabled")]
         Disabled,
@@ -3945,15 +3252,7 @@ pub mod components {
     pub struct ThinkingConfigDisabled {
         pub r#type: ThinkingConfigDisabledType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingConfigAdaptiveType {
         #[serde(rename = "adaptive")]
         Adaptive,
@@ -3965,15 +3264,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingConfigAdaptiveDisplay {
         #[serde(rename = "summarized")]
         Summarized,
@@ -4005,9 +3296,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ThinkingConfigParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ThinkingConfigParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ThinkingConfigParam::ThinkingConfigEnabled(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -4027,9 +3316,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ThinkingConfigParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ThinkingConfigParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ThinkingConfigParam::ThinkingConfigDisabled(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -4049,9 +3336,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ThinkingConfigParam,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ThinkingConfigParam) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ThinkingConfigParam::ThinkingConfigAdaptive(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -4067,15 +3352,7 @@ pub mod components {
         ThinkingConfigDisabled(ThinkingConfigDisabled),
         ThinkingConfigAdaptive(ThinkingConfigAdaptive),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolChoiceAutoType {
         #[serde(rename = "auto")]
         Auto,
@@ -4093,15 +3370,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub disable_parallel_tool_use: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolChoiceAnyType {
         #[serde(rename = "any")]
         Any,
@@ -4119,15 +3388,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub disable_parallel_tool_use: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolChoiceToolType {
         #[serde(rename = "tool")]
         Tool,
@@ -4146,15 +3407,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub disable_parallel_tool_use: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolChoiceNoneType {
         #[serde(rename = "none")]
         None,
@@ -4250,15 +3503,7 @@ pub mod components {
         ToolChoiceTool(ToolChoiceTool),
         ToolChoiceNone(ToolChoiceNone),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum AllowedCallersItem {
         #[serde(rename = "direct")]
         Direct,
@@ -4281,15 +3526,7 @@ pub mod components {
         }
     }
     pub type AllowedCallers = Vec<AllowedCallersItem>;
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolInputSchemaType {
         #[serde(rename = "object")]
         Object,
@@ -4306,21 +3543,11 @@ pub mod components {
     pub struct ToolInputSchema {
         pub r#type: ToolInputSchemaType,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub properties: Option<
-            ::std::collections::BTreeMap<String, ::serde_json::Value>,
-        >,
+        pub properties: Option<::std::collections::BTreeMap<String, ::serde_json::Value>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub required: Option<Vec<String>>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolType {
         #[serde(rename = "custom")]
         Custom,
@@ -4348,23 +3575,13 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub eager_input_streaming: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub input_examples: Option<
-            Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>,
-        >,
+        pub input_examples: Option<Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub r#type: Option<ToolType>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolBash20250124Name {
         #[serde(rename = "bash")]
         Bash,
@@ -4376,15 +3593,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolBash20250124Type {
         #[serde(rename = "bash_20250124")]
         Bash20250124,
@@ -4407,21 +3616,11 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub defer_loading: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub input_examples: Option<
-            Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>,
-        >,
+        pub input_examples: Option<Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionTool20250522Name {
         #[serde(rename = "code_execution")]
         CodeExecution,
@@ -4433,15 +3632,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionTool20250522Type {
         #[serde(rename = "code_execution_20250522")]
         CodeExecution20250522,
@@ -4468,15 +3659,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionTool20250825Name {
         #[serde(rename = "code_execution")]
         CodeExecution,
@@ -4488,15 +3671,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionTool20250825Type {
         #[serde(rename = "code_execution_20250825")]
         CodeExecution20250825,
@@ -4523,15 +3698,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionTool20260120Name {
         #[serde(rename = "code_execution")]
         CodeExecution,
@@ -4543,15 +3710,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionTool20260120Type {
         #[serde(rename = "code_execution_20260120")]
         CodeExecution20260120,
@@ -4579,15 +3738,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MemoryTool20250818Name {
         #[serde(rename = "memory")]
         Memory,
@@ -4599,15 +3750,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MemoryTool20250818Type {
         #[serde(rename = "memory_20250818")]
         Memory20250818,
@@ -4630,21 +3773,11 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub defer_loading: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub input_examples: Option<
-            Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>,
-        >,
+        pub input_examples: Option<Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolTextEditor20250124Name {
         #[serde(rename = "str_replace_editor")]
         StrReplaceEditor,
@@ -4656,15 +3789,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolTextEditor20250124Type {
         #[serde(rename = "text_editor_20250124")]
         TextEditor20250124,
@@ -4687,21 +3812,11 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub defer_loading: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub input_examples: Option<
-            Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>,
-        >,
+        pub input_examples: Option<Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolTextEditor20250429Name {
         #[serde(rename = "str_replace_based_edit_tool")]
         StrReplaceBasedEditTool,
@@ -4715,15 +3830,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolTextEditor20250429Type {
         #[serde(rename = "text_editor_20250429")]
         TextEditor20250429,
@@ -4746,21 +3853,11 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub defer_loading: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub input_examples: Option<
-            Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>,
-        >,
+        pub input_examples: Option<Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolTextEditor20250728Name {
         #[serde(rename = "str_replace_based_edit_tool")]
         StrReplaceBasedEditTool,
@@ -4774,15 +3871,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolTextEditor20250728Type {
         #[serde(rename = "text_editor_20250728")]
         TextEditor20250728,
@@ -4805,24 +3894,14 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub defer_loading: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub input_examples: Option<
-            Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>,
-        >,
+        pub input_examples: Option<Vec<::std::collections::BTreeMap<String, ::serde_json::Value>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         /// 查看文件时显示的最大字符数。
         pub max_characters: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum UserLocationType {
         #[serde(rename = "approximate")]
         Approximate,
@@ -4848,15 +3927,7 @@ pub mod components {
         /// IANA 时区。
         pub timezone: Option<String>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchTool20250305Name {
         #[serde(rename = "web_search")]
         WebSearch,
@@ -4868,15 +3939,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchTool20250305Type {
         #[serde(rename = "web_search_20250305")]
         WebSearch20250305,
@@ -4909,15 +3972,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub user_location: Option<UserLocation>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchTool20260209Name {
         #[serde(rename = "web_search")]
         WebSearch,
@@ -4929,15 +3984,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchTool20260209Type {
         #[serde(rename = "web_search_20260209")]
         WebSearch20260209,
@@ -4970,15 +4017,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub user_location: Option<UserLocation>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchTool20250910Name {
         #[serde(rename = "web_fetch")]
         WebFetch,
@@ -4990,15 +4029,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchTool20250910Type {
         #[serde(rename = "web_fetch_20250910")]
         WebFetch20250910,
@@ -5033,15 +4064,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchTool20260209Name {
         #[serde(rename = "web_fetch")]
         WebFetch,
@@ -5053,15 +4076,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchTool20260209Type {
         #[serde(rename = "web_fetch_20260209")]
         WebFetch20260209,
@@ -5096,15 +4111,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchTool20260309Name {
         #[serde(rename = "web_fetch")]
         WebFetch,
@@ -5116,15 +4123,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchTool20260309Type {
         #[serde(rename = "web_fetch_20260309")]
         WebFetch20260309,
@@ -5162,15 +4161,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub use_cache: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolBm2520251119Name {
         #[serde(rename = "tool_search_tool_bm25")]
         ToolSearchToolBm25,
@@ -5182,15 +4173,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolBm2520251119Type {
         #[serde(rename = "tool_search_tool_bm25_20251119")]
         ToolSearchToolBm2520251119,
@@ -5220,15 +4203,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub strict: Option<bool>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolRegex20251119Name {
         #[serde(rename = "tool_search_tool_regex")]
         ToolSearchToolRegex,
@@ -5240,15 +4215,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolRegex20251119Type {
         #[serde(rename = "tool_search_tool_regex_20251119")]
         ToolSearchToolRegex20251119,
@@ -5327,9 +4294,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::CodeExecutionTool20250522(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::CodeExecutionTool20250522(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5347,9 +4312,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::CodeExecutionTool20250825(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::CodeExecutionTool20250825(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5367,9 +4330,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::CodeExecutionTool20260120(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::CodeExecutionTool20260120(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5405,9 +4366,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::ToolTextEditor20250124(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::ToolTextEditor20250124(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5425,9 +4384,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::ToolTextEditor20250429(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::ToolTextEditor20250429(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5445,9 +4402,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::ToolTextEditor20250728(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::ToolTextEditor20250728(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5465,9 +4420,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::WebSearchTool20250305(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::WebSearchTool20250305(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5485,9 +4438,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::WebSearchTool20260209(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::WebSearchTool20260209(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5505,9 +4456,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::WebFetchTool20250910(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::WebFetchTool20250910(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5525,9 +4474,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::WebFetchTool20260209(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::WebFetchTool20260209(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5545,9 +4492,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::WebFetchTool20260309(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::WebFetchTool20260309(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5565,9 +4510,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::ToolSearchToolBm2520251119(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::ToolSearchToolBm2520251119(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5585,9 +4528,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ToolUnion) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolUnion::ToolSearchToolRegex20251119(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ToolUnion::ToolSearchToolRegex20251119(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5626,9 +4567,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: SystemPrompt) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                SystemPrompt::SystemPromptVariant0(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                SystemPrompt::SystemPromptVariant0(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5646,9 +4585,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: SystemPrompt) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                SystemPrompt::SystemPromptVariant1(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                SystemPrompt::SystemPromptVariant1(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -5659,15 +4596,7 @@ pub mod components {
         SystemPromptVariant0(String),
         SystemPromptVariant1(Vec<TextBlockParam>),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CreateMessageParamsServiceTier {
         #[serde(rename = "auto")]
         Auto,
@@ -5723,15 +4652,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub top_p: Option<f32>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextBlockType {
         #[serde(rename = "text")]
         Text,
@@ -5750,15 +4671,7 @@ pub mod components {
         pub text: String,
         pub r#type: TextBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingBlockType {
         #[serde(rename = "thinking")]
         Thinking,
@@ -5776,15 +4689,7 @@ pub mod components {
         pub thinking: String,
         pub r#type: ThinkingBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum RedactedThinkingBlockType {
         #[serde(rename = "redacted_thinking")]
         RedactedThinking,
@@ -5801,15 +4706,7 @@ pub mod components {
         pub data: String,
         pub r#type: RedactedThinkingBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolUseBlockType {
         #[serde(rename = "tool_use")]
         ToolUse,
@@ -5830,15 +4727,7 @@ pub mod components {
         pub name: String,
         pub r#type: ToolUseBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ServerToolUseBlockName {
         #[serde(rename = "web_search")]
         WebSearch,
@@ -5870,15 +4759,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ServerToolUseBlockType {
         #[serde(rename = "server_tool_use")]
         ServerToolUse,
@@ -5899,15 +4780,7 @@ pub mod components {
         pub name: ServerToolUseBlockName,
         pub r#type: ServerToolUseBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchResultBlockType {
         #[serde(rename = "web_search_result")]
         WebSearchResult,
@@ -5927,15 +4800,7 @@ pub mod components {
         pub r#type: WebSearchResultBlockType,
         pub url: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchToolResultErrorErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -5962,15 +4827,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchToolResultErrorType {
         #[serde(rename = "web_search_tool_result_error")]
         WebSearchToolResultError,
@@ -5989,14 +4846,12 @@ pub mod components {
         pub error_code: WebSearchToolResultErrorErrorCode,
         pub r#type: WebSearchToolResultErrorType,
     }
-    impl ::std::convert::From<WebSearchToolResultError>
-    for WebSearchToolResultBlockContent {
+    impl ::std::convert::From<WebSearchToolResultError> for WebSearchToolResultBlockContent {
         fn from(value: WebSearchToolResultError) -> Self {
             WebSearchToolResultBlockContent::WebSearchToolResultError(value)
         }
     }
-    impl ::std::convert::TryFrom<WebSearchToolResultBlockContent>
-    for WebSearchToolResultError {
+    impl ::std::convert::TryFrom<WebSearchToolResultBlockContent> for WebSearchToolResultError {
         type Error = WebSearchToolResultBlockContent;
         /// # Errors
         ///
@@ -6013,16 +4868,12 @@ pub mod components {
             }
         }
     }
-    impl ::std::convert::From<Vec<WebSearchResultBlock>>
-    for WebSearchToolResultBlockContent {
+    impl ::std::convert::From<Vec<WebSearchResultBlock>> for WebSearchToolResultBlockContent {
         fn from(value: Vec<WebSearchResultBlock>) -> Self {
-            WebSearchToolResultBlockContent::WebSearchToolResultBlockContentVariant1(
-                value,
-            )
+            WebSearchToolResultBlockContent::WebSearchToolResultBlockContentVariant1(value)
         }
     }
-    impl ::std::convert::TryFrom<WebSearchToolResultBlockContent>
-    for Vec<WebSearchResultBlock> {
+    impl ::std::convert::TryFrom<WebSearchToolResultBlockContent> for Vec<WebSearchResultBlock> {
         type Error = WebSearchToolResultBlockContent;
         /// # Errors
         ///
@@ -6032,9 +4883,9 @@ pub mod components {
             value: WebSearchToolResultBlockContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                WebSearchToolResultBlockContent::WebSearchToolResultBlockContentVariant1(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                WebSearchToolResultBlockContent::WebSearchToolResultBlockContentVariant1(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -6045,15 +4896,7 @@ pub mod components {
         WebSearchToolResultError(WebSearchToolResultError),
         WebSearchToolResultBlockContentVariant1(Vec<WebSearchResultBlock>),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebSearchToolResultBlockType {
         #[serde(rename = "web_search_tool_result")]
         WebSearchToolResult,
@@ -6073,15 +4916,7 @@ pub mod components {
         pub tool_use_id: String,
         pub r#type: WebSearchToolResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchToolResultErrorBlockErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -6116,15 +4951,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchToolResultErrorBlockType {
         #[serde(rename = "web_fetch_tool_result_error")]
         WebFetchToolResultError,
@@ -6143,15 +4970,7 @@ pub mod components {
         pub error_code: WebFetchToolResultErrorBlockErrorCode,
         pub r#type: WebFetchToolResultErrorBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum DocumentBlockType {
         #[serde(rename = "document")]
         Document,
@@ -6170,15 +4989,7 @@ pub mod components {
         pub title: String,
         pub r#type: DocumentBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchBlockType {
         #[serde(rename = "web_fetch_result")]
         WebFetchResult,
@@ -6197,14 +5008,12 @@ pub mod components {
         pub r#type: WebFetchBlockType,
         pub url: String,
     }
-    impl ::std::convert::From<WebFetchToolResultErrorBlock>
-    for WebFetchToolResultBlockContent {
+    impl ::std::convert::From<WebFetchToolResultErrorBlock> for WebFetchToolResultBlockContent {
         fn from(value: WebFetchToolResultErrorBlock) -> Self {
             WebFetchToolResultBlockContent::WebFetchToolResultErrorBlock(value)
         }
     }
-    impl ::std::convert::TryFrom<WebFetchToolResultBlockContent>
-    for WebFetchToolResultErrorBlock {
+    impl ::std::convert::TryFrom<WebFetchToolResultBlockContent> for WebFetchToolResultErrorBlock {
         type Error = WebFetchToolResultBlockContent;
         /// # Errors
         ///
@@ -6249,15 +5058,7 @@ pub mod components {
         WebFetchToolResultErrorBlock(WebFetchToolResultErrorBlock),
         WebFetchBlock(WebFetchBlock),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum WebFetchToolResultBlockType {
         #[serde(rename = "web_fetch_tool_result")]
         WebFetchToolResult,
@@ -6277,15 +5078,7 @@ pub mod components {
         pub tool_use_id: String,
         pub r#type: WebFetchToolResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionOutputBlockType {
         #[serde(rename = "code_execution_output")]
         CodeExecutionOutput,
@@ -6302,15 +5095,7 @@ pub mod components {
         pub file_id: String,
         pub r#type: CodeExecutionOutputBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionToolResultErrorErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -6333,15 +5118,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionToolResultErrorType {
         #[serde(rename = "code_execution_tool_result_error")]
         CodeExecutionToolResultError,
@@ -6360,15 +5137,7 @@ pub mod components {
         pub error_code: CodeExecutionToolResultErrorErrorCode,
         pub r#type: CodeExecutionToolResultErrorType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionResultBlockType {
         #[serde(rename = "code_execution_result")]
         CodeExecutionResult,
@@ -6388,15 +5157,7 @@ pub mod components {
         pub stdout: String,
         pub r#type: CodeExecutionResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum EncryptedCodeExecutionResultBlockType {
         #[serde(rename = "encrypted_code_execution_result")]
         EncryptedCodeExecutionResult,
@@ -6418,14 +5179,12 @@ pub mod components {
         pub stderr: String,
         pub r#type: EncryptedCodeExecutionResultBlockType,
     }
-    impl ::std::convert::From<CodeExecutionToolResultError>
-    for CodeExecutionToolResultBlockContent {
+    impl ::std::convert::From<CodeExecutionToolResultError> for CodeExecutionToolResultBlockContent {
         fn from(value: CodeExecutionToolResultError) -> Self {
             CodeExecutionToolResultBlockContent::CodeExecutionToolResultError(value)
         }
     }
-    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent>
-    for CodeExecutionToolResultError {
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent> for CodeExecutionToolResultError {
         type Error = CodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6435,21 +5194,19 @@ pub mod components {
             value: CodeExecutionToolResultBlockContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                CodeExecutionToolResultBlockContent::CodeExecutionToolResultError(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                CodeExecutionToolResultBlockContent::CodeExecutionToolResultError(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
     }
-    impl ::std::convert::From<CodeExecutionResultBlock>
-    for CodeExecutionToolResultBlockContent {
+    impl ::std::convert::From<CodeExecutionResultBlock> for CodeExecutionToolResultBlockContent {
         fn from(value: CodeExecutionResultBlock) -> Self {
             CodeExecutionToolResultBlockContent::CodeExecutionResultBlock(value)
         }
     }
-    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent>
-    for CodeExecutionResultBlock {
+    impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent> for CodeExecutionResultBlock {
         type Error = CodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6467,13 +5224,15 @@ pub mod components {
         }
     }
     impl ::std::convert::From<EncryptedCodeExecutionResultBlock>
-    for CodeExecutionToolResultBlockContent {
+        for CodeExecutionToolResultBlockContent
+    {
         fn from(value: EncryptedCodeExecutionResultBlock) -> Self {
             CodeExecutionToolResultBlockContent::EncryptedCodeExecutionResultBlock(value)
         }
     }
     impl ::std::convert::TryFrom<CodeExecutionToolResultBlockContent>
-    for EncryptedCodeExecutionResultBlock {
+        for EncryptedCodeExecutionResultBlock
+    {
         type Error = CodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6483,9 +5242,9 @@ pub mod components {
             value: CodeExecutionToolResultBlockContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                CodeExecutionToolResultBlockContent::EncryptedCodeExecutionResultBlock(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                CodeExecutionToolResultBlockContent::EncryptedCodeExecutionResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -6497,15 +5256,7 @@ pub mod components {
         CodeExecutionResultBlock(CodeExecutionResultBlock),
         EncryptedCodeExecutionResultBlock(EncryptedCodeExecutionResultBlock),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CodeExecutionToolResultBlockType {
         #[serde(rename = "code_execution_tool_result")]
         CodeExecutionToolResult,
@@ -6525,15 +5276,7 @@ pub mod components {
         pub tool_use_id: String,
         pub r#type: CodeExecutionToolResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionOutputBlockType {
         #[serde(rename = "bash_code_execution_output")]
         BashCodeExecutionOutput,
@@ -6552,15 +5295,7 @@ pub mod components {
         pub file_id: String,
         pub r#type: BashCodeExecutionOutputBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionToolResultErrorErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -6586,15 +5321,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionToolResultErrorType {
         #[serde(rename = "bash_code_execution_tool_result_error")]
         BashCodeExecutionToolResultError,
@@ -6613,15 +5340,7 @@ pub mod components {
         pub error_code: BashCodeExecutionToolResultErrorErrorCode,
         pub r#type: BashCodeExecutionToolResultErrorType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionResultBlockType {
         #[serde(rename = "bash_code_execution_result")]
         BashCodeExecutionResult,
@@ -6644,15 +5363,15 @@ pub mod components {
         pub r#type: BashCodeExecutionResultBlockType,
     }
     impl ::std::convert::From<BashCodeExecutionToolResultError>
-    for BashCodeExecutionToolResultBlockContent {
+        for BashCodeExecutionToolResultBlockContent
+    {
         fn from(value: BashCodeExecutionToolResultError) -> Self {
-            BashCodeExecutionToolResultBlockContent::BashCodeExecutionToolResultError(
-                value,
-            )
+            BashCodeExecutionToolResultBlockContent::BashCodeExecutionToolResultError(value)
         }
     }
     impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockContent>
-    for BashCodeExecutionToolResultError {
+        for BashCodeExecutionToolResultError
+    {
         type Error = BashCodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6670,13 +5389,15 @@ pub mod components {
         }
     }
     impl ::std::convert::From<BashCodeExecutionResultBlock>
-    for BashCodeExecutionToolResultBlockContent {
+        for BashCodeExecutionToolResultBlockContent
+    {
         fn from(value: BashCodeExecutionResultBlock) -> Self {
             BashCodeExecutionToolResultBlockContent::BashCodeExecutionResultBlock(value)
         }
     }
     impl ::std::convert::TryFrom<BashCodeExecutionToolResultBlockContent>
-    for BashCodeExecutionResultBlock {
+        for BashCodeExecutionResultBlock
+    {
         type Error = BashCodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6686,9 +5407,9 @@ pub mod components {
             value: BashCodeExecutionToolResultBlockContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                BashCodeExecutionToolResultBlockContent::BashCodeExecutionResultBlock(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                BashCodeExecutionToolResultBlockContent::BashCodeExecutionResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -6699,15 +5420,7 @@ pub mod components {
         BashCodeExecutionToolResultError(BashCodeExecutionToolResultError),
         BashCodeExecutionResultBlock(BashCodeExecutionResultBlock),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum BashCodeExecutionToolResultBlockType {
         #[serde(rename = "bash_code_execution_tool_result")]
         BashCodeExecutionToolResult,
@@ -6727,15 +5440,7 @@ pub mod components {
         pub tool_use_id: String,
         pub r#type: BashCodeExecutionToolResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionToolResultErrorErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -6761,15 +5466,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionToolResultErrorType {
         #[serde(rename = "text_editor_code_execution_tool_result_error")]
         TextEditorCodeExecutionToolResultError,
@@ -6789,15 +5486,7 @@ pub mod components {
         pub error_message: String,
         pub r#type: TextEditorCodeExecutionToolResultErrorType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionViewResultBlockFileType {
         #[serde(rename = "text")]
         Text,
@@ -6815,15 +5504,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionViewResultBlockType {
         #[serde(rename = "text_editor_code_execution_view_result")]
         TextEditorCodeExecutionViewResult,
@@ -6846,15 +5527,7 @@ pub mod components {
         pub total_lines: i64,
         pub r#type: TextEditorCodeExecutionViewResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionCreateResultBlockType {
         #[serde(rename = "text_editor_code_execution_create_result")]
         TextEditorCodeExecutionCreateResult,
@@ -6873,15 +5546,7 @@ pub mod components {
         pub is_file_update: bool,
         pub r#type: TextEditorCodeExecutionCreateResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionStrReplaceResultBlockType {
         #[serde(rename = "text_editor_code_execution_str_replace_result")]
         TextEditorCodeExecutionStrReplaceResult,
@@ -6905,7 +5570,8 @@ pub mod components {
         pub r#type: TextEditorCodeExecutionStrReplaceResultBlockType,
     }
     impl ::std::convert::From<TextEditorCodeExecutionToolResultError>
-    for TextEditorCodeExecutionToolResultBlockContent {
+        for TextEditorCodeExecutionToolResultBlockContent
+    {
         fn from(value: TextEditorCodeExecutionToolResultError) -> Self {
             TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionToolResultError(
                 value,
@@ -6913,7 +5579,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
-    for TextEditorCodeExecutionToolResultError {
+        for TextEditorCodeExecutionToolResultError
+    {
         type Error = TextEditorCodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6931,7 +5598,8 @@ pub mod components {
         }
     }
     impl ::std::convert::From<TextEditorCodeExecutionViewResultBlock>
-    for TextEditorCodeExecutionToolResultBlockContent {
+        for TextEditorCodeExecutionToolResultBlockContent
+    {
         fn from(value: TextEditorCodeExecutionViewResultBlock) -> Self {
             TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionViewResultBlock(
                 value,
@@ -6939,7 +5607,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
-    for TextEditorCodeExecutionViewResultBlock {
+        for TextEditorCodeExecutionViewResultBlock
+    {
         type Error = TextEditorCodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6957,7 +5626,8 @@ pub mod components {
         }
     }
     impl ::std::convert::From<TextEditorCodeExecutionCreateResultBlock>
-    for TextEditorCodeExecutionToolResultBlockContent {
+        for TextEditorCodeExecutionToolResultBlockContent
+    {
         fn from(value: TextEditorCodeExecutionCreateResultBlock) -> Self {
             TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionCreateResultBlock(
                 value,
@@ -6965,7 +5635,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
-    for TextEditorCodeExecutionCreateResultBlock {
+        for TextEditorCodeExecutionCreateResultBlock
+    {
         type Error = TextEditorCodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -6983,7 +5654,8 @@ pub mod components {
         }
     }
     impl ::std::convert::From<TextEditorCodeExecutionStrReplaceResultBlock>
-    for TextEditorCodeExecutionToolResultBlockContent {
+        for TextEditorCodeExecutionToolResultBlockContent
+    {
         fn from(value: TextEditorCodeExecutionStrReplaceResultBlock) -> Self {
             TextEditorCodeExecutionToolResultBlockContent::TextEditorCodeExecutionStrReplaceResultBlock(
                 value,
@@ -6991,7 +5663,8 @@ pub mod components {
         }
     }
     impl ::std::convert::TryFrom<TextEditorCodeExecutionToolResultBlockContent>
-    for TextEditorCodeExecutionStrReplaceResultBlock {
+        for TextEditorCodeExecutionStrReplaceResultBlock
+    {
         type Error = TextEditorCodeExecutionToolResultBlockContent;
         /// # Errors
         ///
@@ -7013,22 +5686,10 @@ pub mod components {
     pub enum TextEditorCodeExecutionToolResultBlockContent {
         TextEditorCodeExecutionToolResultError(TextEditorCodeExecutionToolResultError),
         TextEditorCodeExecutionViewResultBlock(TextEditorCodeExecutionViewResultBlock),
-        TextEditorCodeExecutionCreateResultBlock(
-            TextEditorCodeExecutionCreateResultBlock,
-        ),
-        TextEditorCodeExecutionStrReplaceResultBlock(
-            TextEditorCodeExecutionStrReplaceResultBlock,
-        ),
+        TextEditorCodeExecutionCreateResultBlock(TextEditorCodeExecutionCreateResultBlock),
+        TextEditorCodeExecutionStrReplaceResultBlock(TextEditorCodeExecutionStrReplaceResultBlock),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextEditorCodeExecutionToolResultBlockType {
         #[serde(rename = "text_editor_code_execution_tool_result")]
         TextEditorCodeExecutionToolResult,
@@ -7048,15 +5709,7 @@ pub mod components {
         pub tool_use_id: String,
         pub r#type: TextEditorCodeExecutionToolResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolReferenceBlockType {
         #[serde(rename = "tool_reference")]
         ToolReference,
@@ -7073,15 +5726,7 @@ pub mod components {
         pub tool_name: String,
         pub r#type: ToolReferenceBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolResultErrorErrorCode {
         #[serde(rename = "invalid_tool_input")]
         InvalidToolInput,
@@ -7104,15 +5749,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolResultErrorType {
         #[serde(rename = "tool_search_tool_result_error")]
         ToolSearchToolResultError,
@@ -7132,15 +5769,7 @@ pub mod components {
         pub error_message: String,
         pub r#type: ToolSearchToolResultErrorType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolSearchResultBlockType {
         #[serde(rename = "tool_search_tool_search_result")]
         ToolSearchToolSearchResult,
@@ -7159,14 +5788,12 @@ pub mod components {
         pub tool_references: Vec<ToolReferenceBlock>,
         pub r#type: ToolSearchToolSearchResultBlockType,
     }
-    impl ::std::convert::From<ToolSearchToolResultError>
-    for ToolSearchToolResultBlockContent {
+    impl ::std::convert::From<ToolSearchToolResultError> for ToolSearchToolResultBlockContent {
         fn from(value: ToolSearchToolResultError) -> Self {
             ToolSearchToolResultBlockContent::ToolSearchToolResultError(value)
         }
     }
-    impl ::std::convert::TryFrom<ToolSearchToolResultBlockContent>
-    for ToolSearchToolResultError {
+    impl ::std::convert::TryFrom<ToolSearchToolResultBlockContent> for ToolSearchToolResultError {
         type Error = ToolSearchToolResultBlockContent;
         /// # Errors
         ///
@@ -7183,14 +5810,12 @@ pub mod components {
             }
         }
     }
-    impl ::std::convert::From<ToolSearchToolSearchResultBlock>
-    for ToolSearchToolResultBlockContent {
+    impl ::std::convert::From<ToolSearchToolSearchResultBlock> for ToolSearchToolResultBlockContent {
         fn from(value: ToolSearchToolSearchResultBlock) -> Self {
             ToolSearchToolResultBlockContent::ToolSearchToolSearchResultBlock(value)
         }
     }
-    impl ::std::convert::TryFrom<ToolSearchToolResultBlockContent>
-    for ToolSearchToolSearchResultBlock {
+    impl ::std::convert::TryFrom<ToolSearchToolResultBlockContent> for ToolSearchToolSearchResultBlock {
         type Error = ToolSearchToolResultBlockContent;
         /// # Errors
         ///
@@ -7200,9 +5825,9 @@ pub mod components {
             value: ToolSearchToolResultBlockContent,
         ) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ToolSearchToolResultBlockContent::ToolSearchToolSearchResultBlock(
-                    inner,
-                ) => ::std::result::Result::Ok(inner),
+                ToolSearchToolResultBlockContent::ToolSearchToolSearchResultBlock(inner) => {
+                    ::std::result::Result::Ok(inner)
+                }
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -7213,15 +5838,7 @@ pub mod components {
         ToolSearchToolResultError(ToolSearchToolResultError),
         ToolSearchToolSearchResultBlock(ToolSearchToolSearchResultBlock),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ToolSearchToolResultBlockType {
         #[serde(rename = "tool_search_tool_result")]
         ToolSearchToolResult,
@@ -7241,15 +5858,7 @@ pub mod components {
         pub tool_use_id: String,
         pub r#type: ToolSearchToolResultBlockType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ContainerUploadBlockType {
         #[serde(rename = "container_upload")]
         ContainerUpload,
@@ -7315,9 +5924,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlock::RedactedThinkingBlock(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlock::RedactedThinkingBlock(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -7353,9 +5960,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlock::ServerToolUseBlock(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlock::ServerToolUseBlock(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -7373,9 +5978,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlock::WebSearchToolResultBlock(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlock::WebSearchToolResultBlock(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -7393,9 +5996,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlock::WebFetchToolResultBlock(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlock::WebFetchToolResultBlock(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -7445,8 +6046,7 @@ pub mod components {
             ContentBlock::TextEditorCodeExecutionToolResultBlock(value)
         }
     }
-    impl ::std::convert::TryFrom<ContentBlock>
-    for TextEditorCodeExecutionToolResultBlock {
+    impl ::std::convert::TryFrom<ContentBlock> for TextEditorCodeExecutionToolResultBlock {
         type Error = ContentBlock;
         /// # Errors
         ///
@@ -7474,9 +6074,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlock::ToolSearchToolResultBlock(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlock::ToolSearchToolResultBlock(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -7494,9 +6092,7 @@ pub mod components {
         /// `#variant_ident` variant.
         fn try_from(value: ContentBlock) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlock::ContainerUploadBlock(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlock::ContainerUploadBlock(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -7523,15 +6119,7 @@ pub mod components {
         pub id: String,
         pub expires_at: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum RefusalStopDetailsCategory {
         #[serde(rename = "cyber")]
         Cyber,
@@ -7546,15 +6134,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum RefusalStopDetailsType {
         #[serde(rename = "refusal")]
         Refusal,
@@ -7587,15 +6167,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum StopReason {
         #[serde(rename = "end_turn")]
         EndTurn,
@@ -7620,15 +6192,7 @@ pub mod components {
         pub web_fetch_requests: i64,
         pub web_search_requests: i64,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum UsageServiceTier {
         #[serde(rename = "standard")]
         Standard,
@@ -7664,15 +6228,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub service_tier: Option<UsageServiceTier>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageRole {
         #[serde(rename = "assistant")]
         Assistant,
@@ -7684,15 +6240,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageType {
         #[serde(rename = "message")]
         Message,
@@ -7720,15 +6268,7 @@ pub mod components {
         pub r#type: MessageType,
         pub usage: Usage,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageStartEventMessageType {
         #[serde(rename = "message")]
         Message,
@@ -7740,15 +6280,7 @@ pub mod components {
             }
         }
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageStartEventMessageRole {
         #[serde(rename = "assistant")]
         Assistant,
@@ -7778,15 +6310,7 @@ pub mod components {
         pub stop_sequence: Option<String>,
         pub usage: Usage,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageStartEventType {
         #[serde(rename = "message_start")]
         MessageStart,
@@ -7803,15 +6327,7 @@ pub mod components {
         pub r#type: MessageStartEventType,
         pub message: MessageStartEventMessage,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ContentBlockStartEventType {
         #[serde(rename = "content_block_start")]
         ContentBlockStart,
@@ -7829,15 +6345,7 @@ pub mod components {
         pub index: i64,
         pub content_block: ContentBlock,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum TextDeltaType {
         #[serde(rename = "text_delta")]
         TextDelta,
@@ -7854,15 +6362,7 @@ pub mod components {
         pub r#type: TextDeltaType,
         pub text: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum InputJsonDeltaType {
         #[serde(rename = "input_json_delta")]
         InputJsonDelta,
@@ -7880,15 +6380,7 @@ pub mod components {
         pub r#type: InputJsonDeltaType,
         pub partial_json: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ThinkingDeltaType {
         #[serde(rename = "thinking_delta")]
         ThinkingDelta,
@@ -7905,15 +6397,7 @@ pub mod components {
         pub r#type: ThinkingDeltaType,
         pub thinking: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum SignatureDeltaType {
         #[serde(rename = "signature_delta")]
         SignatureDelta,
@@ -7930,15 +6414,7 @@ pub mod components {
         pub r#type: SignatureDeltaType,
         pub signature: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum CitationsDeltaType {
         #[serde(rename = "citations_delta")]
         CitationsDelta,
@@ -7968,9 +6444,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockDelta,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockDelta) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 ContentBlockDelta::TextDelta(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
@@ -7988,13 +6462,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockDelta,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockDelta) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockDelta::InputJsonDelta(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockDelta::InputJsonDelta(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -8010,13 +6480,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockDelta,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockDelta) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockDelta::ThinkingDelta(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockDelta::ThinkingDelta(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -8032,13 +6498,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockDelta,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockDelta) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockDelta::SignatureDelta(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockDelta::SignatureDelta(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -8054,13 +6516,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: ContentBlockDelta,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: ContentBlockDelta) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                ContentBlockDelta::CitationsDelta(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                ContentBlockDelta::CitationsDelta(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -8074,15 +6532,7 @@ pub mod components {
         SignatureDelta(SignatureDelta),
         CitationsDelta(CitationsDelta),
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ContentBlockDeltaEventType {
         #[serde(rename = "content_block_delta")]
         ContentBlockDelta,
@@ -8100,15 +6550,7 @@ pub mod components {
         pub index: i64,
         pub delta: ContentBlockDelta,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ContentBlockStopEventType {
         #[serde(rename = "content_block_stop")]
         ContentBlockStop,
@@ -8138,15 +6580,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub container: Option<Container>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageDeltaUsageServiceTier {
         #[serde(rename = "standard")]
         Standard,
@@ -8182,15 +6616,7 @@ pub mod components {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub service_tier: Option<MessageDeltaUsageServiceTier>,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageDeltaEventType {
         #[serde(rename = "message_delta")]
         MessageDelta,
@@ -8208,15 +6634,7 @@ pub mod components {
         pub delta: MessageDeltaUpdate,
         pub usage: MessageDeltaUsage,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum MessageStopEventType {
         #[serde(rename = "message_stop")]
         MessageStop,
@@ -8232,15 +6650,7 @@ pub mod components {
     pub struct MessageStopEvent {
         pub r#type: MessageStopEventType,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum PingEventType {
         #[serde(rename = "ping")]
         Ping,
@@ -8262,15 +6672,7 @@ pub mod components {
         pub r#type: String,
         pub message: String,
     }
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        ::serde::Serialize,
-        ::serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
     pub enum ErrorEventType {
         #[serde(rename = "error")]
         Error,
@@ -8298,13 +6700,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                MessageStreamEvent::MessageStartEvent(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                MessageStreamEvent::MessageStartEvent(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -8320,9 +6718,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 MessageStreamEvent::ContentBlockStartEvent(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -8342,9 +6738,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 MessageStreamEvent::ContentBlockDeltaEvent(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -8364,9 +6758,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 MessageStreamEvent::ContentBlockStopEvent(inner) => {
                     ::std::result::Result::Ok(inner)
@@ -8386,13 +6778,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                MessageStreamEvent::MessageDeltaEvent(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                MessageStreamEvent::MessageDeltaEvent(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -8408,13 +6796,9 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
-                MessageStreamEvent::MessageStopEvent(inner) => {
-                    ::std::result::Result::Ok(inner)
-                }
+                MessageStreamEvent::MessageStopEvent(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
             }
         }
@@ -8430,9 +6814,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 MessageStreamEvent::PingEvent(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
@@ -8450,9 +6832,7 @@ pub mod components {
         ///
         /// Returns the original enum value if it does not match the
         /// `#variant_ident` variant.
-        fn try_from(
-            value: MessageStreamEvent,
-        ) -> ::std::result::Result<Self, Self::Error> {
+        fn try_from(value: MessageStreamEvent) -> ::std::result::Result<Self, Self::Error> {
             match value {
                 MessageStreamEvent::ErrorEvent(inner) => ::std::result::Result::Ok(inner),
                 other => ::std::result::Result::Err(other),
@@ -8504,9 +6884,7 @@ pub mod operations {
                     /// operation. Outer slice encodes OR alternatives; inner
                     /// slice encodes AND requirements within one alternative.
                     /// Empty outer slice means "public, no auth required".
-                    pub const SECURITY: &'static [&'static [&'static str]] = &[
-                        &["ApiKeyAuth"],
-                    ];
+                    pub const SECURITY: &'static [&'static [&'static str]] = &[&["ApiKeyAuth"]];
                     /// Wraps this request with an `Accept` header override.
                     ///
                     /// The generated [`::toac::MakeRequest`] impl auto-emits an
@@ -8532,52 +6910,49 @@ pub mod operations {
                             let mut __path = ::std::string::String::new();
                             __path.push_str("/v1/models");
                             let mut __query_first = true;
-                            if let ::std::option::Option::Some(__value) = &self.before_id
-                            {
+                            if let ::std::option::Option::Some(__value) = &self.before_id {
                                 ::toac::request::parameter::encode_serialized(
-                                        &mut __path,
-                                        "before_id",
-                                        __value,
-                                        ::toac::request::parameter::ParameterStyle::Form,
-                                        true,
-                                        ::toac::request::parameter::ParameterIn::Query,
-                                        &mut __query_first,
-                                    )
-                                    .map_err(::toac::EncodeRequestError::new)?;
+                                    &mut __path,
+                                    "before_id",
+                                    __value,
+                                    ::toac::request::parameter::ParameterStyle::Form,
+                                    true,
+                                    ::toac::request::parameter::ParameterIn::Query,
+                                    &mut __query_first,
+                                )
+                                .map_err(::toac::EncodeRequestError::new)?;
                             }
-                            if let ::std::option::Option::Some(__value) = &self.after_id
-                            {
+                            if let ::std::option::Option::Some(__value) = &self.after_id {
                                 ::toac::request::parameter::encode_serialized(
-                                        &mut __path,
-                                        "after_id",
-                                        __value,
-                                        ::toac::request::parameter::ParameterStyle::Form,
-                                        true,
-                                        ::toac::request::parameter::ParameterIn::Query,
-                                        &mut __query_first,
-                                    )
-                                    .map_err(::toac::EncodeRequestError::new)?;
+                                    &mut __path,
+                                    "after_id",
+                                    __value,
+                                    ::toac::request::parameter::ParameterStyle::Form,
+                                    true,
+                                    ::toac::request::parameter::ParameterIn::Query,
+                                    &mut __query_first,
+                                )
+                                .map_err(::toac::EncodeRequestError::new)?;
                             }
                             if let ::std::option::Option::Some(__value) = &self.limit {
                                 ::toac::request::parameter::encode_serialized(
-                                        &mut __path,
-                                        "limit",
-                                        __value,
-                                        ::toac::request::parameter::ParameterStyle::Form,
-                                        true,
-                                        ::toac::request::parameter::ParameterIn::Query,
-                                        &mut __query_first,
-                                    )
-                                    .map_err(::toac::EncodeRequestError::new)?;
+                                    &mut __path,
+                                    "limit",
+                                    __value,
+                                    ::toac::request::parameter::ParameterStyle::Form,
+                                    true,
+                                    ::toac::request::parameter::ParameterIn::Query,
+                                    &mut __query_first,
+                                )
+                                .map_err(::toac::EncodeRequestError::new)?;
                             }
                             let mut __builder = ::http::Request::builder()
                                 .method(::http::Method::GET)
                                 .uri(__path);
-                            __builder = __builder
-                                .header(
-                                    ::http::header::ACCEPT,
-                                    ::http::HeaderValue::from_static("application/json"),
-                                );
+                            __builder = __builder.header(
+                                ::http::header::ACCEPT,
+                                ::http::HeaderValue::from_static("application/json"),
+                            );
                             let mut __request = __builder
                                 .body(::toac::body::Body::empty())
                                 .expect("valid generated HTTP request");
@@ -8618,7 +6993,9 @@ pub mod operations {
                     > + ::std::marker::Send
                     where
                         __B: ::http_body::Body<Data = ::bytes::Bytes>
-                            + ::std::marker::Send + ::std::marker::Sync + 'static,
+                            + ::std::marker::Send
+                            + ::std::marker::Sync
+                            + 'static,
                         __B::Error: ::std::convert::Into<::toac::BoxError>,
                     {
                         async move {
@@ -8628,14 +7005,14 @@ pub mod operations {
                             match __status.as_u16() {
                                 200u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status200(__value),
@@ -8643,14 +7020,14 @@ pub mod operations {
                                 }
                                 400u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status400(__value),
@@ -8658,14 +7035,14 @@ pub mod operations {
                                 }
                                 401u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status401(__value),
@@ -8673,14 +7050,14 @@ pub mod operations {
                                 }
                                 429u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status429(__value),
@@ -8688,14 +7065,14 @@ pub mod operations {
                                 }
                                 500u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status500(__value),
@@ -8738,9 +7115,7 @@ pub mod operations {
                     /// operation. Outer slice encodes OR alternatives; inner
                     /// slice encodes AND requirements within one alternative.
                     /// Empty outer slice means "public, no auth required".
-                    pub const SECURITY: &'static [&'static [&'static str]] = &[
-                        &["ApiKeyAuth"],
-                    ];
+                    pub const SECURITY: &'static [&'static [&'static str]] = &[&["ApiKeyAuth"]];
                     /// Wraps this request with an `Accept` header override.
                     ///
                     /// The generated [`::toac::MakeRequest`] impl auto-emits an
@@ -8768,13 +7143,12 @@ pub mod operations {
                             let mut __builder = ::http::Request::builder()
                                 .method(::http::Method::POST)
                                 .uri(__path);
-                            __builder = __builder
-                                .header(
-                                    ::http::header::ACCEPT,
-                                    ::http::HeaderValue::from_static(
-                                        "application/json, text/event-stream",
-                                    ),
-                                );
+                            __builder = __builder.header(
+                                ::http::header::ACCEPT,
+                                ::http::HeaderValue::from_static(
+                                    "application/json, text/event-stream",
+                                ),
+                            );
                             let mut __request = __builder
                                 .body(::toac::body::Body::empty())
                                 .expect("valid generated HTTP request");
@@ -8830,7 +7204,9 @@ pub mod operations {
                     > + ::std::marker::Send
                     where
                         __B: ::http_body::Body<Data = ::bytes::Bytes>
-                            + ::std::marker::Send + ::std::marker::Sync + 'static,
+                            + ::std::marker::Send
+                            + ::std::marker::Sync
+                            + 'static,
                         __B::Error: ::std::convert::Into<::toac::BoxError>,
                     {
                         async move {
@@ -8844,69 +7220,67 @@ pub mod operations {
                                     s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase()
                                 });
                             match __status.as_u16() {
-                                200u16 => {
-                                    match __content_type.as_deref() {
-                                        ::std::option::Option::Some(
-                                            __ct,
-                                        ) if __ct == "application/json" => {
-                                            let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                            let __value = ::toac::body::codec::decode_body(
-                                                    &__decoder,
-                                                    __body,
-                                                )
+                                200u16 => match __content_type.as_deref() {
+                                    ::std::option::Option::Some(__ct)
+                                        if __ct == "application/json" =>
+                                    {
+                                        let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                        let __value =
+                                            ::toac::body::codec::decode_body(&__decoder, __body)
                                                 .await
-                                                .map_err(|e| ::toac::DecodeError::Codec(
-                                                    ::std::convert::Into::into(e),
-                                                ))?;
-                                            return ::std::result::Result::Ok(Self {
-                                                headers: __headers,
-                                                body: ResponseBody::Status200Json(__value),
-                                            });
-                                        }
-                                        ::std::option::Option::Some(
-                                            __ct,
-                                        ) if __ct == "text/event-stream" => {
-                                            let __decoder = <::toac::body::codec::sse::SseDecoder as ::std::default::Default>::default();
-                                            let __value = ::toac::body::codec::decode_body(
-                                                    &__decoder,
-                                                    __body,
-                                                )
-                                                .await
-                                                .map_err(|e| ::toac::DecodeError::Codec(
-                                                    ::std::convert::Into::into(e),
-                                                ))?;
-                                            return ::std::result::Result::Ok(Self {
-                                                headers: __headers,
-                                                body: ResponseBody::Status200Sse(__value),
-                                            });
-                                        }
-                                        _ => {
-                                            let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                            let __value = ::toac::body::codec::decode_body(
-                                                    &__decoder,
-                                                    __body,
-                                                )
-                                                .await
-                                                .map_err(|e| ::toac::DecodeError::Codec(
-                                                    ::std::convert::Into::into(e),
-                                                ))?;
-                                            return ::std::result::Result::Ok(Self {
-                                                headers: __headers,
-                                                body: ResponseBody::Status200Json(__value),
-                                            });
-                                        }
+                                                .map_err(|e| {
+                                                    ::toac::DecodeError::Codec(
+                                                        ::std::convert::Into::into(e),
+                                                    )
+                                                })?;
+                                        return ::std::result::Result::Ok(Self {
+                                            headers: __headers,
+                                            body: ResponseBody::Status200Json(__value),
+                                        });
                                     }
-                                }
+                                    ::std::option::Option::Some(__ct)
+                                        if __ct == "text/event-stream" =>
+                                    {
+                                        let __decoder = <::toac::body::codec::sse::SseDecoder as ::std::default::Default>::default();
+                                        let __value =
+                                            ::toac::body::codec::decode_body(&__decoder, __body)
+                                                .await
+                                                .map_err(|e| {
+                                                    ::toac::DecodeError::Codec(
+                                                        ::std::convert::Into::into(e),
+                                                    )
+                                                })?;
+                                        return ::std::result::Result::Ok(Self {
+                                            headers: __headers,
+                                            body: ResponseBody::Status200Sse(__value),
+                                        });
+                                    }
+                                    _ => {
+                                        let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
+                                        let __value =
+                                            ::toac::body::codec::decode_body(&__decoder, __body)
+                                                .await
+                                                .map_err(|e| {
+                                                    ::toac::DecodeError::Codec(
+                                                        ::std::convert::Into::into(e),
+                                                    )
+                                                })?;
+                                        return ::std::result::Result::Ok(Self {
+                                            headers: __headers,
+                                            body: ResponseBody::Status200Json(__value),
+                                        });
+                                    }
+                                },
                                 400u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status400(__value),
@@ -8914,14 +7288,14 @@ pub mod operations {
                                 }
                                 401u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status401(__value),
@@ -8929,14 +7303,14 @@ pub mod operations {
                                 }
                                 403u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status403(__value),
@@ -8944,14 +7318,14 @@ pub mod operations {
                                 }
                                 404u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status404(__value),
@@ -8959,14 +7333,14 @@ pub mod operations {
                                 }
                                 413u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status413(__value),
@@ -8974,14 +7348,14 @@ pub mod operations {
                                 }
                                 429u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status429(__value),
@@ -8989,14 +7363,14 @@ pub mod operations {
                                 }
                                 500u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status500(__value),
@@ -9004,14 +7378,14 @@ pub mod operations {
                                 }
                                 529u16 => {
                                     let __decoder = <::toac::body::codec::json::JsonDecoder as ::std::default::Default>::default();
-                                    let __value = ::toac::body::codec::decode_body(
-                                            &__decoder,
-                                            __body,
-                                        )
-                                        .await
-                                        .map_err(|e| ::toac::DecodeError::Codec(
-                                            ::std::convert::Into::into(e),
-                                        ))?;
+                                    let __value =
+                                        ::toac::body::codec::decode_body(&__decoder, __body)
+                                            .await
+                                            .map_err(|e| {
+                                                ::toac::DecodeError::Codec(
+                                                    ::std::convert::Into::into(e),
+                                                )
+                                            })?;
                                     return ::std::result::Result::Ok(Self {
                                         headers: __headers,
                                         body: ResponseBody::Status529(__value),
@@ -9066,7 +7440,9 @@ pub mod security {
     impl ApiKeyAuthCredential {
         /// Builds a credential from a raw key value.
         pub fn new<V: ::std::convert::Into<::std::string::String>>(value: V) -> Self {
-            Self { value: value.into() }
+            Self {
+                value: value.into(),
+            }
         }
         /// Projects into the runtime's concrete credential.
         fn as_runtime(&self) -> ::toac::security::ApiKeyCredential {
@@ -9114,9 +7490,7 @@ pub mod security {
         where
             V: ::std::convert::Into<::std::string::String>,
         {
-            self.api_key_auth = ::std::option::Option::Some(
-                ApiKeyAuthCredential::new(value),
-            );
+            self.api_key_auth = ::std::option::Option::Some(ApiKeyAuthCredential::new(value));
             self
         }
         /// Finalises into an [`AuthConfig`].
@@ -9135,7 +7509,8 @@ pub mod security {
                 if requirements.is_empty() {
                     return ::std::result::Result::Ok(req);
                 }
-                let mut __chosen: ::std::option::Option<&'static [&'static str]> = ::std::option::Option::None;
+                let mut __chosen: ::std::option::Option<&'static [&'static str]> =
+                    ::std::option::Option::None;
                 for __alt in requirements {
                     let mut __can_satisfy = true;
                     let mut __matched_any = false;
@@ -9158,19 +7533,15 @@ pub mod security {
                     }
                 }
                 let ::std::option::Option::Some(__alt) = __chosen else {
-                    return ::std::result::Result::Err(
-                        ::std::convert::Into::into(
-                            ::std::format!(
-                                "no configured credentials satisfy {:?}", requirements,
-                            ),
-                        ),
-                    );
+                    return ::std::result::Result::Err(::std::convert::Into::into(::std::format!(
+                        "no configured credentials satisfy {:?}",
+                        requirements,
+                    )));
                 };
                 let mut __req = req;
                 for __scheme in __alt.iter().copied() {
                     if __scheme == "ApiKeyAuth" {
-                        let ::std::option::Option::Some(__cred) = &self.api_key_auth
-                        else {
+                        let ::std::option::Option::Some(__cred) = &self.api_key_auth else {
                             continue;
                         };
                         __req = ::toac::SecurityCredential::apply(__cred, __req).await?;

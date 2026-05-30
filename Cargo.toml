@@ -71,6 +71,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 
 # 协议与外部 SDK
 agent-client-protocol = "0.12"
+agent-client-protocol-schema = { version = "=0.13.2", features = ["tracing"] }
 rmcp = { version = "1", features = ["client"] }
 
 # LLM 客户端栈：toac codegen + 运行期 + hyper transport

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::SessionId;
+use agent_client_protocol_schema::SessionId;
 use defect_agent::fs::{FsBackend, NoopFsBackend};
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, HostedCapabilities, LlmProvider, ModelInfo,

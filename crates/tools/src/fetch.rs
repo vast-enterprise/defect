@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agent_client_protocol::schema::{
+use agent_client_protocol_schema::{
     Content, ContentBlock, TextContent, ToolCallContent, ToolCallUpdateFields, ToolKind,
 };
 use defect_agent::error::BoxError;

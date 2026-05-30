@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
-use agent_client_protocol::schema::{Content as AcpContent, McpServer, McpServerStdio};
-use agent_client_protocol::schema::{ToolCallContent, ToolCallUpdateFields};
+use agent_client_protocol_schema::{Content as AcpContent, McpServer, McpServerStdio};
+use agent_client_protocol_schema::{ToolCallContent, ToolCallUpdateFields};
 use defect_agent::error::BoxError;
 use defect_agent::session::{SessionToolFactory, StaticToolRegistryBuilder, ToolRegistry};
 use defect_agent::tool::{
@@ -181,7 +181,7 @@ async fn load_streamable_http_server_tools(
     _cwd: PathBuf,
     server_name: String,
     url: String,
-    headers: Vec<agent_client_protocol::schema::HttpHeader>,
+    headers: Vec<agent_client_protocol_schema::HttpHeader>,
 ) -> Result<Vec<Arc<dyn Tool>>, BoxError> {
     let http_client =
         HyperStreamableHttpClient::from_stack_config(&defect_http::HttpStackConfig::default())
@@ -383,7 +383,7 @@ where
 }
 
 fn http_headers(
-    headers: Vec<agent_client_protocol::schema::HttpHeader>,
+    headers: Vec<agent_client_protocol_schema::HttpHeader>,
 ) -> Result<HashMap<HeaderName, HeaderValue>, BoxError> {
     headers
         .into_iter()

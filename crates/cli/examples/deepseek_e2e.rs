@@ -14,10 +14,10 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::{
+use agent_client_protocol::{Channel, Client, SessionMessage};
+use agent_client_protocol_schema::{
     ContentBlock, InitializeRequest, ProtocolVersion, SessionNotification, SessionUpdate,
 };
-use agent_client_protocol::{Channel, Client, SessionMessage};
 use defect_acp::serve_on;
 use defect_agent::llm::LlmProvider;
 use defect_agent::policy::{OpenPolicy, SandboxPolicy};
@@ -92,8 +92,8 @@ async fn main() -> anyhow::Result<()> {
                     SessionUpdate::ToolCallUpdate(upd) => {
                         if matches!(
                             upd.fields.status,
-                            Some(agent_client_protocol::schema::ToolCallStatus::Completed)
-                                | Some(agent_client_protocol::schema::ToolCallStatus::Failed)
+                            Some(agent_client_protocol_schema::ToolCallStatus::Completed)
+                                | Some(agent_client_protocol_schema::ToolCallStatus::Failed)
                         ) {
                             eprintln!("[tool end]   status={:?}", upd.fields.status);
                         }
