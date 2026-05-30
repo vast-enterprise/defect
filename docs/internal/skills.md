@@ -4,6 +4,14 @@
 
 本文沉淀 skill 的文件形态、加载/匹配语义、与 [`hooks.md`](./hooks.md) / [`tool-trait.md`](./tool-trait.md) 的关系。具体配置语法 / 路径覆盖见 [`config.md`](./config.md) 演进版本。
 
+> **实现现状（v0 已落地）**：本文成文于 subagent 系统之前，§2.2 当时写"defect 没有 sub-agent 概念"已过时——`spawn_agent` / `ProfileSpec`（`crates/config/src/profiles.rs`）随后落地，成了 skill 的同构姊妹特性。落地时按那套更被验证的约定，对本文做了几处**有意偏离**，以实现为准：
+> - **发现逻辑在 `defect-config`**（`crates/config/src/skills.rs`，镜像 `profiles.rs`），不在 `defect-agent`——保持 config→agent 的单向依赖。产出 `SkillSpec`，CLI 装配期投影成 agent 侧 `SkillEntry`。
+> - **`SkillTool` 在 `crates/agent/src/tool/skill.rs`**（紧挨 `spawn_agent.rs`），注册进 `process_tools`（不是 §6.2 设想的 session-level factory）——即随 `AgentCore` 实例、被该 core 的各 session 共享一份。**不是进程全局单例**：把 defect 当库引用、一个进程里装配多个 `AgentCore` 时，各 core 各持自己的 skill 索引。
+> - **加载错误一律 hard fail**（缺 frontmatter / 缺字段 / `name`≠目录名 / 未知键），不是 §3.4 表的 warn-and-skip——与 `profiles.rs` 和 [[feedback-no-wrong-v0-impls]] / [[feedback-minimize-no-paternalistic-guards]] 一致。
+> - **L1 清单优先走 `skill` 工具自己的 description catalog**（与 `spawn_agent` 把 profile catalog 编进 description 同款，零配置、单一真相源）；§6.1 的 `SkillManifestHook` 仍实现为**可选** builtin（名 `skill-manifest`，CLI 用捕获 skill 索引的闭包注册），用户可在 `[[hooks.session_start]]` 显式挂上让清单同时进 system prompt。
+> - **frontmatter 同时支持 `+++`(TOML) / `---`(YAML)**（与单文件 profile 共用 `crates/config/src/frontmatter.rs`），比 §3.2 只画 YAML 更宽。
+> - **`always` / `triggers` / `allowed_tools` 字段 v0 已显式占位**（"解析但不消费"，对齐 §3.2 表）：`SkillManifestToml` 保留 `deny_unknown_fields` 抓必填项 typo，同时把这三个 open-standard 字段显式列出（`allowed_tools` 兼收 Anthropic 的连字符 `allowed-tools`），所以带这些字段的上游 skill 扔进来不报错、值被忽略；v1 接入时从"被忽略"变"被消费"，对用户文件向后兼容。§4.3 / §5.1 的运行期行为仍属未来计划。
+
 设计前提：
 - 三家参考实现（Anthropic Claude Code、OpenAI Codex、opencode）都把 skill 当成"提示片段 + 可选脚本"的组合体，但**激活策略**与**注入靶点**分歧很大；详见 §2 对照表。defect 选定的组合在 §3。
 - skill 系统**不**自己造加载点——`SessionStart` / `UserPromptSubmit` 是 [`hooks.md`](./hooks.md) §2 已定义的 Sync 拦截事件，skill 走 builtin handler 接进去（见 §6.1）。
@@ -16,7 +24,7 @@
 | **Skill** | 一个 markdown 文件 + 同目录下的可选 scripts / refs，由用户编写或仓库携带 |
 | **Skill descriptor** | skill 的 frontmatter 解析结果，**不**含 body —— 用于"清单注入"时只占少量 token |
 | **Skill body** | `SKILL.md` 去掉 frontmatter 后的全文，按需在第二阶段加载 |
-| **Skill registry** | 进程内 skill 索引：扫描目录 / 解析 frontmatter 的产物，持有所有可用 skill 的 descriptor + body 路径 |
+| **Skill registry** | 内存里的 skill 索引（随 `AgentCore` 实例、跨该 core 的 session 共享）：扫描目录 / 解析 frontmatter 的产物，持有所有可用 skill 的 descriptor + body 路径 |
 | **Skill loader** | 把 registry 接给 hook builtin 与 `skill` tool 的胶水层 |
 
 Skill **不是**：
@@ -118,7 +126,7 @@ allowed_tools: ["bash", "fs.read"]
 | `triggers.keywords` | `Vec<String>` | ✗ | 同上 |
 | `allowed_tools` | `Vec<String>` | ✗ | v0 解析后忽略；v1 用于让 ACP 客户端做 tool gating（参考 Anthropic `allowed-tools`） |
 
-未识别字段不报错——按 §3.4 转 warning 但加载继续，避免与上游 open-standard 字段争抢命名空间。
+> **实现注**：上表的 `always` / `triggers` / `allowed_tools` 在 v0 已**显式占位**（解析但不消费）。与本节原设想"未识别字段一律 warn 并忽略"不同，实现保留 `deny_unknown_fields`：**已知占位字段**（含连字符 `allowed-tools` 别名）接受，**真正未知的键**（如 `tirggers` typo）hard error。理由见顶部"实现现状"块——既吃得下上游 open-standard skill，又不放过必填项拼写错。
 
 ### 3.3 body 形态
 

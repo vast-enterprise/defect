@@ -6,7 +6,7 @@
 //!
 //! ## 两道闸门
 //!
-//! - **闸门 A（看得到哪些工具）**：每个 profile 的 `tool_allow` 白名单从父进程
+//! - **闸门 A（看得到哪些工具）**：每个 profile 的 `tool_allow` 白名单从父 agent
 //!   工具集里裁子集；白名单**永不含 `spawn_agent` 自己**，故结构性禁止递归。
 //! - **闸门 B（运行时放行到什么程度）**：子 turn 的 policy 是
 //!   [`NonInteractivePolicy`] 包住父 policy——`Ask` 降级为 `Deny`，子 agent
@@ -65,17 +65,19 @@ pub struct SubagentProfile {
     pub sampling: Option<SamplingParams>,
 }
 
-/// `spawn_agent` 工具。进程级共享（挂在 `StaticToolRegistry` 上），构造期捕获
-/// 跑嵌套 turn 所需的一切——因为 [`ToolContext`] 只带 cwd/fs/shell/http/cancel/
-/// current_model，不带 provider registry / policy / 工具集。
+/// `spawn_agent` 工具。挂在 `StaticToolRegistry` 上、随 `process_tools` 被所属
+/// `AgentCore` 的各 session 共享一份（**不是**进程全局单例——一个进程可装配多个
+/// `AgentCore`，各持自己的一份）。构造期捕获跑嵌套 turn 所需的一切——因为
+/// [`ToolContext`] 只带 cwd/fs/shell/http/cancel/current_model，不带 provider
+/// registry / policy / 工具集。
 pub struct SpawnAgentTool {
     schema: ToolSchema,
     profiles: Arc<BTreeMap<String, SubagentProfile>>,
     registry: Arc<ProviderRegistry>,
-    /// 父进程的 policy（进程级，所有 session 共享同一份）。子 turn 用
+    /// 父 agent 的 policy（本 core 的所有 session 共享同一份）。子 turn 用
     /// [`NonInteractivePolicy`] 包它。
     policy: Arc<dyn SandboxPolicy>,
-    /// 父进程工具集——按 profile 白名单裁子集的来源。
+    /// 父 agent 工具集——按 profile 白名单裁子集的来源。
     process_tools: Arc<dyn ToolRegistry>,
     /// 继承给子 agent 的 base_prompt 文本（"你是个会用工具的 agent"那段底座）。
     base_prompt: Option<String>,
@@ -286,8 +288,8 @@ async fn run_subagent(
     if !profile.system_prompt.is_empty() {
         sections.push(profile.system_prompt.clone());
     }
-    let system_prompt: Option<Arc<str>> = (!sections.is_empty())
-        .then(|| Arc::from(sections.join("\n\n").as_str()));
+    let system_prompt: Option<Arc<str>> =
+        (!sections.is_empty()).then(|| Arc::from(sections.join("\n\n").as_str()));
 
     // 子 turn 的局部件——全在本 async block 内，跑完即弃。
     let history = VecHistory::new();

@@ -1224,6 +1224,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -3479,9 +3480,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "toac"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "149c17b48e4635e22fa6bb8e95d574d7f614310b09c6291b1e06fed29dd7b22f"
+checksum = "7205abb16681945cc4921600b0404a6ca0afa172395ff0aa7bc3b4c02873e8ec"
 dependencies = [
  "base64",
  "bytes",
@@ -3502,9 +3503,9 @@ dependencies = [
 
 [[package]]
 name = "toac-build"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aac85d8fdeca4e23a97264a92cb7d75180ecbd251392f7686d110246f3636bc6"
+checksum = "93c9c61b89184405265b0a7e758839cff6734bf5e6361eaee1154ab6aeeff00b"
 dependencies = [
  "http 1.4.0",
  "oas3",

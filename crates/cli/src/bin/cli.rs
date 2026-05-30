@@ -29,6 +29,7 @@ use defect_cli::{
     providers::build_registry,
     tools::{
         build_process_tools, build_process_tools_with_subagents, filter_tools_by_allowlist,
+        project_skills,
     },
 };
 use defect_obs::init_tracing;
@@ -56,6 +57,12 @@ async fn main() -> anyhow::Result<()> {
     // subagent profile 发现（与主配置同源分层；同名项目层覆盖用户层）。
     let profiles = defect_config::discover_profiles(&load_opts)
         .map_err(|e| anyhow::anyhow!("profile discovery failed: {e}"))?;
+
+    // skill 发现（与 profile 同源分层）。投影成 agent 侧索引，供 `skill` 工具
+    // 与 `skill-manifest` hook 共用——单一真相源。
+    let skill_specs = defect_config::discover_skills(&load_opts)
+        .map_err(|e| anyhow::anyhow!("skill discovery failed: {e}"))?;
+    let skills = project_skills(&skill_specs);
 
     // 2) 装 provider registry / HTTP 栈 / 工具集合 / 存储 / hook 引擎
     let (registry, mut turn_config) = build_registry(&config).await?;
@@ -97,12 +104,14 @@ async fn main() -> anyhow::Result<()> {
             .get(profile_name)
             .expect("profile existence checked above");
         let base = build_process_tools(&config);
-        filter_tools_by_allowlist(&base, &spec.tool_allow)
-            .map_err(|name| anyhow::anyhow!("profile `{profile_name}` allows unknown tool `{name}`"))?
+        filter_tools_by_allowlist(&base, &spec.tool_allow).map_err(|name| {
+            anyhow::anyhow!("profile `{profile_name}` allows unknown tool `{name}`")
+        })?
     } else {
         build_process_tools_with_subagents(
             &config,
             &profiles,
+            &skills,
             &registry,
             &policy,
             base_prompt_text,
@@ -120,7 +129,18 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("langfuse reporting enabled");
     }
 
-    let builtin_registry = BuiltinRegistry::defaults();
+    // `skill-manifest` builtin 持有 skill 索引，无参工厂构造不出来——这里用
+    // 捕获索引的闭包注册进 registry，用户可在 `[[hooks.session_start]]` 里按名
+    // 挂上（与 `skill` 工具 description 内嵌的 catalog 同源）。
+    let mut builtin_registry = BuiltinRegistry::defaults();
+    {
+        let skills_for_hook = Arc::new(skills.clone());
+        builtin_registry.register("skill-manifest", move || {
+            Arc::new(defect_agent::hooks::builtin::SkillManifestHook::new(
+                skills_for_hook.clone(),
+            ))
+        });
+    }
     let hook_engine = hooks::build_engine_arc(
         &config.effective.hooks,
         &builtin_registry,

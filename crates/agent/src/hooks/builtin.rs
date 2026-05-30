@@ -8,10 +8,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use agent_client_protocol::schema::ContentBlock;
 use futures::future::BoxFuture;
 use serde_json::{Map, Value};
 
 use super::{HookCapability, HookCtx, HookError, HookEvent, HookHandler, HookOutcome, HookPatch};
+use crate::tool::SkillEntry;
 
 /// Builtin handler 的注册表：name → 工厂闭包。
 ///
@@ -198,6 +200,75 @@ fn key_is_secret(key: &str) -> bool {
         .any(|needle| lower.contains(needle))
 }
 
+// ---------------------------------------------------------------------------
+// skill-manifest
+// ---------------------------------------------------------------------------
+
+/// `SessionStart` 上把可用 skill 的 L1 清单（`name + description`）拼进 system
+/// prompt suffix——让模型一开机就知道有哪些 skill 可按需用 `skill` 工具加载。
+///
+/// 这是 progressive disclosure 的 L1 注入点（设计见 `docs/internal/skills.md`
+/// §6.1）。注意 `skill` 工具自身的 description 已经内嵌同一份 catalog（见
+/// [`crate::tool::SkillTool`]），所以本 hook 是**可选增强**：装配方挂上它能让
+/// 清单同时出现在 system prompt 里（对不把 tool description 计入注意力预算的
+/// 客户端更稳）。两条路径同源（同一个 skill 索引），不会发散。
+///
+/// 与其它 builtin 不同，本 handler 持有 skill 索引，**不能**用
+/// [`BuiltinRegistry::defaults`] 的无参工厂构造——CLI 装配期用捕获索引的闭包
+/// 注册（见 `defect_cli::hooks`）。
+pub struct SkillManifestHook {
+    skills: Arc<BTreeMap<String, SkillEntry>>,
+}
+
+impl SkillManifestHook {
+    /// 用已加载的 skill 索引构造。`skills` 为空时调用方**不应**注册本 hook
+    /// （清单会是空段，徒增 token）。
+    pub fn new(skills: Arc<BTreeMap<String, SkillEntry>>) -> Self {
+        Self { skills }
+    }
+}
+
+/// 渲染 L1 清单文本。空索引返回 `None`（不注入空段）。
+fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "## Available Skills\n\n\
+         Load a skill's full instructions with the `skill` tool (by name) when the task matches:\n",
+    );
+    for (name, entry) in skills {
+        out.push_str(&format!("- **{name}**: {}\n", entry.description));
+    }
+    Some(out)
+}
+
+impl HookHandler for SkillManifestHook {
+    fn capability(&self) -> HookCapability {
+        HookCapability::Intercept
+    }
+
+    fn handle<'a>(
+        &'a self,
+        event: &'a HookEvent<'a>,
+        _ctx: HookCtx<'a>,
+    ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
+        Box::pin(async move {
+            let HookEvent::SessionStart { .. } = event else {
+                // 其他事件挂这条 builtin 不报错，仅 silent pass。
+                return Ok(HookOutcome::default());
+            };
+            let Some(manifest) = render_skill_manifest(&self.skills) else {
+                return Ok(HookOutcome::default());
+            };
+            Ok(HookOutcome {
+                append: vec![ContentBlock::from(manifest)],
+                ..Default::default()
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -306,6 +377,59 @@ mod test {
         assert!(key_is_secret("authorization"));
         assert!(!key_is_secret("user"));
         assert!(!key_is_secret("command"));
+    }
+
+    fn skill_entry(description: &str) -> SkillEntry {
+        SkillEntry {
+            description: description.to_string(),
+            body: "body".to_string(),
+            dir: std::path::PathBuf::from("/skills/x"),
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_manifest_injects_catalog_on_session_start() {
+        let mut skills = BTreeMap::new();
+        skills.insert("code-review".to_string(), skill_entry("review Rust diffs"));
+        let h = SkillManifestHook::new(Arc::new(skills));
+        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let ev = HookEvent::SessionStart {
+            source: SessionSource::New,
+            cwd,
+        };
+        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
+        assert_eq!(outcome.append.len(), 1);
+        let ContentBlock::Text(t) = &outcome.append[0] else {
+            panic!("expected text block");
+        };
+        assert!(t.text.contains("Available Skills"));
+        assert!(t.text.contains("- **code-review**: review Rust diffs"));
+    }
+
+    #[tokio::test]
+    async fn skill_manifest_empty_index_injects_nothing() {
+        let h = SkillManifestHook::new(Arc::new(BTreeMap::new()));
+        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let ev = HookEvent::SessionStart {
+            source: SessionSource::New,
+            cwd,
+        };
+        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
+        assert!(outcome.append.is_empty());
+    }
+
+    #[tokio::test]
+    async fn skill_manifest_passes_other_events() {
+        let mut skills = BTreeMap::new();
+        skills.insert("x".to_string(), skill_entry("d"));
+        let h = SkillManifestHook::new(Arc::new(skills));
+        let session_id = agent_client_protocol::schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let ev = HookEvent::UserPromptSubmit { content: &[] };
+        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
+        assert!(outcome.append.is_empty());
     }
 
     // Make sure the unused-import warning doesn't fire on Arc when Arc isn't used.

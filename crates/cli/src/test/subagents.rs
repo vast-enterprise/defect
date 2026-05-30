@@ -12,10 +12,18 @@ use std::sync::Arc;
 use defect_acp::EchoProvider;
 use defect_agent::llm::{LlmProvider, ModelInfo, ProviderRegistry};
 use defect_agent::policy::{AskWritesPolicy, SandboxPolicy};
-use defect_config::{LoadConfigOptions, LoadedConfig, ProfileSpec, discover_profiles, load_config};
+use defect_agent::tool::SkillEntry;
+use defect_config::{
+    LoadConfigOptions, LoadedConfig, ProfileSpec, discover_profiles, discover_skills, load_config,
+};
 use tempfile::TempDir;
 
-use crate::tools::{build_process_tools_with_subagents, filter_tools_by_allowlist};
+use crate::tools::{build_process_tools_with_subagents, filter_tools_by_allowlist, project_skills};
+
+/// 大多数 subagent 测试不涉及 skill——传一份空索引。
+fn no_skills() -> BTreeMap<String, SkillEntry> {
+    BTreeMap::new()
+}
 
 fn echo_registry() -> Arc<ProviderRegistry> {
     let provider: Arc<dyn LlmProvider> = Arc::new(EchoProvider::new());
@@ -57,6 +65,16 @@ fn discover(opts: &LoadConfigOptions) -> BTreeMap<String, ProfileSpec> {
     discover_profiles(opts).expect("discover")
 }
 
+fn write_skill(opts: &LoadConfigOptions, name: &str, skill_md: &str) {
+    let dir = opts.cwd.join(".defect/skills").join(name);
+    fs::create_dir_all(&dir).expect("mkdir skill");
+    fs::write(dir.join("SKILL.md"), skill_md).expect("SKILL.md");
+}
+
+fn discover_skill_index(opts: &LoadConfigOptions) -> BTreeMap<String, SkillEntry> {
+    project_skills(&discover_skills(opts).expect("discover skills"))
+}
+
 fn policy() -> Arc<dyn SandboxPolicy> {
     Arc::new(AskWritesPolicy::new())
 }
@@ -72,8 +90,14 @@ fn spawn_agent_registered_when_profiles_exist() {
     );
     let profiles = discover(&opts);
 
-    let tools =
-        build_process_tools_with_subagents(&config, &profiles, &echo_registry(), &policy(), None);
+    let tools = build_process_tools_with_subagents(
+        &config,
+        &profiles,
+        &no_skills(),
+        &echo_registry(),
+        &policy(),
+        None,
+    );
     let names: Vec<String> = tools.schemas().into_iter().map(|s| s.name).collect();
     assert!(names.contains(&"spawn_agent".to_string()), "got: {names:?}");
     // base 工具仍在。
@@ -86,10 +110,19 @@ fn spawn_agent_absent_when_no_profiles() {
     let profiles = discover(&opts);
     assert!(profiles.is_empty());
 
-    let tools =
-        build_process_tools_with_subagents(&config, &profiles, &echo_registry(), &policy(), None);
+    let tools = build_process_tools_with_subagents(
+        &config,
+        &profiles,
+        &no_skills(),
+        &echo_registry(),
+        &policy(),
+        None,
+    );
     let names: Vec<String> = tools.schemas().into_iter().map(|s| s.name).collect();
-    assert!(!names.contains(&"spawn_agent".to_string()), "got: {names:?}");
+    assert!(
+        !names.contains(&"spawn_agent".to_string()),
+        "got: {names:?}"
+    );
 }
 
 #[test]
@@ -102,8 +135,14 @@ fn spawn_agent_schema_lists_profile_in_enum() {
         "sys",
     );
     let profiles = discover(&opts);
-    let tools =
-        build_process_tools_with_subagents(&config, &profiles, &echo_registry(), &policy(), None);
+    let tools = build_process_tools_with_subagents(
+        &config,
+        &profiles,
+        &no_skills(),
+        &echo_registry(),
+        &policy(),
+        None,
+    );
 
     let schema = tools
         .schemas()
@@ -147,4 +186,60 @@ fn top_level_profile_unknown_tool_fails_loud() {
         Err(name) => assert_eq!(name, "nonexistent_tool"),
         Ok(_) => panic!("expected unknown-tool error"),
     }
+}
+
+#[test]
+fn skill_tool_registered_when_skills_exist() {
+    let (_tmp, config, opts) = setup();
+    write_skill(
+        &opts,
+        "code-review",
+        "+++\nname = \"code-review\"\ndescription = \"review Rust diffs\"\n+++\nbody\n",
+    );
+    let skills = discover_skill_index(&opts);
+    let profiles = discover(&opts);
+
+    let tools = build_process_tools_with_subagents(
+        &config,
+        &profiles,
+        &skills,
+        &echo_registry(),
+        &policy(),
+        None,
+    );
+    let schema = tools
+        .schemas()
+        .into_iter()
+        .find(|s| s.name == "skill")
+        .expect("skill schema");
+    assert!(schema.description.contains("review Rust diffs"));
+    let enum_vals = schema.input_schema["properties"]["name"]["enum"]
+        .as_array()
+        .expect("enum");
+    assert!(enum_vals.iter().any(|v| v == "code-review"));
+    // base 工具仍在；没有 profile ⇒ 不挂 spawn_agent。
+    let names: Vec<String> = tools.schemas().into_iter().map(|s| s.name).collect();
+    assert!(names.contains(&"read_file".to_string()));
+    assert!(
+        !names.contains(&"spawn_agent".to_string()),
+        "got: {names:?}"
+    );
+}
+
+#[test]
+fn skill_tool_absent_when_no_skills() {
+    let (_tmp, config, opts) = setup();
+    let skills = discover_skill_index(&opts);
+    assert!(skills.is_empty());
+
+    let tools = build_process_tools_with_subagents(
+        &config,
+        &discover(&opts),
+        &skills,
+        &echo_registry(),
+        &policy(),
+        None,
+    );
+    let names: Vec<String> = tools.schemas().into_iter().map(|s| s.name).collect();
+    assert!(!names.contains(&"skill".to_string()), "got: {names:?}");
 }

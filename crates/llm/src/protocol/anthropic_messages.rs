@@ -10,7 +10,7 @@
 //! [`Sse`]: ::sse_stream::Sse
 //! [`MessageStreamEvent`]: crate::wire::anthropic::components::MessageStreamEvent
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -326,7 +326,7 @@ impl PromptCache {
 fn split_input_schema(
     schema: &serde_json::Value,
 ) -> (
-    Option<HashMap<String, serde_json::Value>>,
+    Option<BTreeMap<String, serde_json::Value>>,
     Option<Vec<String>>,
 ) {
     let obj = match schema.as_object() {
@@ -336,7 +336,7 @@ fn split_input_schema(
     let properties = obj.get("properties").and_then(|v| v.as_object()).map(|m| {
         m.iter()
             .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<HashMap<_, _>>()
+            .collect::<BTreeMap<_, _>>()
     });
     let required = obj.get("required").and_then(|v| v.as_array()).map(|arr| {
         arr.iter()
@@ -346,7 +346,7 @@ fn split_input_schema(
     (properties, required)
 }
 
-fn json_value_to_object(v: &serde_json::Value) -> HashMap<String, serde_json::Value> {
+fn json_value_to_object(v: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
     v.as_object()
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default()

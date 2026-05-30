@@ -4,10 +4,13 @@
 //!
 //! ```text
 //! DefaultAgentCore
-//!   ├── Arc<dyn LlmProvider>          (装配时传入，所有 session 共享)
-//!   ├── Arc<dyn ToolRegistry>         (进程级内置工具)
+//!   ├── Arc<dyn LlmProvider>          (装配时传入，本 core 的所有 session 共享)
+//!   ├── Arc<dyn ToolRegistry>         (内置工具，本 core 的所有 session 共享一份)
 //!   ├── TurnConfig                    (默认配置)
 //!   └── DashMap<SessionId, Arc<dyn Session>>
+//!
+//! 注：这些"共享"都以 **`AgentCore` 实例**为界，不是进程全局——把 defect 当库
+//! 引用时一个进程可装配多个 `AgentCore`，各持自己的 provider / 工具集 / 配置。
 //!
 //! DefaultSession
 //!   ├── id: SessionId
@@ -70,14 +73,14 @@ pub struct DefaultAgentCore {
     loader: Option<Arc<dyn SessionLoader>>,
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
-    /// 进程级 HTTP fetch 后端。所有 session 共享一份——HTTP 没有 per-client
+    /// HTTP fetch 后端。本 core 的所有 session 共享一份——HTTP 没有 per-client
     /// capability 协商，多 session 间也无须隔离连接池。CLI 入口按
     /// [`HttpClientConfig`] 构造一次后注入；测试 / `echo` provider 走
     /// [`NoopHttpClient`]。
     ///
     /// [`HttpClientConfig`]: defect_config::HttpClientConfig
     http: Arc<dyn HttpClient>,
-    /// 进程级 hook 引擎。所有 session 共享——hook 配置走全局 + per-session
+    /// hook 引擎。本 core 的所有 session 共享——hook 配置走全局 + per-session
     /// matcher（`docs/internal/hooks.md` §5）。CLI 入口装配；不显式注入时走
     /// [`NoopHookEngine`]，等价"未配置 hook = 主循环不变"。
     hook_engine: Arc<dyn HookEngine>,
@@ -164,7 +167,7 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
-    /// 设置进程级 HTTP fetch 后端。未设置时退化为 [`NoopHttpClient`]——
+    /// 设置本 core 的 HTTP fetch 后端。未设置时退化为 [`NoopHttpClient`]——
     /// 任何 `fetch` 调用都会以 [`crate::http::HttpClientError::Transport`]
     /// 失败，便于不需要网络的测试 / `echo` 装配跳过真实 HTTP 栈构造。
     pub fn http(mut self, http: Arc<dyn HttpClient>) -> Self {
@@ -172,7 +175,7 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
-    /// 设置进程级 hook 引擎。未设置时退化为 [`NoopHookEngine`]——所有 hook
+    /// 设置本 core 的 hook 引擎。未设置时退化为 [`NoopHookEngine`]——所有 hook
     /// 调用直接返回 `Pass`，主循环行为与未引入 hook 系统时一致。
     pub fn hook_engine(mut self, hook_engine: Arc<dyn HookEngine>) -> Self {
         self.hook_engine = Some(hook_engine);
@@ -508,10 +511,10 @@ pub struct DefaultSession {
     /// session 级 shell 后端。与 `fs` 同款由 [`AgentCore::create_session`] 注入；
     /// `bash` 工具通过 [`crate::tool::ToolContext`] 拿它。
     shell: Arc<dyn ShellBackend>,
-    /// 进程级 HTTP fetch 后端（多 session 共享，由 [`DefaultAgentCore`]
+    /// HTTP fetch 后端（本 core 的多 session 共享，由 [`DefaultAgentCore`]
     /// 一份持有 / clone）。`fetch` 工具通过 [`crate::tool::ToolContext`] 拿它。
     http: Arc<dyn HttpClient>,
-    /// 进程级 hook 引擎（多 session 共享）。`run_turn` 装配
+    /// hook 引擎（本 core 的多 session 共享）。`run_turn` 装配
     /// [`TurnRunner`] 时把 `&dyn HookEngine` 借给主循环。
     hook_engine: Arc<dyn HookEngine>,
     /// session 启动期 [`HookEvent::SessionStart`] hook 返回的 append 内容。

@@ -41,6 +41,7 @@ use defect_agent::fs::resolve_workspace_path;
 use defect_agent::llm::SamplingParams;
 use serde::Deserialize;
 
+use crate::frontmatter::{parse_frontmatter, split_frontmatter};
 use crate::loader::find_repo_root;
 use crate::types::{ConfigError, LoadConfigOptions};
 
@@ -295,14 +296,6 @@ fn parse_profile_folder(dir: &Path, config_path: &Path) -> Result<ProfileSpec, C
     Ok(spec_from_cfg(dir, cfg, system_prompt_text))
 }
 
-/// frontmatter 语法。由起始 fence 决定：`+++` ⇒ TOML，`---` ⇒ YAML
-/// （社区标准；需 `yaml` feature）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Frontmatter {
-    Toml,
-    Yaml,
-}
-
 /// 解析单文件版 profile：`<name>.md`，frontmatter（`+++` TOML 或 `---` YAML）
 /// 之后正文即 system prompt。`dir` 取 `.md` 所在的 `agents/` 目录（profile 不带
 /// 额外资源文件，故 `[prompt] file` 在单文件版**无意义**，写了即冲突报错）。
@@ -319,10 +312,11 @@ fn parse_profile_file(dir: &Path, file_path: &Path) -> Result<ProfileSpec, Confi
                 .into(),
         })?;
 
-    let cfg = parse_frontmatter(kind, frontmatter).map_err(|message| ConfigError::Invalid {
-        path: file_path.to_path_buf(),
-        message,
-    })?;
+    let cfg: ProfileConfigToml =
+        parse_frontmatter(kind, frontmatter).map_err(|message| ConfigError::Invalid {
+            path: file_path.to_path_buf(),
+            message,
+        })?;
 
     if cfg.prompt.is_some() {
         return Err(ConfigError::Invalid {
@@ -333,68 +327,6 @@ fn parse_profile_file(dir: &Path, file_path: &Path) -> Result<ProfileSpec, Confi
         });
     }
     Ok(spec_from_cfg(dir, cfg, body.to_string()))
-}
-
-/// 按 frontmatter 语法解析成 [`ProfileConfigToml`]（字段 schema 与格式无关，
-/// `deny_unknown_fields` 对 YAML 同样生效）。YAML 分支在 `yaml` feature 关闭时
-/// hard fail，给可操作的重编译提示（fail loud，不静默降级）。
-fn parse_frontmatter(kind: Frontmatter, text: &str) -> Result<ProfileConfigToml, String> {
-    match kind {
-        Frontmatter::Toml => toml::from_str(text).map_err(|e| e.to_string()),
-        #[cfg(feature = "yaml")]
-        Frontmatter::Yaml => serde_yaml::from_str(text).map_err(|e| e.to_string()),
-        #[cfg(not(feature = "yaml"))]
-        Frontmatter::Yaml => Err("YAML frontmatter (`---`) requires the `yaml` feature; \
-             rebuild with `--features yaml`, or use `+++` TOML frontmatter"
-            .to_string()),
-    }
-}
-
-/// 切出 frontmatter（`+++`/`---` 分隔）与其后正文，并报告语法种类。
-///
-/// 约定：去 BOM/前导空白后，首行必须是 `+++` 或 `---`；到下一行同样的 fence
-/// 之间是 frontmatter，其余是 body。不符合则返回 `None`。正文前导/尾随空白
-/// 被 trim，便于 prompt 文本干净。闭合 fence 必须与起始 fence 同种——`+++`
-/// 头要 `+++` 尾，`---` 头要 `---` 尾。
-fn split_frontmatter(contents: &str) -> Option<(Frontmatter, &str, &str)> {
-    let rest = contents.trim_start_matches(['\u{feff}']).trim_start(); // 去 BOM + 前导空白
-    let (kind, fence) = if rest.starts_with("+++") {
-        (Frontmatter::Toml, "+++")
-    } else if rest.starts_with("---") {
-        (Frontmatter::Yaml, "---")
-    } else {
-        return None;
-    };
-    let rest = &rest[fence.len()..];
-    // 起始 fence 之后必须紧跟换行。
-    let rest = rest.strip_prefix('\n').or_else(|| rest.strip_prefix("\r\n"))?;
-    // 找闭合 fence（必须独占一行、与起始同种）。
-    let close = find_closing_fence(rest, fence)?;
-    let frontmatter = &rest[..close.start];
-    let body = rest[close.end..].trim();
-    Some((kind, frontmatter, body))
-}
-
-/// 在 frontmatter 区域里找独占一行的 `fence`，返回该行（含到行尾换行）的字节
-/// 范围 `start..end`，供切分。
-struct Fence {
-    start: usize,
-    end: usize,
-}
-
-fn find_closing_fence(s: &str, fence: &str) -> Option<Fence> {
-    let mut offset = 0;
-    for line in s.split_inclusive('\n') {
-        let trimmed = line.trim_end_matches(['\n', '\r']);
-        if trimmed.trim() == fence {
-            return Some(Fence {
-                start: offset,
-                end: offset + line.len(),
-            });
-        }
-        offset += line.len();
-    }
-    None
 }
 
 /// 解析用户层 `agents/` 目录。与 [`crate::loader`] 的

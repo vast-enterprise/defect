@@ -272,8 +272,17 @@ fn folder_and_single_file_same_name_same_layer_conflicts() {
     let tmp = TempDir::new().expect("tmp");
     let repo_root = repo(&tmp);
     let agents = repo_root.join(".defect/agents");
-    write_profile(&agents, "dup", "description = \"folder\"\n", Some("folder prompt"));
-    write_single_file(&agents, "dup", "+++\ndescription = \"file\"\n+++\nfile prompt\n");
+    write_profile(
+        &agents,
+        "dup",
+        "description = \"folder\"\n",
+        Some("folder prompt"),
+    );
+    write_single_file(
+        &agents,
+        "dup",
+        "+++\ndescription = \"file\"\n+++\nfile prompt\n",
+    );
 
     let err = discover_profiles(&opts_with(&tmp, &repo_root)).expect_err("must conflict");
     match err {

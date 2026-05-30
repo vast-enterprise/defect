@@ -39,3 +39,6 @@ build-release:
 # 发布构建（dist profile：fat LTO + 单 CGU，体积最小、编译慢）
 build-dist:
     cargo build --bin defect --profile dist
+
+script-llm-codegen:
+    cargo run -p defect-llm-codegen

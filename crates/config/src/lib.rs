@@ -5,16 +5,19 @@
 
 #![warn(clippy::indexing_slicing, clippy::unwrap_used)]
 
+mod frontmatter;
 mod hooks;
 mod loader;
 mod mcp;
 mod overrides;
 mod profiles;
+mod skills;
 mod types;
 
 pub use loader::{load_config, load_dotenv_compat};
 pub use overrides::parse_cli_override;
 pub use profiles::{ProfileSpec, discover_profiles};
+pub use skills::{SkillSpec, discover_skills};
 pub use types::{
     AnthropicConfigFile, BasePromptConfigFile, BashToolConfig, CapabilitiesConfig, CliConfig,
     CliOverrides, ConfigError, ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigWarning,

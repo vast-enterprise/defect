@@ -47,7 +47,7 @@ futures = "0.3"
 # 序列化
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1.1.2+spec-1.1.0"
 
 # 错误处理与日志
 thiserror = "2"
@@ -74,9 +74,13 @@ agent-client-protocol = "0.12"
 rmcp = { version = "1", features = ["client"] }
 
 # LLM 客户端栈：toac codegen + 运行期 + hyper transport
-# toac / toac-build 锁 git rev，等仓库稳定后改 crates.io 版本号
 toac = { version = "0", features = ["sse"] }
 toac-build = { version = "0" }
+
+# 本地测试用
+# toac = { path = "../tower-openapi-client/toac", features = ["sse"] }
+# toac-build = { path = "../tower-openapi-client/toac-build" }
+
 aws-config = "1"
 # 关掉 default 里的 `rustls` feature —— 它指向 aws-smithy 的 `tls-rustls`，
 # 实为 legacy-rustls-ring 老栈（ring + rustls 0.21 + hyper-rustls 0.24），会与

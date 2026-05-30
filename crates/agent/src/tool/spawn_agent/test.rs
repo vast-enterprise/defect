@@ -331,11 +331,7 @@ fn unknown_profile_fails() {
         process_tools_with(vec![]),
         None,
     );
-    let events = run_tool(
-        &tool,
-        json!({"profile": "nope", "task": "t"}),
-        tmp.path(),
-    );
+    let events = run_tool(&tool, json!({"profile": "nope", "task": "t"}), tmp.path());
     assert!(matches!(
         events.last(),
         Some(ToolEvent::Failed(ToolError::InvalidArgs(_)))
@@ -401,5 +397,8 @@ fn deadlock_guard_mutating_tool_is_denied_and_turn_completes() {
         json!({"profile": "reviewer", "task": "t"}),
         tmp.path(),
     );
-    assert_eq!(completed_text(&events).as_deref(), Some("done after denial"));
+    assert_eq!(
+        completed_text(&events).as_deref(),
+        Some("done after denial")
+    );
 }

@@ -72,7 +72,7 @@
 | outbound | ObsContext 透传：工具内 embedding/后端调用挂回 langfuse trace | `docs/internal/observability-langfuse.md` §5 | 🕒 未开始 |
 | inbound  | ACP Content 音频输入支持                                       | `docs/inbound/acp-prompt.md`  | 🕒 未开始 |
 | inbound  | ACP Content 二进制资源支持（BlobResourceContents）              | `docs/inbound/acp-prompt.md`  | 🕒 未开始 |
-| internal | Skill 加载机制（glob 条件匹配 + always 的 markdown skill 注入到 system prompt，附 `skill` 工具供模型按需加载） | `docs/internal/skills.md` | 🕒 未开始 |
+| internal | Skill 加载机制（dir-per-skill 发现 + `skill` 工具按需加载 L2 body + 可选 `skill-manifest` hook 注入 L1 清单；glob/always 条件匹配留待 v1） | `docs/internal/skills.md` | 🚧 进行中 |
 | internal | LSP 语义理解（诊断注入、跳转定义、查找引用；P1 可用 hook 跑 linter 过渡） | `docs/internal/lsp.md` | 🕒 未开始 |
 | internal | Checkpoint / Undo（工具执行前自动快照，支持回滚；可复用 git stash 或文件级快照） | `docs/internal/checkpoint.md` | 🕒 未开始 |
 
