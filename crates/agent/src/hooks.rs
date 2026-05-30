@@ -4,12 +4,27 @@
 //!
 //! ## 抽象层次
 //!
-//! - [`HookEvent`]：主循环 emit 的载荷（5 件 Sync 拦截 + 7 件 Async 观察 enum 打桩）
+//! - [`HookEvent`]：主循环 emit 的载荷（5 件 Sync 拦截 + 8 件 Async 观察 enum 占位）
 //! - [`HookHandler`]：单个执行器（Builtin / Command / Prompt 三种 v0 形态在子 crate 实现）
 //! - [`HookMatcher`]：单条 hook 的匹配条件（按 tool / glob / safety 过滤）
 //! - [`HookEngine`]：主循环面向的派发器；持有 handler 表、执行 pipeline、合并 outcome
 //!
-//! v0 主循环只 emit 5 件 Sync 拦截事件；其余变体编译期占位、运行时不触发。
+//! v0 主循环只 emit 5 件 Sync 拦截事件；8 件 Async 观察事件仅 enum 占位。
+//!
+//! ## Async 观察事件的现状（未落地）
+//!
+//! 核心 gap 是 [`HookEngine::observe`] 的 **AgentEvent → HookEvent 投影器缺失**：
+//! 没有任何 task 订阅 [`crate::event::AgentEvent`] 流、把它投影成 [`HookEvent`]
+//! 再调 `observe()`。`DefaultHookEngine::observe()` 当前是空函数。
+//!
+//! 数据源大多已就绪——8 件里 6 件能直接从现有 `AgentEvent` 投影
+//! （`TurnStart`←`TurnStarted`、`TurnEnd`←`TurnEnded`、`PreLlmCall`←`LlmCallStarted`、
+//! `PostLlmCall`←`LlmCallFinished`、`PostCompact`←`ContextCompressed`、
+//! `PermissionAsk`←`PolicyDecision{Ask}`）。两个例外要先补数据源：
+//! - `PreCompact`：`AgentEvent` 只有压缩**完成后**的 `ContextCompressed`，没有压缩前事件 → 需在 turn loop 新增 emit 点
+//! - `SessionEnd`：`AgentEvent` 无任何 session 终结事件 → 需先在 session 生命周期造终结信号
+//!
+//! 完整落地步骤见 `docs/internal/hooks.md` §11。
 //!
 //! ## 默认实现
 //!
@@ -58,7 +73,7 @@ const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(5);
 /// 类别（详见 `docs/internal/hooks.md` §1.1）：
 /// - **Sync 拦截**（v0 实际 emit）：`SessionStart` / `UserPromptSubmit` /
 ///   `PreToolUse` / `PostToolUse` / `PostToolUseFailure`
-/// - **Async 观察**（v0 enum 打桩，订阅 [`crate::event::AgentEvent`] 即可使用）：
+/// - **Async 观察**（v0 仅 enum 占位，未落地——投影器缺失，见模块级文档）：
 ///   `SessionEnd` / `TurnStart` / `TurnEnd` / `PreLlmCall` / `PostLlmCall` /
 ///   `PreCompact` / `PostCompact` / `PermissionAsk`
 #[non_exhaustive]
@@ -89,7 +104,7 @@ pub enum HookEvent<'a> {
         error: &'a str,
     },
 
-    // ── Async 观察（v0 不 emit，仅占位） ──
+    // ── Async 观察（v0 仅占位、未落地：投影器缺失，见模块级文档） ──
     SessionEnd {
         reason: AcpStopReason,
     },
@@ -215,7 +230,8 @@ impl HookEvent<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookCapability {
     /// 仅适用于 Async 观察事件——只能日志/审计；返回非 `Pass` outcome
-    /// 由引擎丢弃 + warn。
+    /// 由引擎丢弃 + warn。**当前无代码路径用到**：observe 投影 task 未落地
+    /// （见模块级文档），暂无 handler 真正以此 capability 被调度。
     Observe,
     /// 完整能力——可 block / patch / append；仅适用于 Sync 拦截事件。
     Intercept,
@@ -410,7 +426,9 @@ pub trait HookHandler: Send + Sync {
 ///
 /// - [`Self::fire`]：Sync 拦截事件入口；阻塞主循环直到所有匹配 handler 跑完，
 ///   返回合并 outcome
-/// - [`Self::observe`]：Async 观察入口；fan-out task 内部调用，不阻塞主循环
+/// - [`Self::observe`]：Async 观察入口；本应由订阅 [`crate::event::AgentEvent`]
+///   流的 fan-out task 投影后调用，不阻塞主循环。**该投影 task 尚未落地**
+///   （见模块级文档与 `docs/internal/hooks.md` §11），故当前 `observe` 无调用方。
 ///
 /// 默认实现 [`DefaultHookEngine`]；测试 / 默认 session 装配走 [`NoopHookEngine`]。
 pub trait HookEngine: Send + Sync {
@@ -579,7 +597,10 @@ impl HookEngine for DefaultHookEngine {
     }
 
     fn observe<'a>(&'a self, _event: HookEvent<'a>, _ctx: HookCtx<'a>) {
-        // Phase D：observe-only handler 还没接入 AgentEvent fan-out，留空。
+        // 未落地：observe-only handler 还没接入 AgentEvent fan-out。
+        // 核心缺口是 AgentEvent → HookEvent 投影 task（订阅 session 事件流、
+        // 投影后调本方法）尚未实现；config 也还没有 async 事件桶。
+        // 完整落地步骤见 `docs/internal/hooks.md` §11，且本方法目前无调用方。
     }
 }
 

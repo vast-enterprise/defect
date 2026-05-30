@@ -4,7 +4,7 @@
 
 设计前提：
 - 三家参考实现里 claude-code / codex 都把 shell 当成 hook 的唯一执行器；defect 是纯 Rust 单二进制 ACP server，跑在 headless 容器 / Zed 嵌入式 / 未来 WASM 等没有 shell 的环境里**也得能用**——shell 必须是"可选的执行器之一"而不是入口。
-- 事件粒度 v0 落 5 件套（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`），其余 8 个 async 观察事件**仅 enum 占位、三层全缺**（无 emit、`observe()` 空实现、config 无对应桶），现状与落地缺口见 [§11](#11-实现现状与未落地缺口)。
+- 事件粒度 v0 落 5 件套（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`），其余 8 个 async 观察事件**仅 enum 占位、未落地**。最大 gap 是「AgentEvent → HookEvent 投影器」缺失（`observe()` 空函数、无调用方）；数据源 6/8 已就绪，`PreCompact` / `SessionEnd` 需先补源——就绪度表与落地步骤见 [§11](#11-实现现状与未落地缺口)。
 - 5 件套全部为 **Sync 拦截点**——主循环必须等所有匹配 handler 跑完才能继续；超时 / 错误按 §3.5 处理。
 
 ## 1. 定位与术语
@@ -51,7 +51,7 @@ pub enum HookEvent<'a> {
     PostToolUse       { id: &'a ToolCallId, name: &'a str, fields: &'a ToolCallUpdateFields }, // ✓
     PostToolUseFailure{ id: &'a ToolCallId, name: &'a str, error: &'a str },       // ✓
 
-    // ── Async 观察（v0 enum 打桩，订阅 AgentEvent 即可使用） ──
+    // ── Async 观察（v0 仅 enum 占位、未落地：投影器缺失，见 §11） ──
     SessionEnd        { reason: AcpStopReason },
     TurnStart         { prompt: &'a [ContentBlock] },
     TurnEnd           { reason: AcpStopReason, usage: &'a Usage },
@@ -606,7 +606,7 @@ fn run_turn(&self, prompt: Vec<ContentBlock>) {
 
 > 一个 handler 不能既挂 Sync 又挂 Async 事件——`capability()` 二选一，配置加载时按事件类别校验。
 
-> **现状（未落地）**：上面这条订阅路径**尚未实现**。`DefaultHookEngine::observe()` 当前是空函数，config 也还没有 async 事件桶，8 个观察事件无任何 emit 点。完整缺口与落地步骤见 [§11](#11-实现现状与未落地缺口)。
+> **现状（未落地）**：上面这条订阅路径**尚未实现**——这正是异步 hook 最大的 gap。`DefaultHookEngine::observe()` 当前是空函数、无调用方，没有 task 把 `AgentEvent` 投影成 `HookEvent`。数据源其实大多就绪（8 件里 6 件可直接投影，`PreCompact` / `SessionEnd` 需先补源），config 也还差 async 事件桶。完整就绪度表与落地步骤见 [§11](#11-实现现状与未落地缺口)。
 
 ### 7.3 与 sandbox policy
 
@@ -774,22 +774,52 @@ impl HookHandler for SkillRouterHook {
 
 5 件 **Sync 拦截事件**全链路打通（emit + pipeline + 三种 handler + 配置 + 测试），名副其实。
 
-8 个 **Async 观察事件**（`SessionEnd` / `TurnStart` / `TurnEnd` / `PreLlmCall` / `PostLlmCall` / `PreCompact` / `PostCompact` / `PermissionAsk`）**不只是 enum 占位，而是三层全缺**：
+8 个 **Async 观察事件**（`SessionEnd` / `TurnStart` / `TurnEnd` / `PreLlmCall` / `PostLlmCall` / `PreCompact` / `PostCompact` / `PermissionAsk`）**仅 enum 占位、未落地**。
 
-| 层 | 现状 |
-| --- | --- |
-| **emit** | 全代码库零 `HookEvent::TurnStart` 等构造点；主循环只 emit 5 件 Sync 套。 |
-| **引擎** | `DefaultHookEngine::observe()`（`crates/agent/src/hooks.rs`）是空函数（`// Phase D：留空`），§7.2 画的 AgentEvent fan-out 框架尚未接；`HookCapability::Observe` 目前无任何代码路径用到。 |
-| **config** | `HooksSection` / `HookEventTag`（`crates/config/src/hooks.rs`）只有 5 个 Sync 字段/变体，没有 async 事件桶——这些事件**无法被配置**。 |
+### 11.1 最大的 gap：observe 投影器缺失
 
-### 11.1 落地步骤
+按 §7.2，观察类事件**不**由主循环单独 emit，而是从 [`AgentEvent`](./event-model.md) 流投影。所以真正的核心缺口**不是"缺事件数据"**，而是那根「**订阅 → 投影 → 派发**」的管子根本不存在：
 
-1. **config**：`HooksSection` / `HookEventTag` / `HooksConfig` 补 8 个 async 事件桶；`merge_layer_hooks` / `dedupe` / disable 同步扩展。
-2. **引擎**：`DefaultHookEngine::observe()` 接 [`event-model.md`](./event-model.md) 的 AgentEvent 流 fan-out（§7.2 那张图），按 `HookCapability::Observe` 强约束丢弃非 `Pass` outcome。
-3. **emit**：在主循环 / AgentEvent 投影层补 8 个事件的 emit 点（observe 事件应从 AgentEvent 投影，不在主循环里专门走第二条 emit，见 §1 "Hook 不是第二条事件总线"）。
+- `DefaultHookEngine::observe()`（`crates/agent/src/hooks.rs`）是空函数，**无任何调用方**。
+- 没有一个 task 在 `session.subscribe()` 上循环、把 `AgentEvent` 投影成 `HookEvent` 再调 `observe()`。
+- `HookCapability::Observe` 因此目前无代码路径用到。
 
-### 11.2 附带必修：`HooksSection` 缺 `deny_unknown_fields`
+而 fan-out 基础设施（`EventEmitter` mpsc + backpressure、`Session::subscribe()`、`SessionObserver`）**全部现成**——`defect-storage` / `tracing` 已经在同一根管子上消费。最小可用路径就是补一个投影 task：
+
+```text
+spawn:
+  let mut stream = session.subscribe();
+  while let Some(ev) = stream.next().await {
+      if let Some(hook_ev) = project(ev) {   // AgentEvent → HookEvent
+          engine.observe(hook_ev, ctx);
+      }
+  }
+```
+
+### 11.2 数据源就绪度：6/8 可直接投影，2 个要先补源
+
+`project()` 对 8 件事件的可行性并不均等：
+
+| HookEvent（observe） | 数据源 `AgentEvent` | 投影可行性 |
+| --- | --- | --- |
+| `TurnStart` | `TurnStarted` | ✅ 直接 |
+| `TurnEnd` | `TurnEnded { reason, usage }` | ✅ 直接 |
+| `PreLlmCall` | `LlmCallStarted { model, attempt, request }` | ✅ 直接 |
+| `PostLlmCall` | `LlmCallFinished { model, attempt, usage, error }` | ✅ 直接 |
+| `PostCompact` | `ContextCompressed { tokens_before, tokens_after }` | ✅ 直接 |
+| `PermissionAsk` | `PolicyDecision { Ask }`（应答看 `PermissionResolved`） | ✅ 直接 |
+| `PreCompact` | — | ⚠️ **需先补源**：`AgentEvent` 只有压缩**完成后**的 `ContextCompressed`，没有压缩前事件 → 要在 turn loop 新增"压缩前"emit 点 |
+| `SessionEnd` | — | ⚠️ **需先补源**：`AgentEvent` 无任何 session 终结事件（`TurnEnded` 是 turn 级），`SessionObserver` 也只有 `on_session_created` → 要先在 session 生命周期造终结信号 |
+
+### 11.3 落地步骤
+
+1. **投影 task（核心）**：实现 §11.1 的订阅循环 + `project()`，先把 6 件可直接投影的接上；`DefaultHookEngine::observe()` 落地实际派发逻辑，按 `HookCapability::Observe` 强约束丢弃非 `Pass` outcome。
+2. **config**：`HooksSection` / `HookEventTag` / `HooksConfig` 补 async 事件桶；`merge_layer_hooks` / `dedupe` / disable 同步扩展。
+3. **补两个数据源**：turn loop 新增"压缩前"事件供 `PreCompact`；session 生命周期新增终结事件供 `SessionEnd`。
+4. **owned 形态**：`OwnedHookEvent` 目前对 async 事件走 `Other` 分支（observe 不进 pipeline，无需 patch 累积），落地时确认这一假设仍成立即可。
+
+### 11.4 附带必修：`HooksSection` 缺 `deny_unknown_fields`
 
 `HooksSection`（`crates/config/src/hooks.rs`）当前**没有** `deny_unknown_fields`。后果：用户写 `[[hooks.turn_start]]` 之类**超前或拼错的事件键会被 serde 静默丢弃**，hook 永不触发却不报错——违反「要约束就 hard fail 别静默忽略」原则。
 
-应补 `deny_unknown_fields`（与 config 其余层、skill manifest 的做法对齐）。注意落地顺序：**先**加 async 事件桶（11.1 步骤 1）**再**加 `deny_unknown_fields`，否则现在就拒绝那些尚不支持的事件键也是一种 hard fail，但会让"配了将来支持的事件"的用户更早撞墙——取舍上倾向于尽早 hard fail（拼错的 `tirggers` 该报错），具体在落地时定。
+应补 `deny_unknown_fields`（与 config 其余层、skill manifest 的做法对齐）。注意落地顺序：**先**加 async 事件桶（11.3 步骤 2）**再**加 `deny_unknown_fields`，否则现在就拒绝那些尚不支持的事件键也是一种 hard fail，但会让"配了将来支持的事件"的用户更早撞墙——取舍上倾向于尽早 hard fail（拼错的事件键该报错），具体在落地时定。

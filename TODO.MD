@@ -29,7 +29,7 @@
 | internal | LSP 语义理解（诊断注入、跳转定义、查找引用；P1 可用 hook 跑 linter 过渡） | `docs/report/lsp-integration-survey.md`（调研报告，待转设计） | P2 | 🕒 未开始 |
 | internal | 用 `schemars` 从 args struct 生成 Tool 参数 schema（替代手写 `json!`） | `docs/proposals/tool-schema-via-schemars.md` | P2 | 🕒 未开始（提案） |
 | internal | 任务编排（task arrange）                                       | `docs/proposals/task-arrange.md`（仅占位标题，内容待写）                | P2     | 🕒 未开始 |
-| internal | Hook async/observe 事件接入（8 个 observe 事件三层全缺，详见下方说明） | `docs/internal/hooks.md` §7.2 / §11 | P2 | 🕒 未开始（仅 enum 占位） |
+| internal | Hook async/observe 事件接入（核心 gap=投影器缺失；数据源 6/8 就绪，详见下方说明） | `docs/internal/hooks.md` §7.2 / §11 | P2 | 🕒 未开始（仅 enum 占位） |
 
 ---
 
@@ -53,18 +53,24 @@
 
 ## 备注：Hook async/observe 事件的真实缺口
 
-文档曾写「Async 观察事件 enum 打桩、运行时不触发」，实测缺口比这句话更宽——
 8 个 observe 事件（`SessionEnd` / `TurnStart` / `TurnEnd` / `PreLlmCall` /
-`PostLlmCall` / `PreCompact` / `PostCompact` / `PermissionAsk`）**三层全缺**：
+`PostLlmCall` / `PreCompact` / `PostCompact` / `PermissionAsk`）仅 enum 占位、未落地。
+**最大的 gap 是「AgentEvent → HookEvent 投影器」缺失**，不是缺数据：
 
-1. **emit**：全代码库零 `HookEvent::TurnStart` 等构造点（主循环只 emit 5 件 Sync 套）。
-2. **引擎**：`DefaultHookEngine::observe()`（`crates/agent/src/hooks.rs`）是空函数，
-   连 AgentEvent fan-out 框架都没接；`HookCapability::Observe` 目前无代码路径用到。
-3. **config**：`HooksSection` / `HookEventTag`（`crates/config/src/hooks.rs`）只有
-   5 个 Sync 字段/变体，根本没有 async 事件的桶。
+- `DefaultHookEngine::observe()`（`crates/agent/src/hooks.rs`）是空函数、**无调用方**；
+  没有 task 订阅 `AgentEvent` 流把它投影成 `HookEvent` 再调 `observe()`。fan-out
+  基础设施（`EventEmitter` / `Session::subscribe` / `SessionObserver`）全现成，
+  storage / tracing 已在同一根管子上消费。
+- **数据源 6/8 已就绪**，可直接投影：`TurnStart`←`TurnStarted`、`TurnEnd`←`TurnEnded`、
+  `PreLlmCall`←`LlmCallStarted`、`PostLlmCall`←`LlmCallFinished`、
+  `PostCompact`←`ContextCompressed`、`PermissionAsk`←`PolicyDecision{Ask}`。
+- **2 个要先补源**：`PreCompact`（只有压缩后的 `ContextCompressed`，缺压缩前事件 →
+  turn loop 加 emit 点）、`SessionEnd`（`AgentEvent` 无 session 终结事件 →
+  session 生命周期造终结信号）。
+- **config**：`HooksSection` / `HookEventTag` 还没有 async 事件桶。
 
-落地需要：① config 加 async 事件桶 ② 引擎 `observe()` 接 [event-model](docs/internal/event-model.md)
-的 AgentEvent 流 fan-out ③ 主循环（或 AgentEvent 投影层）emit。
+落地顺序（详见 `docs/internal/hooks.md` §11.3）：① 投影 task + `observe()` 派发（先接 6 件）
+② config 加 async 桶 ③ 补 `PreCompact` / `SessionEnd` 两个数据源。
 
 **附带必修**：`HooksSection` 没有 `deny_unknown_fields`——用户现在写
 `[[hooks.turn_start]]` 之类**超前/拼错的事件键会被 serde 静默丢弃**，hook 永不触发

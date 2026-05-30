@@ -43,6 +43,10 @@ pub(crate) struct HookDisable {
 }
 
 /// 事件标签——内部用，1:1 对应 `HooksConfig` 五个字段。
+///
+/// 仅含 5 件 Sync 拦截事件。8 件 Async 观察事件（`session_end` / `turn_start`
+/// 等）尚无配置桶；落地时这里要扩、`HooksSection` 同步加字段。缺口全貌见
+/// `docs/internal/hooks.md` §11。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HookEventTag {
     SessionStart,
@@ -222,6 +226,11 @@ fn dedupe_in_place(entries: &mut Vec<HookEntry>) {
 // Raw deserialization shapes
 // ---------------------------------------------------------------------------
 
+// TODO(hooks-async)：本结构**没有** `deny_unknown_fields`。后果：用户写
+// `[[hooks.turn_start]]` 之类超前/拼错的事件键会被 serde 静默丢弃，hook 永不
+// 触发却不报错——违反「要约束就 hard fail 别静默忽略」原则。落地 async 事件桶
+// 时一并补 `deny_unknown_fields`（与其余 config 层、skill manifest 对齐）。
+// 取舍与顺序见 `docs/internal/hooks.md` §11.2。
 #[derive(Debug, Default, Deserialize)]
 struct HooksSection {
     session_start: Option<Vec<HookEntryRaw>>,
