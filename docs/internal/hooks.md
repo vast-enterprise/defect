@@ -4,7 +4,7 @@
 
 设计前提：
 - 三家参考实现里 claude-code / codex 都把 shell 当成 hook 的唯一执行器；defect 是纯 Rust 单二进制 ACP server，跑在 headless 容器 / Zed 嵌入式 / 未来 WASM 等没有 shell 的环境里**也得能用**——shell 必须是"可选的执行器之一"而不是入口。
-- 事件粒度 v0 落 5 件套（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`），其余事件**enum 打桩**但主循环不 emit；演进时直接接入。
+- 事件粒度 v0 落 5 件套（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`），其余 8 个 async 观察事件**仅 enum 占位、三层全缺**（无 emit、`observe()` 空实现、config 无对应桶），现状与落地缺口见 [§11](#11-实现现状与未落地缺口)。
 - 5 件套全部为 **Sync 拦截点**——主循环必须等所有匹配 handler 跑完才能继续；超时 / 错误按 §3.5 处理。
 
 ## 1. 定位与术语
@@ -606,6 +606,8 @@ fn run_turn(&self, prompt: Vec<ContentBlock>) {
 
 > 一个 handler 不能既挂 Sync 又挂 Async 事件——`capability()` 二选一，配置加载时按事件类别校验。
 
+> **现状（未落地）**：上面这条订阅路径**尚未实现**。`DefaultHookEngine::observe()` 当前是空函数，config 也还没有 async 事件桶，8 个观察事件无任何 emit 点。完整缺口与落地步骤见 [§11](#11-实现现状与未落地缺口)。
+
 ### 7.3 与 sandbox policy
 
 sandbox policy 与 hook 是**两个独立的检查点**：
@@ -767,3 +769,27 @@ impl HookHandler for SkillRouterHook {
 - `crates/agent/src/hooks/command.rs` — argv / shell / stdin envelope / stdout 解析 / 取消 / 非零退出（14 测，依赖 `/bin/sh`）
 - `crates/agent/src/hooks/prompt.rs` — 模板渲染 / json 渲染 / fake provider 调用 + 失败传播（8 测）
 - `crates/cli/src/hooks.rs` — config → engine 翻译 + fail-fast + Command/Prompt 装配（8 测）
+
+## 11. 实现现状与未落地缺口
+
+5 件 **Sync 拦截事件**全链路打通（emit + pipeline + 三种 handler + 配置 + 测试），名副其实。
+
+8 个 **Async 观察事件**（`SessionEnd` / `TurnStart` / `TurnEnd` / `PreLlmCall` / `PostLlmCall` / `PreCompact` / `PostCompact` / `PermissionAsk`）**不只是 enum 占位，而是三层全缺**：
+
+| 层 | 现状 |
+| --- | --- |
+| **emit** | 全代码库零 `HookEvent::TurnStart` 等构造点；主循环只 emit 5 件 Sync 套。 |
+| **引擎** | `DefaultHookEngine::observe()`（`crates/agent/src/hooks.rs`）是空函数（`// Phase D：留空`），§7.2 画的 AgentEvent fan-out 框架尚未接；`HookCapability::Observe` 目前无任何代码路径用到。 |
+| **config** | `HooksSection` / `HookEventTag`（`crates/config/src/hooks.rs`）只有 5 个 Sync 字段/变体，没有 async 事件桶——这些事件**无法被配置**。 |
+
+### 11.1 落地步骤
+
+1. **config**：`HooksSection` / `HookEventTag` / `HooksConfig` 补 8 个 async 事件桶；`merge_layer_hooks` / `dedupe` / disable 同步扩展。
+2. **引擎**：`DefaultHookEngine::observe()` 接 [`event-model.md`](./event-model.md) 的 AgentEvent 流 fan-out（§7.2 那张图），按 `HookCapability::Observe` 强约束丢弃非 `Pass` outcome。
+3. **emit**：在主循环 / AgentEvent 投影层补 8 个事件的 emit 点（observe 事件应从 AgentEvent 投影，不在主循环里专门走第二条 emit，见 §1 "Hook 不是第二条事件总线"）。
+
+### 11.2 附带必修：`HooksSection` 缺 `deny_unknown_fields`
+
+`HooksSection`（`crates/config/src/hooks.rs`）当前**没有** `deny_unknown_fields`。后果：用户写 `[[hooks.turn_start]]` 之类**超前或拼错的事件键会被 serde 静默丢弃**，hook 永不触发却不报错——违反「要约束就 hard fail 别静默忽略」原则。
+
+应补 `deny_unknown_fields`（与 config 其余层、skill manifest 的做法对齐）。注意落地顺序：**先**加 async 事件桶（11.1 步骤 1）**再**加 `deny_unknown_fields`，否则现在就拒绝那些尚不支持的事件键也是一种 hard fail，但会让"配了将来支持的事件"的用户更早撞墙——取舍上倾向于尽早 hard fail（拼错的 `tirggers` 该报错），具体在落地时定。
