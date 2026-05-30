@@ -125,6 +125,10 @@ fn build_schema(profiles: &BTreeMap<String, SubagentProfile>) -> ToolSchema {
         "Delegate a task to a specialized subagent that runs in a fresh, isolated context. \
          The subagent returns only its final summary, not its intermediate work. \
          Pick the profile whose description best matches the task.\n\n\
+         When you have multiple independent pieces of work, emit several `spawn_agent` \
+         calls in a single message: they run concurrently (fanout), so the total wait is \
+         the slowest subagent rather than their sum. Only spawn one at a time when a later \
+         task genuinely depends on an earlier subagent's result.\n\n\
          Available profiles:\n{catalog}"
     );
     ToolSchema {
@@ -143,6 +147,13 @@ fn build_schema(profiles: &BTreeMap<String, SubagentProfile>) -> ToolSchema {
                     "description": "The complete task for the subagent, as a self-contained \
                                     natural-language instruction. The subagent has none of this \
                                     conversation's context — include everything it needs."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override for this subagent. When omitted, \
+                                    the profile's configured model is used, falling back to the \
+                                    parent session's current model. Only set this when a task \
+                                    needs a specifically more or less capable model than the default."
                 }
             },
             "required": ["profile", "task"]
@@ -154,6 +165,9 @@ fn build_schema(profiles: &BTreeMap<String, SubagentProfile>) -> ToolSchema {
 struct SpawnArgs {
     profile: String,
     task: String,
+    /// 可选 per-call model 覆盖。优先级最高（高于 profile.model 与父 model）。
+    #[serde(default)]
+    model: Option<String>,
 }
 
 impl Tool for SpawnAgentTool {
@@ -248,8 +262,12 @@ async fn run_subagent(
         )))));
     };
 
-    // model：profile 指定优先，否则回落到父会话当前选中的 model。
-    let model = profile.model.clone().unwrap_or(parent_model);
+    // model 优先级：本次调用入参 > profile 指定 > 父会话当前选中的 model。
+    let model = parsed
+        .model
+        .clone()
+        .or_else(|| profile.model.clone())
+        .unwrap_or(parent_model);
     let Some(entry) = registry.entry_for_model(&model) else {
         return ToolEvent::Failed(ToolError::Execution(BoxError::new(io_err(format!(
             "subagent model `{model}` is not declared by any provider entry"

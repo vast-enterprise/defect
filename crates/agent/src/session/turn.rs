@@ -769,6 +769,13 @@ impl<'a> TurnRunner<'a> {
         let mut joinset: JoinSet<ToolResult> = JoinSet::new();
         let mut results: Vec<ToolResult> = Vec::with_capacity(approved.len());
 
+        // `max_concurrent_tools == 0` ⇒ 不限并发（None，快路径，永不 await permit）。
+        // 否则所有工具 task 共享一个 `Semaphore`：每个 task 在驱动工具流之前先抢一个
+        // permit，跑完（task future 结束）即归还。这给同一 turn 内一次发出 N 个
+        // `spawn_agent`（fanout）的场景一个上限，避免 spawn 风暴打爆 provider/资源。
+        let semaphore = (self.config.max_concurrent_tools > 0)
+            .then(|| Arc::new(tokio::sync::Semaphore::new(self.config.max_concurrent_tools)));
+
         for a in approved {
             match a {
                 Approved::Run {
@@ -790,21 +797,32 @@ impl<'a> TurnRunner<'a> {
                         tool = %name,
                         tool_call_id = %id,
                     );
+                    let semaphore = semaphore.clone();
                     joinset.spawn(
-                        drive_tool_stream(
-                            id,
-                            tool_use_id,
-                            name,
-                            tool,
-                            args,
-                            cwd,
-                            cancel,
-                            events,
-                            fs,
-                            shell,
-                            http,
-                            model,
-                        )
+                        async move {
+                            // 抢 permit；持有到本 task future 结束（drive 跑完）自动归还。
+                            // `acquire_owned` 仅在 Semaphore 被 close 时返回 Err——本处
+                            // 永不 close，故 unwrap 安全。
+                            let _permit = match semaphore {
+                                Some(sem) => Some(sem.acquire_owned().await.expect("semaphore not closed")),
+                                None => None,
+                            };
+                            drive_tool_stream(
+                                id,
+                                tool_use_id,
+                                name,
+                                tool,
+                                args,
+                                cwd,
+                                cancel,
+                                events,
+                                fs,
+                                shell,
+                                http,
+                                model,
+                            )
+                            .await
+                        }
                         .instrument(span),
                     );
                 }

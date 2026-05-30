@@ -802,6 +802,182 @@ async fn deny_during_ask_completes_cleanly() {
     assert!(matches!(stop, StopReason::EndTurn), "got {stop:?}");
 }
 
+/// `max_concurrent_tools` 限流：一个 turn 里发 N 个并发 tool_use 时，同时在跑的
+/// 工具数不得超过配置上限。这是 fanout（同 turn 多个 spawn_agent）的并发闸门。
+#[tokio::test]
+async fn max_concurrent_tools_caps_fanout() {
+    /// provider：第 1 次调用发 4 个 tool_use 后 Stop=ToolUse；之后 EndTurn。
+    struct FanoutProvider {
+        calls: Mutex<u32>,
+    }
+    impl LlmProvider for FanoutProvider {
+        fn info(&self) -> ProviderInfo {
+            ProviderInfo {
+                vendor: "fanout".to_string(),
+                protocol: ProtocolId::AnthropicMessages,
+                display_name: "Fanout Test Provider".to_string(),
+            }
+        }
+        fn capabilities(&self) -> Capabilities {
+            unsupported_caps()
+        }
+        fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn model_info(&self, _: &str) -> Option<ModelInfo> {
+            None
+        }
+        fn complete(
+            &self,
+            _: CompletionRequest,
+            _: CancellationToken,
+        ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
+            let mut calls = self.calls.lock().expect("calls poisoned");
+            *calls += 1;
+            let nth = *calls;
+            Box::pin(async move {
+                let chunks: Vec<Result<ProviderChunk, ProviderError>> = if nth == 1 {
+                    let mut c = vec![Ok(ProviderChunk::MessageStart {
+                        id: "msg-1".to_string(),
+                        model: "fanout-001".to_string(),
+                    })];
+                    // 4 个并发 tool_use，全部调用同一个 slow 工具
+                    for i in 0..4 {
+                        c.push(Ok(ProviderChunk::ToolUseStart {
+                            id: format!("tu-{i}"),
+                            name: "slow".to_string(),
+                        }));
+                        c.push(Ok(ProviderChunk::ToolUseArgsDelta {
+                            id: format!("tu-{i}"),
+                            fragment: "{}".to_string(),
+                        }));
+                        c.push(Ok(ProviderChunk::ToolUseEnd {
+                            id: format!("tu-{i}"),
+                        }));
+                    }
+                    c.push(Ok(ProviderChunk::Stop {
+                        reason: LlmStopReason::ToolUse,
+                    }));
+                    c
+                } else {
+                    vec![
+                        Ok(ProviderChunk::MessageStart {
+                            id: "msg-2".to_string(),
+                            model: "fanout-001".to_string(),
+                        }),
+                        Ok(ProviderChunk::Stop {
+                            reason: LlmStopReason::EndTurn,
+                        }),
+                    ]
+                };
+                let s: Pin<
+                    Box<dyn futures::Stream<Item = Result<ProviderChunk, ProviderError>> + Send>,
+                > = Box::pin(stream::iter(chunks));
+                Ok(s)
+            })
+        }
+    }
+
+    /// 工具：进入时 +1 并更新峰值、睡一会、退出时 -1。借共享计数器观测真实并发。
+    struct SlowTool {
+        schema: ToolSchema,
+        live: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+    }
+    impl Tool for SlowTool {
+        fn schema(&self) -> &ToolSchema {
+            &self.schema
+        }
+        fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
+            SafetyClass::ReadOnly
+        }
+        fn describe<'a>(
+            &'a self,
+            _args: &'a serde_json::Value,
+            _ctx: ToolContext<'a>,
+        ) -> BoxFuture<'a, ToolCallDescription> {
+            Box::pin(async {
+                ToolCallDescription {
+                    fields: ToolCallUpdateFields::default(),
+                }
+            })
+        }
+        fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
+            let live = self.live.clone();
+            let peak = self.peak.clone();
+            let fut = async move {
+                let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                live.fetch_sub(1, Ordering::SeqCst);
+                ToolEvent::Completed(ToolCallUpdateFields::default())
+            };
+            let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
+                Box::pin(stream::once(fut));
+            s
+        }
+    }
+
+    let live = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(FanoutProvider {
+        calls: Mutex::new(0),
+    }) as Arc<dyn LlmProvider>;
+    let tools: Arc<dyn ToolRegistry> = Arc::new(
+        StaticToolRegistry::builder()
+            .insert(Arc::new(SlowTool {
+                schema: ToolSchema {
+                    name: "slow".to_string(),
+                    description: "slow tool".to_string(),
+                    input_schema: json!({"type":"object"}),
+                },
+                live: live.clone(),
+                peak: peak.clone(),
+            }))
+            .build(),
+    );
+
+    let core = DefaultAgentCore::builder()
+        .provider(provider)
+        .process_tools(tools)
+        .policy(Arc::new(OpenPolicy) as Arc<dyn SandboxPolicy>)
+        .config(TurnConfig {
+            model: "fanout-001".to_string(),
+            max_concurrent_tools: 2,
+            ..TurnConfig::default()
+        })
+        .build();
+
+    let cwd = std::env::current_dir().expect("cwd");
+    let session = core
+        .create_session(
+            SessionId::new(new_session_id()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+            Arc::new(NoopShellBackend) as Arc<dyn ShellBackend>,
+            Frontend::Headless,
+        )
+        .await
+        .expect("session");
+
+    let stop = session
+        .run_turn(vec![ContentBlock::Text(TextContent::new("go"))])
+        .await
+        .expect("turn");
+
+    assert!(matches!(stop, StopReason::EndTurn));
+    let observed = peak.load(Ordering::SeqCst);
+    assert!(
+        observed >= 2,
+        "expected fanout to actually run concurrently (peak >= 2), got {observed}"
+    );
+    assert!(
+        observed <= 2,
+        "max_concurrent_tools=2 should cap concurrency, but peak was {observed}"
+    );
+}
+
 // 让编译期看到我们用到了 OpenPolicy（避免之后引用断裂）
 #[allow(dead_code)]
 fn _types_in_use() -> Arc<dyn SandboxPolicy> {
