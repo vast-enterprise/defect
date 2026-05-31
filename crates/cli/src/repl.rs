@@ -27,19 +27,21 @@
 //! 执行，无委托）。事件流的消费逻辑是 `defect-acp` event pump 的极简版——
 //! 那边翻译成 wire notification，这里翻译成终端文本。
 
-use std::io::{IsTerminal, Write as _};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol_schema::{ContentBlock, SessionId, StopReason, TextContent};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use defect_agent::event::AgentEvent;
-use defect_agent::session::{AgentCore, Frontend, new_session_id};
+use defect_agent::session::{AgentCore, Frontend, TurnError, new_session_id};
 use defect_tools::{LocalFsBackend, LocalShellBackend};
 use futures::{FutureExt, StreamExt};
 use owo_colors::OwoColorize;
 use tokio::io::{AsyncWriteExt, Stdout};
+use tokio::sync::mpsc;
 
 /// 跑一个交互 REPL，直到 stdin EOF（Ctrl-D）或读到 `:q` / `:quit` / `:exit`。
 ///
@@ -66,178 +68,269 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
 
     // 持久订阅：循环外订阅**一次**，跨所有 turn 排空——含 session driver 自发的
     // 自主续转 turn（后台 subagent 完成后消化结果那一轮）。这是与 ACP
-    // `spawn_session_pump` 同构的关键：事件消费的生命周期 = session 生命周期，
-    // 而非单个 turn。早先按 turn 订阅时，turn 之间（卡在 read_line）无人排空，
-    // 自主续转 turn 的事件全丢——表现为"subagent 后台返回后父 agent 没续上"。
+    // `spawn_session_pump` 同构的关键：事件消费的生命周期 = session 生命周期。
     let mut events = session.subscribe();
 
-    // 提示符（带 ANSI 着色，零显示宽度的颜色码不影响重绘对齐）。
-    let prompt = "› ".cyan().bold().to_string();
-    loop {
-        out.flush().await?;
+    // 输入读取：单独的 blocking 线程跑 raw 模式 + crossterm 读键，把按键经 channel
+    // 发给主 task。**关键**：所有 stdout 写都只在主 task 做（行重绘 + 事件渲染），
+    // blocking 线程一个字节都不写——这样既无 stdout 锁竞争（早先 read_line 长期
+    // 持锁导致后台 turn 事件被阻塞、空闲完全静默），也能在事件来时干净地「擦输入行
+    // → 打事件 → 重绘输入行」，输入与输出不再交错。
+    let (key_tx, mut key_rx) = mpsc::channel::<KeyMsg>(64);
+    let _input = InputReader::spawn(key_tx);
 
-        // 读一行：进 raw 模式自己做行编辑（见模块文档）。放 spawn_blocking 阻塞读，
-        // **同时**继续排空事件流——这样用户在敲下一条 prompt 时，后台任务完成触发的
-        // 自主续转 turn 仍能实时打到屏幕上（不会等到下次 run_turn 才回放）。
-        let prompt_for_read = prompt.clone();
-        let mut read = tokio::task::spawn_blocking(move || read_line(&prompt_for_read));
-        let outcome = loop {
+    let mut editor = LineEditor::new("› ".cyan().bold().to_string());
+    editor.redraw(&mut out).await?;
+
+    'session: loop {
+        // 输入阶段：收按键拼行 / 同时实时渲染事件。直到拼出一整行或退出。
+        let line = loop {
             tokio::select! {
-                joined = &mut read => break joined??,
+                key = key_rx.recv() => match key {
+                    Some(KeyMsg::Line(text)) => break text,                          // 非 TTY 逐行
+                    Some(KeyMsg::Edit(key)) => {
+                        if let Some(line) = editor.on_key(key, &mut out).await? {
+                            break line;                                              // 回车提交
+                        }
+                    }
+                    Some(KeyMsg::Interrupt) => editor.clear_line(&mut out).await?,    // Ctrl-C 丢弃当前行
+                    Some(KeyMsg::Eof) | None => break 'session,                       // Ctrl-D / 输入关闭
+                },
                 ev = events.next() => {
                     if let Some(ev) = ev {
-                        render_event(&mut out, ev).await?;
-                        out.flush().await?;
+                        editor.render_event(&mut out, ev).await?;
                     }
                 }
             }
         };
 
-        let line = match outcome {
-            ReadOutcome::Line(line) => line,
-            ReadOutcome::Interrupted => continue, // Ctrl-C：丢弃当前行，重新提示
-            ReadOutcome::Eof => break,            // Ctrl-D（空行）
-        };
         let prompt_text = line.trim();
         if prompt_text.is_empty() {
+            editor.redraw(&mut out).await?;
             continue;
         }
         if matches!(prompt_text, ":q" | ":quit" | ":exit") {
             break;
         }
 
-        // run_turn future 只返回最终 StopReason；本轮事件经上面那条持久订阅推送。
-        let prompt_blocks = vec![ContentBlock::Text(TextContent::new(prompt_text.to_owned()))];
-        let turn = session.run_turn(prompt_blocks);
-        tokio::pin!(turn);
+        // 跑 turn：future 只返回最终 StopReason，本轮事件经持久订阅推送，期间仍要
+        // 排空事件流渲染。turn slot 可能被后台自主续转 turn 占着 → TurnInProgress
+        // 退避重试（仿 ACP run_prompt_turn），不直接报错。
+        let stop = run_user_turn(
+            session.as_ref(),
+            prompt_text.to_owned(),
+            &mut events,
+            &mut editor,
+            &mut out,
+        )
+        .await?;
 
-        // 把事件流泵到 stdout，直到 turn future resolve。
-        let stop = loop {
-            tokio::select! {
-                result = &mut turn => break result,
-                ev = events.next() => {
-                    // `None` 表示流提前关闭（不应发生）——忽略，继续等 turn future。
-                    if let Some(ev) = ev {
-                        render_event(&mut out, ev).await?;
-                    }
-                }
-            }
-        };
-
-        // 排掉 turn 返回瞬间可能还在 buffer 里的尾部事件（如 TurnEnded）。下一轮
-        // 输入阶段的 select 也会继续排空，这里只是尽早把本轮尾巴打全。
-        while let Some(Some(ev)) = events.next().now_or_never() {
-            render_event(&mut out, ev).await?;
-        }
-
+        // 成功路径：turn 的 TurnEnded 事件已驱动 end_streaming（收尾 + 重绘 prompt），
+        // 这里无需再打状态行。仅 fatal error（不发 TurnEnded）需显式落屏 + 回到 prompt。
         match stop {
-            Ok(reason) => write(&mut out, &format!("\n{}\n", stop_line(reason).dimmed())).await?,
+            Ok(_) => {
+                // 兜底：极少数情况下没收到 TurnEnded（如空 prompt 早退）也要回到 prompt。
+                editor.ensure_idle(&mut out).await?;
+            }
             Err(e) => {
-                write(&mut out, &format!("\n{} {e}\n", "turn error:".red().bold())).await?;
+                editor
+                    .print_error(&mut out, &format!("{} {e}", "turn error:".red().bold()))
+                    .await?;
             }
         }
     }
 
-    write(&mut out, &"bye.\n".dimmed().to_string()).await?;
+    write(&mut out, &"\r\nbye.\r\n".dimmed().to_string()).await?;
     Ok(())
 }
 
-/// [`read_line`] 的结果。
-enum ReadOutcome {
-    /// 用户按回车提交的一行（不含行尾换行）。
+/// 跑一个用户 turn，期间持续排空事件流渲染；撞上 [`TurnError::TurnInProgress`]
+/// （后台自主续转 turn 正占着 slot）时退避重试——这是后台 subagent 回流与用户
+/// 输入竞争同一 turn slot 的落点。返回 turn 的最终结果（重试用尽也按其错误返回）。
+async fn run_user_turn(
+    session: &dyn defect_agent::session::Session,
+    prompt_text: String,
+    events: &mut defect_agent::session::EventStream,
+    editor: &mut LineEditor,
+    out: &mut Stdout,
+) -> anyhow::Result<Result<StopReason, TurnError>> {
+    // 退避参数与 ACP run_prompt_turn 一致：自主续转 turn 通常很短，退避几次即可拿到 slot。
+    const MAX_RETRIES: u32 = 100;
+    const BACKOFF: Duration = Duration::from_millis(20);
+
+    let mut attempt = 0u32;
+    loop {
+        let prompt_blocks = vec![ContentBlock::Text(TextContent::new(prompt_text.clone()))];
+        let turn = session.run_turn(prompt_blocks);
+        tokio::pin!(turn);
+
+        let result = loop {
+            tokio::select! {
+                // 优先排空事件再看 turn 是否结束——turn future 与事件流可能同时就绪
+                // （turn 飞快结束、AssistantText/TurnEnded 已在 buffer 里）。若让 select
+                // 随机选中 turn 分支先 break，buffer 里的尾部事件就漏渲染了。biased +
+                // 先 poll events 保证事件不丢。
+                biased;
+                ev = events.next() => {
+                    if let Some(ev) = ev {
+                        editor.render_event(out, ev).await?;
+                    }
+                }
+                r = &mut turn => break r,
+            }
+        };
+
+        // turn 已结束，但 buffer 里可能还有刚 send、未被 poll 的尾部事件（TurnEnded 等）。
+        // 立即就绪的全排掉，不丢。
+        while let Some(Some(ev)) = events.next().now_or_never() {
+            editor.render_event(out, ev).await?;
+        }
+
+        match result {
+            Err(TurnError::TurnInProgress) if attempt < MAX_RETRIES => {
+                attempt += 1;
+                // 退避期间仍要排空事件——占着 slot 的自主续转 turn 正在产出，得实时渲染。
+                let sleep = tokio::time::sleep(BACKOFF);
+                tokio::pin!(sleep);
+                loop {
+                    tokio::select! {
+                        () = &mut sleep => break,
+                        ev = events.next() => {
+                            if let Some(ev) = ev {
+                                editor.render_event(out, ev).await?;
+                            }
+                        }
+                    }
+                }
+            }
+            other => return Ok(other),
+        }
+    }
+}
+
+/// 输入读取线程发给主 task 的消息。
+enum KeyMsg {
+    /// 一次行编辑动作（可打印字符 / 退格），主 task 据此更新 buffer 并重绘。
+    Edit(KeyEvent),
+    /// 用户提交了一整行（回车，TTY）或一行文本（非 TTY 的逐行读）。
     Line(String),
-    /// Ctrl-C：放弃当前行。
-    Interrupted,
-    /// Ctrl-D（空缓冲）或 stdin EOF。
+    /// Ctrl-C：放弃当前输入行。
+    Interrupt,
+    /// Ctrl-D（空缓冲）/ stdin EOF / 输入关闭。
     Eof,
 }
 
-/// raw 模式下自己做行编辑，读一行。阻塞，须在 `spawn_blocking` 里调。
+/// 输入读取线程：raw 模式下跑 crossterm 读键循环，把按键经 channel 发给主 task。
+/// **不写 stdout**——所有显示都由主 task 统一负责（见模块文档"行编辑为何自己做"）。
 ///
-/// 用 crossterm 读结构化按键事件（跨平台、多字节 char 已解析好）。支持：可打印
-/// 字符、退格（按 unicode char 删）、回车提交、Ctrl-C 放弃、Ctrl-D（空缓冲）EOF。
-/// 不支持光标移动 / 历史——超出最小 REPL 范畴。
-fn read_line(prompt: &str) -> std::io::Result<ReadOutcome> {
-    // stdin 不是 TTY（管道 / 重定向）时没法进 raw 模式，也不需要——直接按行读，
-    // 由上游缓冲做行边界。raw 模式的行编辑只在真终端才有意义。
-    if !std::io::stdin().is_terminal() {
-        return read_line_cooked(prompt);
-    }
-    let _raw = RawMode::enable()?; // Drop 时恢复终端
-    let mut stdout = std::io::stdout().lock();
-    let mut buf = String::new();
+/// 非 TTY（管道 / 重定向）时退化为逐行读，每行发一条 [`KeyMsg::Line`]。
+///
+/// Drop 时把 raw 模式还原（持有 [`RawMode`] guard）。线程在 channel 接收端关闭
+/// （send 失败）或读到 EOF 时退出。
+struct InputReader {
+    handle: Option<std::thread::JoinHandle<()>>,
+}
 
-    // 重绘当前行：回行首、清到行尾、写 prompt + buffer。raw 模式下换行要 `\r\n`。
-    macro_rules! redraw {
-        () => {{
-            write!(stdout, "\r\x1b[K{prompt}{buf}")?;
-            stdout.flush()?;
-        }};
-    }
-    redraw!();
-
-    loop {
-        // crossterm 的 read() 阻塞到下一个终端事件。只关心按键事件。
-        let event = crossterm::event::read()?;
-        let Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind,
-            ..
-        }) = event
-        else {
-            continue; // resize / focus / paste / 鼠标等——忽略
-        };
-        // Windows 会同时上报 Press 与 Release；只认 Press（与 Release==默认 Press 的
-        // unix 行为对齐），否则每个键会被处理两次。
-        if kind == KeyEventKind::Release {
-            continue;
-        }
-        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-        match code {
-            KeyCode::Enter => {
-                write!(stdout, "\r\n")?;
-                stdout.flush()?;
-                return Ok(ReadOutcome::Line(buf));
+impl InputReader {
+    fn spawn(tx: mpsc::Sender<KeyMsg>) -> Self {
+        let handle = std::thread::spawn(move || {
+            if std::io::stdin().is_terminal() {
+                read_keys_raw(&tx);
+            } else {
+                read_lines_cooked(&tx);
             }
-            KeyCode::Char('c') if ctrl => {
-                write!(stdout, "^C\r\n")?;
-                stdout.flush()?;
-                return Ok(ReadOutcome::Interrupted);
-            }
-            // Ctrl-D：仅空缓冲时作 EOF；非空时落到 `_ => {}` 被忽略。
-            KeyCode::Char('d') if ctrl && buf.is_empty() => {
-                write!(stdout, "\r\n")?;
-                stdout.flush()?;
-                return Ok(ReadOutcome::Eof);
-            }
-            // 删最后一个 unicode char（pop 天然按 char）；空缓冲时 pop 返回 None、不重绘。
-            KeyCode::Backspace if buf.pop().is_some() => {
-                redraw!();
-            }
-            KeyCode::Char(c) if !ctrl => {
-                // 可打印字符（crossterm 已把多字节解析成一个 char）。
-                buf.push(c);
-                redraw!();
-            }
-            // 方向键 / Tab / 其它控制键：最小 REPL 不处理，忽略。
-            _ => {}
+        });
+        Self {
+            handle: Some(handle),
         }
     }
 }
 
-/// 非 TTY 的降级读行：按行读，不做 raw 行编辑。空行（EOF）返回 [`ReadOutcome::Eof`]。
-fn read_line_cooked(prompt: &str) -> std::io::Result<ReadOutcome> {
-    let mut stdout = std::io::stdout().lock();
-    write!(stdout, "{prompt}")?;
-    stdout.flush()?;
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line)? == 0 {
-        return Ok(ReadOutcome::Eof);
+impl Drop for InputReader {
+    fn drop(&mut self) {
+        // 主 task 已退出、receiver 已 drop——读键线程下次 send 会失败而退出。
+        // crossterm 的 read() 可能正阻塞着；不强杀（无可移植手段），随进程退出回收。
+        // raw 模式由线程内的 RawMode guard 在线程结束时还原。
+        if let Some(h) = self.handle.take() {
+            // 不 join：read() 可能仍阻塞在等键。线程是 daemon 语义，进程退出即收。
+            drop(h);
+        }
     }
-    // 去掉行尾换行（保留行内空白交给上层 trim）。
-    let trimmed = line.trim_end_matches(['\r', '\n']);
-    Ok(ReadOutcome::Line(trimmed.to_owned()))
+}
+
+/// raw 模式读键循环（TTY）。每个有意义的按键发一条 [`KeyMsg`]；行内 buffer 在
+/// 主 task 维护，这里只把按键**原样**转发（除回车/Ctrl-C/Ctrl-D 解释成控制消息）。
+/// Ctrl-D 的"仅空缓冲才 EOF"语义需要 buffer 状态，所以这里跟踪一个**长度镜像**。
+fn read_keys_raw(tx: &mpsc::Sender<KeyMsg>) {
+    let _raw = match RawMode::enable() {
+        Ok(g) => g,
+        Err(_) => return, // 进不了 raw 模式（无终端）——放弃，主 task 会因 channel 关闭而退出
+    };
+    // buffer 长度镜像：仅用于判定 Ctrl-D（空缓冲 = EOF）与退格是否有内容可删。
+    // 真正的 buffer 内容在主 task 的 LineEditor 里。
+    let mut len = 0usize;
+    loop {
+        let Ok(event) = crossterm::event::read() else {
+            let _ = tx.blocking_send(KeyMsg::Eof);
+            return;
+        };
+        let Event::Key(key) = event else {
+            continue; // resize / focus / paste / 鼠标——忽略
+        };
+        // Windows 同时上报 Press 与 Release；只认 Press。
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let msg = match key.code {
+            KeyCode::Enter => {
+                len = 0;
+                // 行内容在主 task；这里发空 Line 触发"提交"，实际文本由主 task 给出。
+                // 但主 task 需要文本——故改为：Enter 也走 Edit，由主 task 判定提交。见下。
+                KeyMsg::Edit(key)
+            }
+            KeyCode::Char('c') if ctrl => {
+                len = 0;
+                KeyMsg::Interrupt
+            }
+            KeyCode::Char('d') if ctrl && len == 0 => KeyMsg::Eof,
+            KeyCode::Char('d') if ctrl => continue, // 非空缓冲的 Ctrl-D：忽略
+            KeyCode::Backspace => {
+                len = len.saturating_sub(1);
+                KeyMsg::Edit(key)
+            }
+            KeyCode::Char(_) if !ctrl => {
+                len += 1;
+                KeyMsg::Edit(key)
+            }
+            _ => continue, // 方向键 / Tab / 其它控制键：忽略
+        };
+        if tx.blocking_send(msg).is_err() {
+            return; // 主 task 退出
+        }
+    }
+}
+
+/// 非 TTY 逐行读：每行发一条 [`KeyMsg::Line`]，EOF 发 [`KeyMsg::Eof`]。
+fn read_lines_cooked(tx: &mpsc::Sender<KeyMsg>) {
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) | Err(_) => {
+                let _ = tx.blocking_send(KeyMsg::Eof);
+                return;
+            }
+            Ok(_) => {
+                let trimmed = line.trim_end_matches(['\r', '\n']).to_owned();
+                if tx.blocking_send(KeyMsg::Line(trimmed)).is_err() {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 /// 终端 raw 模式 RAII guard：构造时进 raw、Drop 时恢复。跨平台由 crossterm 负责
@@ -258,35 +351,197 @@ impl Drop for RawMode {
     }
 }
 
-/// 把单个 [`AgentEvent`] 渲染成终端文本。只处理对人有意义的几类，
-/// 其余（LLM 调用边界、策略审计等）静默忽略——REPL 不是 observability。
-async fn render_event(out: &mut Stdout, event: AgentEvent) -> anyhow::Result<()> {
-    match event {
-        AgentEvent::AssistantText { content } => {
-            if let Some(text) = block_text(&content) {
-                // 助手文本是增量 chunk，不换行，逐段拼出完整回复。
-                write(out, &text).await?;
-                out.flush().await?;
-            }
+/// 主 task 侧的单行编辑器 + 输出协调器。**所有 stdout 写都经它**。
+///
+/// 用一个显示状态机解决"流式输出 vs 用户输入行"的冲突：
+/// - **空闲态**（`streaming = false`）：屏幕底部是 prompt + 用户正在敲的 buffer。
+///   按键更新 buffer 并就地重绘。
+/// - **流式态**（`streaming = true`）：一个 turn 正在产出（助手文本是逐 chunk 的
+///   增量事件）。此时**直接把文本追加到屏幕**，绝不重绘 prompt——否则每个 chunk
+///   之间的"擦行+重画 prompt"会把刚打的助手文本抹碎（这正是之前输出乱的根因）。
+///
+/// 进入流式态：第一个内容事件惰性触发（先擦掉用户半行输入，转 streaming）。
+/// 退出流式态：`TurnEnded` 时换到干净行、重绘 prompt + 被打断的 buffer。
+/// 用户在流式态敲的字静默进 buffer，turn 结束重绘时显示出来。
+///
+/// 是否 raw（TTY）决定换行用 `\r\n` 还是 `\n`、是否做光标控制。
+struct LineEditor {
+    prompt: String,
+    buf: String,
+    /// 是否在 raw 终端（TTY）。非 TTY（管道）时不做任何光标控制、换行用 `\n`。
+    tty: bool,
+    /// 是否处于流式输出态（一个 turn 正在产出）。
+    streaming: bool,
+    /// 流式输出时，光标是否在行首（用于 turn 结束时决定要不要补换行）。
+    at_line_start: bool,
+}
+
+impl LineEditor {
+    fn new(prompt: String) -> Self {
+        Self {
+            prompt,
+            buf: String::new(),
+            tty: std::io::stdin().is_terminal(),
+            streaming: false,
+            at_line_start: true,
         }
-        AgentEvent::AssistantThought { content } => {
-            if let Some(text) = block_text(&content) {
-                write(out, &text.dimmed().italic().to_string()).await?;
-                out.flush().await?;
-            }
-        }
-        AgentEvent::ToolCallStarted { name, fields, .. } => {
-            let title = fields.title.unwrap_or_else(|| name.clone());
-            write(out, &format!("\n{} {}\n", "⚙".yellow(), title.yellow())).await?;
-        }
-        AgentEvent::ToolCallFinished { fields, .. } => {
-            if let Some(status) = fields.status {
-                write(out, &format!("  {} {status:?}\n", "↳".dimmed())).await?;
-            }
-        }
-        _ => {}
     }
-    Ok(())
+
+    /// 重绘当前输入行（空闲态）：回行首、清到行尾、写 prompt + buffer。
+    async fn redraw(&self, out: &mut Stdout) -> anyhow::Result<()> {
+        if self.tty {
+            write(out, &format!("\r\x1b[K{}{}", self.prompt, self.buf)).await?;
+        } else {
+            write(out, &self.prompt).await?;
+        }
+        out.flush().await?;
+        Ok(())
+    }
+
+    /// 处理一个行编辑按键。回车返回 `Some(line)`（buffer 取空）表示提交；其余 `None`。
+    /// 流式态下只更新 buffer、**不重绘**（重绘会插进正在流的输出里）——等 turn 结束
+    /// 重绘时再显示用户敲的内容。
+    async fn on_key(&mut self, key: KeyEvent, out: &mut Stdout) -> anyhow::Result<Option<String>> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Enter => {
+                if !self.streaming {
+                    write(out, "\r\n").await?;
+                    out.flush().await?;
+                }
+                return Ok(Some(std::mem::take(&mut self.buf)));
+            }
+            KeyCode::Backspace => {
+                let changed = self.buf.pop().is_some();
+                // 重绘只在空闲态、且确有删除时做；流式态让 buffer 静默跟手。
+                if changed && !self.streaming {
+                    self.redraw(out).await?;
+                }
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.buf.push(c);
+                if !self.streaming {
+                    self.redraw(out).await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    /// Ctrl-C：丢弃当前输入行内容并重绘空 prompt（仅空闲态有意义）。
+    async fn clear_line(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
+        self.buf.clear();
+        if !self.streaming {
+            self.redraw(out).await?;
+        }
+        Ok(())
+    }
+
+    /// 进入流式态（若尚未）：擦掉用户正在敲的输入行，后续内容直接追加。
+    async fn enter_streaming(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
+        if !self.streaming {
+            if self.tty {
+                write(out, "\r\x1b[K").await?; // 擦掉 prompt + 半行输入
+            }
+            self.streaming = true;
+            self.at_line_start = true;
+        }
+        Ok(())
+    }
+
+    /// 退出流式态：补一个换行（若光标不在行首）、重绘 prompt + 被打断的 buffer。
+    async fn end_streaming(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
+        if self.streaming {
+            if !self.at_line_start {
+                write(out, if self.tty { "\r\n" } else { "\n" }).await?;
+            }
+            self.streaming = false;
+            self.redraw(out).await?;
+        }
+        Ok(())
+    }
+
+    /// 渲染一个 [`AgentEvent`]。内容事件惰性进入流式态后直接追加文本；`TurnEnded`
+    /// 退出流式态并重绘 prompt。只处理对人有意义的几类，其余忽略。
+    async fn render_event(&mut self, out: &mut Stdout, event: AgentEvent) -> anyhow::Result<()> {
+        match event {
+            AgentEvent::AssistantText { content } => {
+                if let Some(text) = block_text(&content) {
+                    self.stream_text(out, &text).await?;
+                }
+            }
+            AgentEvent::AssistantThought { content } => {
+                if let Some(text) = block_text(&content) {
+                    self.stream_text(out, &text.dimmed().italic().to_string())
+                        .await?;
+                }
+            }
+            AgentEvent::ToolCallStarted { name, fields, .. } => {
+                let title = fields.title.unwrap_or(name);
+                self.stream_text(out, &format!("\n{} {}\n", "⚙".yellow(), title.yellow()))
+                    .await?;
+            }
+            AgentEvent::ToolCallFinished { fields, .. } => {
+                if let Some(status) = fields.status {
+                    self.stream_text(out, &format!("{} {status:?}\n", "  ↳".dimmed()))
+                        .await?;
+                }
+            }
+            AgentEvent::TurnEnded { .. } => {
+                self.end_streaming(out).await?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// 流式追加一段文本：确保已进入流式态、写文本（raw 下 `\n`→`\r\n`）、更新行首状态。
+    async fn stream_text(&mut self, out: &mut Stdout, text: &str) -> anyhow::Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        self.enter_streaming(out).await?;
+        write(out, &nl(text, self.tty)).await?;
+        out.flush().await?;
+        self.at_line_start = text.ends_with('\n');
+        Ok(())
+    }
+
+    /// 确保回到空闲态：若仍在流式态（没收到 TurnEnded）就收尾并重绘 prompt；
+    /// 已空闲则 no-op（避免与 TurnEnded 的重绘重复打 prompt）。
+    async fn ensure_idle(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
+        if self.streaming {
+            self.end_streaming(out).await?;
+        }
+        Ok(())
+    }
+
+    /// 打印一行错误状态（turn fatal error；这类不发 TurnEnded 事件），再回到空闲 prompt。
+    async fn print_error(&mut self, out: &mut Stdout, text: &str) -> anyhow::Result<()> {
+        // 若正流式中，先收尾换行。
+        if self.streaming && !self.at_line_start {
+            write(out, if self.tty { "\r\n" } else { "\n" }).await?;
+        }
+        self.streaming = false;
+        if self.tty {
+            write(out, &format!("\r\x1b[K{text}\r\n")).await?;
+        } else {
+            write(out, &format!("{text}\n")).await?;
+        }
+        self.redraw(out).await?;
+        Ok(())
+    }
+}
+
+/// 把字符串里的 `\n` 在 raw 模式下换成 `\r\n`（raw 终端不做 ONLCR 转换，光标只
+/// 下移不回首列）。非 raw（非 TTY）原样返回。
+fn nl(s: &str, tty: bool) -> String {
+    if tty {
+        s.replace('\n', "\r\n")
+    } else {
+        s.to_owned()
+    }
 }
 
 /// 从 [`ContentBlock`] 取文本；非文本块返回 `None`。
@@ -295,19 +550,6 @@ fn block_text(block: &ContentBlock) -> Option<String> {
         ContentBlock::Text(t) => Some(t.text.clone()),
         _ => None,
     }
-}
-
-/// turn 结束行的人类可读描述。
-fn stop_line(reason: StopReason) -> String {
-    let why = match reason {
-        StopReason::EndTurn => "end_turn",
-        StopReason::MaxTokens => "max_tokens",
-        StopReason::MaxTurnRequests => "max_turn_requests",
-        StopReason::Refusal => "refusal",
-        StopReason::Cancelled => "cancelled",
-        _ => "done",
-    };
-    format!("[{why}]")
 }
 
 /// 往 stdout 写一段字符串。

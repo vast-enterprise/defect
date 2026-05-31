@@ -27,7 +27,7 @@ impl RequestAuditTracker {
             .expect("RequestAuditTracker mutex poisoned");
         let previous = guard.replace(snapshot.clone());
         let delta = RequestAuditDelta::between(previous.as_ref(), &snapshot);
-        tracing::info!(
+        tracing::debug!(
             target: "defect::cache_audit",
             model = %snapshot.model,
             system_hash = %format_hash(snapshot.system_hash),
