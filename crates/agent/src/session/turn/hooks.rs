@@ -122,10 +122,11 @@ impl TurnRunner<'_> {
         args: &JsonValue,
         safety: crate::tool::SafetyClass,
     ) -> PreToolHookFlow {
-        let _ = (id, safety);
+        let _ = id;
         // Step 模型：`before ToolApply`。hook 可改 args、填 result（拦工具=合成输出）、或 `Break`。
         let mut step = crate::hooks::step::BeforeToolApply {
             tool_name: name.to_string(),
+            safety,
             args: args.clone(),
             result: None,
         };
@@ -155,6 +156,7 @@ impl TurnRunner<'_> {
         let mut step = crate::hooks::step::AfterToolApply {
             tool_name: result.name.clone(),
             is_error: result.is_error,
+            output: result.body.clone(),
             additional_context: Vec::new(),
         };
         let _ = self.hooks.dispatch(&mut step, self.hook_ctx()).await;

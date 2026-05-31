@@ -22,8 +22,8 @@ use defect_agent::hooks::{
 };
 use defect_agent::llm::{LlmProvider, ProviderRegistry};
 use defect_config::{
-    HookCommandSpec, HookEntry, HookHandlerSpec, HookMatcher as ConfigHookMatcher,
-    HookPromptRender, HookPromptSpec, HookShellKind, HooksConfig,
+    HookCommandSpec, HookHandlerSpec, HookMatcher as ConfigHookMatcher, HookPromptRender,
+    HookPromptSpec, HookShellKind, HooksConfig,
 };
 
 /// 装配错误。
@@ -56,17 +56,22 @@ pub fn build_hook_engine(
 ) -> Result<DefaultHookEngine, HookEngineBuildError> {
     let mut table = HandlerTable::empty();
 
-    // config 的事件桶名 → step 模型的挂载点 event_name。迁移期映射：
-    // session_start → after_session_enter；user_prompt_submit → before_ingest；
-    // pre_tool_use → before_tool_apply；post_tool_use[_failure] → after_tool_apply。
-    for (event_name, entries) in [
-        ("after_session_enter", &hooks.session_start),
-        ("before_ingest", &hooks.user_prompt_submit),
-        ("before_tool_apply", &hooks.pre_tool_use),
-        ("after_tool_apply", &hooks.post_tool_use),
-        ("after_tool_apply", &hooks.post_tool_use_failure),
-    ] {
-        push_bucket(&mut table, event_name, entries, builtins, rt)?;
+    // config 的事件桶键就是 step 的 `event_name`（1:1，config 层已校验过合法性）。
+    // `event_name` 须为 `&'static str`（HandlerTable 的桶键）——从 step::ALL_EVENT_NAMES 取静态串。
+    for (event_name, entries) in &hooks.buckets {
+        let Some(static_name) = static_event_name(event_name) else {
+            // config 层已 fail-fast 掉未知事件名；这里兜底跳过。
+            continue;
+        };
+        for entry in entries {
+            let matcher = translate_matcher(&entry.matcher);
+            let (handler, timeout) = build_handler(&entry.handler, builtins, rt)?;
+            let mut hook = StepHandlerEntry::new(matcher, handler);
+            if let Some(t) = timeout {
+                hook = hook.with_timeout(t);
+            }
+            table.push_step(static_name, hook);
+        }
     }
 
     let engine = DefaultHookEngine::new();
@@ -74,23 +79,12 @@ pub fn build_hook_engine(
     Ok(engine)
 }
 
-fn push_bucket(
-    table: &mut HandlerTable,
-    event_name: &'static str,
-    entries: &[HookEntry],
-    builtins: &BuiltinRegistry,
-    rt: &HookEngineCtx<'_>,
-) -> Result<(), HookEngineBuildError> {
-    for entry in entries {
-        let matcher = translate_matcher(&entry.matcher);
-        let (handler, timeout) = build_handler(&entry.handler, builtins, rt)?;
-        let mut hook = StepHandlerEntry::new(matcher, handler);
-        if let Some(t) = timeout {
-            hook = hook.with_timeout(t);
-        }
-        table.push_step(event_name, hook);
-    }
-    Ok(())
+/// 把 config 的事件名（owned String）换成 step 模型用的 `&'static str`。
+fn static_event_name(name: &str) -> Option<&'static str> {
+    defect_agent::hooks::step::ALL_EVENT_NAMES
+        .iter()
+        .copied()
+        .find(|&n| n == name)
 }
 
 fn build_handler(
@@ -260,7 +254,7 @@ mod test {
     };
     use defect_agent::session::SessionCapabilitiesConfig;
     use defect_agent::tool::SafetyClass;
-    use defect_config::ConfigSource;
+    use defect_config::{ConfigSource, HookEntry};
     use futures::future::BoxFuture;
     use std::collections::BTreeMap;
     use tokio_util::sync::CancellationToken;
@@ -354,7 +348,7 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.session_start.push(HookEntry {
+        hooks.push("after_session_enter", HookEntry {
             matcher: ConfigHookMatcher::default(),
             handler: HookHandlerSpec::Builtin {
                 name: "does-not-exist".into(),
@@ -376,7 +370,7 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.pre_tool_use.push(HookEntry {
+        hooks.push("before_tool_apply", HookEntry {
             matcher: ConfigHookMatcher {
                 tool: Some("login".into()),
                 ..Default::default()
@@ -394,7 +388,7 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.pre_tool_use.push(HookEntry {
+        hooks.push("before_tool_apply", HookEntry {
             matcher: ConfigHookMatcher::default(),
             handler: HookHandlerSpec::Command(HookCommandSpec::Argv {
                 argv: vec!["true".into()],
@@ -413,7 +407,7 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.pre_tool_use.push(HookEntry {
+        hooks.push("before_tool_apply", HookEntry {
             matcher: ConfigHookMatcher::default(),
             handler: HookHandlerSpec::Command(HookCommandSpec::Shell {
                 shell: HookShellKind::Bash,
@@ -432,7 +426,7 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.session_start.push(HookEntry {
+        hooks.push("after_session_enter", HookEntry {
             matcher: ConfigHookMatcher::default(),
             handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
                 None,
@@ -450,7 +444,7 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.session_start.push(HookEntry {
+        hooks.push("after_session_enter", HookEntry {
             matcher: ConfigHookMatcher::default(),
             handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
                 Some("not-registered".into()),

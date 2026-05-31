@@ -983,3 +983,123 @@ async fn max_concurrent_tools_caps_fanout() {
 fn _types_in_use() -> Arc<dyn SandboxPolicy> {
     Arc::new(OpenPolicy)
 }
+
+// ---------------------------------------------------------------------------
+// 端到端：before_turn_end hook 续命（你最初的目标）
+// ---------------------------------------------------------------------------
+
+/// 一个 provider：每次都立刻 EndTurn（不调工具）。让 turn 每轮都走到 before_turn_end 判定。
+struct AlwaysEndTurnProvider {
+    calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl LlmProvider for AlwaysEndTurnProvider {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo {
+            vendor: "always-end".to_string(),
+            protocol: ProtocolId::AnthropicMessages,
+            display_name: "Always EndTurn".to_string(),
+        }
+    }
+    fn capabilities(&self) -> Capabilities {
+        unsupported_caps()
+    }
+    fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn model_info(&self, _id: &str) -> Option<ModelInfo> {
+        None
+    }
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+        _cancel: CancellationToken,
+    ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let chunks: Vec<Result<ProviderChunk, ProviderError>> = vec![
+            Ok(ProviderChunk::TextDelta {
+                text: "done".to_string(),
+            }),
+            Ok(ProviderChunk::Stop {
+                reason: LlmStopReason::EndTurn,
+            }),
+        ];
+        Box::pin(async move { Ok(Box::pin(stream::iter(chunks)) as ProviderStream) })
+    }
+}
+
+/// hook 引擎：对 `before_turn_end` 前 N 次返回 `continue`（注入一句反馈），之后放停。
+/// 模拟 "command hook exit 2 → 续命" 的效果，但不依赖真子进程。
+struct ContinueNTimesEngine {
+    remaining: std::sync::Mutex<u32>,
+}
+
+impl defect_agent::hooks::HookEngine for ContinueNTimesEngine {
+    fn dispatch<'a>(
+        &'a self,
+        step: &'a mut dyn defect_agent::hooks::step::HookStep,
+        _ctx: defect_agent::hooks::HookCtx<'a>,
+    ) -> BoxFuture<'a, defect_agent::hooks::step::HookControl> {
+        use defect_agent::hooks::step::HookControl;
+        Box::pin(async move {
+            if step.event_name() != "before_turn_end" {
+                return HookControl::Proceed;
+            }
+            let mut rem = self.remaining.lock().expect("mutex");
+            if *rem == 0 {
+                return HookControl::Proceed; // 放停
+            }
+            *rem -= 1;
+            // 注入续命反馈（走 apply_verdict 的 additional_context → step.feedback）。
+            let _ = step.apply_verdict(&json!({
+                "control": "continue",
+                "additional_context": ["keep going: condition not yet met"],
+            }));
+            HookControl::Continue
+        })
+    }
+}
+
+#[tokio::test]
+async fn turn_end_hook_continue_makes_turn_loop() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let provider = Arc::new(AlwaysEndTurnProvider {
+        calls: calls.clone(),
+    }) as Arc<dyn LlmProvider>;
+    let tools: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::builder().build());
+
+    // hook：续命 2 次后放停 → 总共应有 3 次 LLM 调用（1 初始 + 2 续命）。
+    let engine = Arc::new(ContinueNTimesEngine {
+        remaining: std::sync::Mutex::new(2),
+    }) as Arc<dyn defect_agent::hooks::HookEngine>;
+
+    let core = DefaultAgentCore::builder()
+        .provider(provider)
+        .process_tools(tools)
+        .hook_engine(engine)
+        .config(TurnConfig {
+            model: "always-001".to_string(),
+            ..TurnConfig::default()
+        })
+        .build();
+
+    let cwd = std::env::current_dir().expect("cwd");
+    let session = core
+        .create_session(
+            SessionId::new(new_session_id()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+            Arc::new(NoopShellBackend) as Arc<dyn ShellBackend>,
+            Frontend::Headless,
+        )
+        .await
+        .expect("create session");
+
+    let prompt = vec![ContentBlock::Text(TextContent::new("hello"))];
+    let stop = session.run_turn(prompt).await.expect("turn");
+
+    assert!(matches!(stop, StopReason::EndTurn));
+    // 1 初始 + 2 次续命 = 3 次 LLM 调用。证明 turn-end hook 让循环多转了两轮。
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "turn should loop 2 extra rounds");
+}

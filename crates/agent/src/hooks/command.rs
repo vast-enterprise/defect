@@ -164,26 +164,46 @@ impl StepHandler for CommandHandler {
                 }
             };
 
-            if !output.stderr.is_empty() {
-                let text = String::from_utf8_lossy(&output.stderr);
-                tracing::debug!(target: "defect_agent::hooks::command", stderr = %text, "command stderr");
-            }
-            if !output.status.success() {
-                let msg = match output.status.code() {
-                    Some(c) => format!("hook command exited with status {c}"),
-                    None => "hook command terminated by signal".to_string(),
-                };
-                return Err(HookError::HandlerFailed(BoxError::new(io_invalid(msg, ""))));
+            let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
+            if !stderr_text.is_empty() {
+                tracing::debug!(target: "defect_agent::hooks::command", stderr = %stderr_text, "command stderr");
             }
 
-            // stdout 空 / 非 JSON → 不干预；否则原样作为 verdict。
-            let trimmed = output.stdout.trim_ascii();
-            if trimmed.is_empty() {
-                return Ok(None);
-            }
-            match serde_json::from_slice::<Value>(trimmed) {
-                Ok(v) => Ok(Some(v)),
-                Err(_) => Ok(None),
+            // 退出码约定（对齐 Claude exit code 2）：
+            // - 0   → 按 stdout 决定（stdout 空 / 非 JSON = 不干预）
+            // - 2   → veto 本步（具体语义由 step 的 apply_verdict 解读：turn-end→continue、
+            //         tool/turn/session→break、compact→skip）；stderr 作为反馈注入
+            // - 其它非零 / 信号 → handler 错误（引擎降级跳过）
+            match output.status.code() {
+                Some(0) => {
+                    let trimmed = output.stdout.trim_ascii();
+                    if trimmed.is_empty() {
+                        return Ok(None);
+                    }
+                    match serde_json::from_slice::<Value>(trimmed) {
+                        Ok(v) => Ok(Some(v)),
+                        Err(_) => Ok(None),
+                    }
+                }
+                Some(2) => {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("control".to_string(), Value::String("veto".to_string()));
+                    if !stderr_text.is_empty() {
+                        obj.insert(
+                            "additional_context".to_string(),
+                            Value::Array(vec![Value::String(stderr_text)]),
+                        );
+                    }
+                    Ok(Some(Value::Object(obj)))
+                }
+                Some(c) => Err(HookError::HandlerFailed(BoxError::new(io_invalid(
+                    format!("hook command exited with status {c}"),
+                    "",
+                )))),
+                None => Err(HookError::HandlerFailed(BoxError::new(io_invalid(
+                    "hook command terminated by signal",
+                    "",
+                )))),
             }
         })
     }
@@ -386,7 +406,30 @@ mod test {
         assert_eq!(v["control"], "break");
     }
 
-    /// 非零退出 → HandlerFailed。
+    /// 退出码 2 → veto verdict（stderr 作为反馈注入）。
+    #[tokio::test]
+    async fn step_exit_2_yields_veto() {
+        if !Path::new("/bin/sh").exists() {
+            return;
+        }
+        let h = CommandHandler::new(argv_spec(vec![
+            "/bin/sh",
+            "-c",
+            "echo 'tests failed' >&2; exit 2",
+        ]));
+        let session_id = SessionId::new("s1");
+        let cwd = Path::new("/");
+        let env = serde_json::json!({"tool": "bash"});
+        let v = h
+            .handle_step(&env, ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        assert_eq!(v["control"], "veto");
+        assert_eq!(v["additional_context"][0], "tests failed\n");
+    }
+
+    /// 其它非零退出（非 2）→ HandlerFailed。
     #[tokio::test]
     async fn step_nonzero_exit_is_handler_failed() {
         if !Path::new("/bin/sh").exists() {

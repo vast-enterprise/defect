@@ -44,6 +44,17 @@ fn turn_end_continue_injects_feedback() {
 }
 
 #[test]
+fn turn_end_veto_means_continue() {
+    // command hook exit 2 → {"control":"veto"}；turn-end 把 veto 解读为续命。
+    let mut step = turn_end(true);
+    let ctrl = step
+        .apply_verdict(&json!({"control": "veto", "additional_context": ["just test failed"]}))
+        .expect("verdict");
+    assert_eq!(ctrl, HookControl::Continue);
+    assert_eq!(step.feedback.len(), 1);
+}
+
+#[test]
 fn turn_end_break_with_reason() {
     let mut step = turn_end(true);
     let ctrl = step
@@ -64,16 +75,34 @@ fn unknown_control_errors() {
 fn tool_apply() -> BeforeToolApply {
     BeforeToolApply {
         tool_name: "bash".to_string(),
+        safety: crate::tool::SafetyClass::ReadOnly,
         args: json!({"command": "ls"}),
         result: None,
     }
 }
 
 #[test]
-fn tool_apply_envelope_exposes_args() {
+fn tool_apply_envelope_exposes_args_and_safety() {
     let env = tool_apply().to_envelope();
     assert_eq!(env["tool"], "bash");
     assert_eq!(env["args"]["command"], "ls");
+    assert_eq!(env["safety"], "read_only");
+}
+
+#[test]
+fn after_tool_apply_envelope_exposes_output() {
+    let step = AfterToolApply {
+        tool_name: "bash".to_string(),
+        is_error: false,
+        output: ToolResultBody::Text {
+            text: "hello stdout".to_string(),
+        },
+        additional_context: Vec::new(),
+    };
+    let env = step.to_envelope();
+    assert_eq!(env["tool"], "bash");
+    assert_eq!(env["output"], "hello stdout");
+    assert_eq!(env["is_error"], false);
 }
 
 #[test]
@@ -179,6 +208,22 @@ fn before_compact_can_skip() {
     assert_eq!(step.to_envelope()["threshold"], 8000);
     let ctrl = step.apply_verdict(&json!({"control": "skip"})).expect("verdict");
     assert_eq!(ctrl, HookControl::Skip);
+}
+
+#[test]
+fn before_compact_veto_means_skip() {
+    // command hook exit 2 → veto；compact 把 veto 解读为跳过本次压缩。
+    let mut step = BeforeCompact { token_estimate: 9000, threshold: 8000 };
+    let ctrl = step.apply_verdict(&json!({"control": "veto"})).expect("verdict");
+    assert_eq!(ctrl, HookControl::Skip);
+}
+
+#[test]
+fn tool_apply_veto_means_break() {
+    // 默认 step（如 ToolApply）把 veto 解读为 Break。
+    let mut step = tool_apply();
+    let ctrl = step.apply_verdict(&json!({"control": "veto"})).expect("verdict");
+    assert_eq!(ctrl, HookControl::Break { reason: AcpStopReason::EndTurn });
 }
 
 #[test]

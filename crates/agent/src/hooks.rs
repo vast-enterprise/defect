@@ -77,11 +77,10 @@ pub struct HookMatcher {
 }
 
 impl HookMatcher {
-    /// Step 模型的匹配：按工具名（从 step 信封取，非工具 step 传 `None`）。
+    /// Step 模型的匹配：按工具名 + safety（都从 step 信封取，非工具 step 传 `None`）。
     ///
-    /// 字段全空 = 命中所有。`tool` 精确、`tool_glob` 通配。`safety` 过滤在 step 模型下由信封字段
-    /// 承载，迁移期暂只按工具名过滤（safety 过滤待 step 信封补 safety 字段后接入）。
-    pub fn matches_step(&self, tool: Option<&str>) -> bool {
+    /// 字段全空 = 命中所有。`tool` 精确、`tool_glob` 通配、`safety` 任一命中（空 vec = 不过滤）。
+    pub fn matches_step(&self, tool: Option<&str>, safety: Option<SafetyClass>) -> bool {
         if let Some(expected) = &self.tool
             && tool.is_none_or(|n| n != expected)
         {
@@ -89,6 +88,11 @@ impl HookMatcher {
         }
         if let Some(pat) = &self.tool_glob
             && tool.is_none_or(|n| !glob_match(pat, n))
+        {
+            return false;
+        }
+        if !self.safety.is_empty()
+            && safety.is_none_or(|s| !self.safety.contains(&s))
         {
             return false;
         }
@@ -329,16 +333,20 @@ impl HookEngine for DefaultHookEngine {
                 return step::HookControl::Proceed;
             }
 
-            // matcher 用工具名过滤——从 step 信封里取（仅 *ToolApply* step 带 tool）。
-            let envelope0 = step.to_envelope();
+            // matcher 用工具名 / safety 过滤——从 step 信封里取（仅 *ToolApply* step 带这些字段）。
+            let envelope0 = with_common_header(step.to_envelope(), step.event_name(), &ctx);
             let tool = envelope0.get("tool").and_then(Value::as_str);
+            let safety = envelope0
+                .get("safety")
+                .and_then(Value::as_str)
+                .and_then(parse_safety);
 
             for entry in entries {
-                if !entry.matcher.matches_step(tool) {
+                if !entry.matcher.matches_step(tool, safety) {
                     continue;
                 }
-                // 每个 handler 看到的是上一个 handler 改写后的信封。
-                let envelope = step.to_envelope();
+                // 每个 handler 看到的是上一个 handler 改写后的信封 + 通用头。
+                let envelope = with_common_header(step.to_envelope(), step.event_name(), &ctx);
                 let timeout = entry.timeout.unwrap_or(DEFAULT_HANDLER_TIMEOUT);
                 let handler_ctx = HookCtx::new(ctx.session_id, ctx.cwd, ctx.cancel.clone());
                 let fut = AssertUnwindSafe(entry.handler.handle_step(&envelope, handler_ctx))
@@ -373,6 +381,34 @@ impl HookEngine for DefaultHookEngine {
     }
 }
 
+
+/// 把通用头并进 step 专属信封。通用头：`session_id` / `cwd` / `hook_event`。
+///
+/// step 自身不持有 `HookCtx`（零借用、`Send`），所以通用上下文由引擎在派发时统一补上——
+/// 用户 hook 因此在每个信封里都能拿到 session / cwd / 事件名。step 专属字段优先（不被覆盖）。
+fn with_common_header(envelope: Value, event_name: &str, ctx: &HookCtx<'_>) -> Value {
+    let Value::Object(mut map) = envelope else {
+        return envelope;
+    };
+    map.entry("session_id")
+        .or_insert_with(|| Value::String(ctx.session_id.0.to_string()));
+    map.entry("cwd")
+        .or_insert_with(|| Value::String(ctx.cwd.to_string_lossy().into_owned()));
+    map.entry("hook_event")
+        .or_insert_with(|| Value::String(event_name.to_string()));
+    Value::Object(map)
+}
+
+/// 信封里的 `safety` 字段（snake_case）→ [`SafetyClass`]。未知 / 缺省 → `None`。
+fn parse_safety(s: &str) -> Option<SafetyClass> {
+    match s {
+        "read_only" => Some(SafetyClass::ReadOnly),
+        "mutating" => Some(SafetyClass::Mutating),
+        "destructive" => Some(SafetyClass::Destructive),
+        "network" => Some(SafetyClass::Network),
+        _ => None,
+    }
+}
 
 // catch_unwind payload → 文本，避免依赖具体 panic 类型
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
@@ -463,6 +499,7 @@ mod test {
         let cwd = Path::new("/");
         let mut step = step::BeforeToolApply {
             tool_name: "bash".to_string(),
+            safety: crate::tool::SafetyClass::ReadOnly,
             args: serde_json::json!({}),
             result: None,
         };
@@ -493,11 +530,95 @@ mod test {
         let cwd = Path::new("/");
         let mut step = step::BeforeToolApply {
             tool_name: "bash".to_string(),
+            safety: crate::tool::SafetyClass::ReadOnly,
             args: serde_json::json!({}),
             result: None,
         };
         let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
         // 不命中 → Proceed。
         assert_eq!(control, step::HookControl::Proceed);
+    }
+
+    #[tokio::test]
+    async fn dispatch_matcher_filters_by_safety() {
+        let engine = DefaultHookEngine::new();
+        let mut table = HandlerTable::empty();
+        // 只匹配 Destructive 的 handler；step 的 safety 是 ReadOnly → 不命中。
+        table.push_step(
+            "before_tool_apply",
+            StepHandlerEntry::new(
+                HookMatcher {
+                    safety: vec![SafetyClass::Destructive],
+                    ..Default::default()
+                },
+                Arc::new(StubStepHandler {
+                    verdict: serde_json::json!({"control": "break"}),
+                }),
+            ),
+        );
+        engine.reload(table);
+
+        let session_id = SessionId::new("s1");
+        let cwd = Path::new("/");
+        let mut step = step::BeforeToolApply {
+            tool_name: "bash".to_string(),
+            safety: SafetyClass::ReadOnly,
+            args: serde_json::json!({}),
+            result: None,
+        };
+        let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
+        assert_eq!(control, step::HookControl::Proceed);
+
+        // safety 命中（Destructive）→ handler 跑，返回 break。
+        let mut step2 = step::BeforeToolApply {
+            tool_name: "bash".to_string(),
+            safety: SafetyClass::Destructive,
+            args: serde_json::json!({}),
+            result: None,
+        };
+        let control2 = engine.dispatch(&mut step2, ctx(&session_id, cwd)).await;
+        assert!(matches!(control2, step::HookControl::Break { .. }));
+    }
+
+    #[tokio::test]
+    async fn dispatch_merges_common_header() {
+        let engine = DefaultHookEngine::new();
+        // 用一个回显信封的 handler 确认通用头被并入。
+        struct EchoHandler {
+            seen: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
+        }
+        impl StepHandler for EchoHandler {
+            fn handle_step<'a>(
+                &'a self,
+                envelope: &'a Value,
+                _ctx: HookCtx<'a>,
+            ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
+                *self.seen.lock().unwrap() = Some(envelope.clone());
+                Box::pin(async { Ok(None) })
+            }
+        }
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut table = HandlerTable::empty();
+        table.push_step(
+            "after_session_enter",
+            StepHandlerEntry::new(
+                HookMatcher::default(),
+                Arc::new(EchoHandler { seen: seen.clone() }),
+            ),
+        );
+        engine.reload(table);
+
+        let session_id = SessionId::new("sess-9");
+        let cwd = Path::new("/repo");
+        let mut step = step::AfterSessionEnter {
+            cwd: "/repo".to_string(),
+            source: step::SessionSource::New,
+            additional_context: Vec::new(),
+        };
+        let _ = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
+        let env = seen.lock().unwrap().clone().expect("handler saw envelope");
+        assert_eq!(env["session_id"], "sess-9");
+        assert_eq!(env["cwd"], "/repo");
+        assert_eq!(env["hook_event"], "after_session_enter");
     }
 }

@@ -1,6 +1,12 @@
 //! `[hooks]` 段解析。
 //!
-//! 详见 `docs/internal/hooks.md` §5。
+//! 详见 `docs/internal/hooks.md` §5、`docs/internal/hook-step-context.md`。
+//!
+//! ## 形态
+//!
+//! `[hooks]` 是一张表，键是挂载点的 `event_name`（snake_case，如 `before_turn_end`），值是该事件下
+//! 的 hook 条目数组。事件名的合法集合是 `defect_agent::hooks::step::ALL_EVENT_NAMES`——拼错/未知的
+//! 事件键 **hard fail**（不静默丢弃）。特殊键 `disable` 不是事件，是禁用指令数组。
 //!
 //! ## 为什么 hooks 不走 `ConfigToml::try_into`
 //!
@@ -8,15 +14,15 @@
 //! 但 hooks 数组的合并语义是 **append + dedupe**（§5.4）——TOML 默认数组覆盖
 //! 会让 project-local 静默移除上游 hook，等同 claude-code 的 issue #106。
 //! 因此 hooks 在 layer 阶段就要按数组 append 合并，且每条 hook 要保留来源
-//! [`ConfigSource`] 供 Phase G 的 trust gating 使用。
+//! [`ConfigSource`] 供 trust gating 使用。
 //!
-//! 此模块的入口是 [`parse_layer_hooks`]：从一个 layer 的原始
-//! [`toml::Value`] 抽出当前层声明的 hooks，附上 source 标签返回。
-//! 跨层合并逻辑（append + dedupe + apply disable）在 [`crate::loader`] 里。
+//! 此模块的入口是 [`parse_layer_hooks`]：从一个 layer 的原始 [`toml::Value`] 抽出当前层声明的
+//! hooks，附上 source 标签返回。跨层合并（append + dedupe + apply disable）在 [`crate::loader`]。
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use defect_agent::hooks::step::is_known_event;
 use defect_agent::tool::SafetyClass;
 use serde::Deserialize;
 use toml::Value as TomlValue;
@@ -37,36 +43,9 @@ pub(crate) struct LayerHooks {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HookDisable {
-    pub(crate) event: HookEventTag,
+    pub(crate) event: String,
     pub(crate) matcher: HookMatcher,
     pub(crate) handler: HookHandlerSpec,
-}
-
-/// 事件标签——内部用，1:1 对应 `HooksConfig` 五个字段。
-///
-/// 仅含 5 件 Sync 拦截事件。8 件 Async 观察事件（`session_end` / `turn_start`
-/// 等）尚无配置桶；落地时这里要扩、`HooksSection` 同步加字段。缺口全貌见
-/// `docs/internal/hooks.md` §11。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HookEventTag {
-    SessionStart,
-    UserPromptSubmit,
-    PreToolUse,
-    PostToolUse,
-    PostToolUseFailure,
-}
-
-impl HookEventTag {
-    pub(crate) fn from_key(key: &str) -> Option<Self> {
-        Some(match key {
-            "session_start" => Self::SessionStart,
-            "user_prompt_submit" => Self::UserPromptSubmit,
-            "pre_tool_use" => Self::PreToolUse,
-            "post_tool_use" => Self::PostToolUse,
-            "post_tool_use_failure" => Self::PostToolUseFailure,
-            _ => return None,
-        })
-    }
 }
 
 /// 从一层的原始 TOML 抽出该层声明的 hook 条目与 disable 指令。
@@ -81,123 +60,94 @@ pub(crate) fn parse_layer_hooks(
     let Some(hooks_value) = value.get("hooks") else {
         return Ok(LayerHooks::default());
     };
-    let raw: HooksSection = hooks_value
-        .clone()
-        .try_into()
-        .map_err(|err: toml::de::Error| ConfigError::Invalid {
-            path: path.clone(),
-            message: format!("invalid [hooks] section: {err}"),
-        })?;
+    let table = hooks_value.as_table().ok_or_else(|| ConfigError::Invalid {
+        path: path.clone(),
+        message: "[hooks] must be a table of event-name → entries".to_string(),
+    })?;
 
     let mut entries = HooksConfig::default();
-    let attach = |dst: &mut Vec<HookEntry>,
-                  raw_list: Vec<HookEntryRaw>,
-                  bucket: HookEventTag,
-                  path: &PathBuf|
-     -> Result<(), ConfigError> {
-        for raw in raw_list {
-            dst.push(HookEntry {
-                matcher: raw.matcher.into_typed(),
-                handler: raw.handler.into_typed(bucket, path)?,
-                source,
+    let mut disables = Vec::new();
+
+    for (key, raw) in table {
+        if key == "disable" {
+            let raw_list: Vec<HookDisableRaw> =
+                raw.clone().try_into().map_err(|err: toml::de::Error| {
+                    ConfigError::Invalid {
+                        path: path.clone(),
+                        message: format!("invalid [[hooks.disable]]: {err}"),
+                    }
+                })?;
+            for d in raw_list {
+                if !is_known_event(&d.event) {
+                    return Err(ConfigError::Invalid {
+                        path: path.clone(),
+                        message: format!(
+                            "[[hooks.disable]].event = {:?} is not a known hook event name",
+                            d.event
+                        ),
+                    });
+                }
+                disables.push(HookDisable {
+                    event: d.event,
+                    matcher: d.matcher.into_typed(),
+                    handler: d.handler.into_typed(&path)?,
+                });
+            }
+            continue;
+        }
+
+        // 事件键：必须是已知挂载点，否则 hard fail（不静默丢弃拼错的键）。
+        if !is_known_event(key) {
+            return Err(ConfigError::Invalid {
+                path: path.clone(),
+                message: format!("[[hooks.{key}]] is not a known hook event name"),
             });
         }
-        Ok(())
-    };
-
-    attach(
-        &mut entries.session_start,
-        raw.session_start.unwrap_or_default(),
-        HookEventTag::SessionStart,
-        &path,
-    )?;
-    attach(
-        &mut entries.user_prompt_submit,
-        raw.user_prompt_submit.unwrap_or_default(),
-        HookEventTag::UserPromptSubmit,
-        &path,
-    )?;
-    attach(
-        &mut entries.pre_tool_use,
-        raw.pre_tool_use.unwrap_or_default(),
-        HookEventTag::PreToolUse,
-        &path,
-    )?;
-    attach(
-        &mut entries.post_tool_use,
-        raw.post_tool_use.unwrap_or_default(),
-        HookEventTag::PostToolUse,
-        &path,
-    )?;
-    attach(
-        &mut entries.post_tool_use_failure,
-        raw.post_tool_use_failure.unwrap_or_default(),
-        HookEventTag::PostToolUseFailure,
-        &path,
-    )?;
-
-    let disables = raw
-        .disable
-        .unwrap_or_default()
-        .into_iter()
-        .map(|raw| {
-            let event = HookEventTag::from_key(&raw.event).ok_or_else(|| ConfigError::Invalid {
+        let raw_list: Vec<HookEntryRaw> =
+            raw.clone().try_into().map_err(|err: toml::de::Error| ConfigError::Invalid {
                 path: path.clone(),
-                message: format!(
-                    "[[hooks.disable]].event = {:?} is not a known event name",
-                    raw.event
-                ),
+                message: format!("invalid [[hooks.{key}]]: {err}"),
             })?;
-            Ok(HookDisable {
-                event,
-                matcher: raw.matcher.into_typed(),
-                handler: raw.handler.into_typed(event, &path)?,
-            })
-        })
-        .collect::<Result<Vec<_>, ConfigError>>()?;
+        for r in raw_list {
+            entries.push(
+                key.clone(),
+                HookEntry {
+                    matcher: r.matcher.into_typed(),
+                    handler: r.handler.into_typed(&path)?,
+                    source,
+                },
+            );
+        }
+    }
 
     Ok(LayerHooks { entries, disables })
 }
 
 /// 把多层 [`LayerHooks`] 合并成最终 [`HooksConfig`]：
-/// - 各层数组按声明顺序 append（user → project → project-local → cli）
+/// - 各事件桶按声明顺序 append（user → project → project-local → cli）
 /// - (matcher, handler) 完全相同的连续条目去重——保留首次出现
-/// - 应用所有 [`HookDisable`]：从对应桶里删掉所有 (matcher, handler) 三元组
-///   匹配的条目，无论这条 hook 来自哪一层
+/// - 应用所有 [`HookDisable`]：从对应桶里删掉所有 (matcher, handler) 匹配的条目，无论来自哪层
 pub(crate) fn merge_layer_hooks(layers: Vec<LayerHooks>) -> HooksConfig {
     let mut merged = HooksConfig::default();
     let mut disables: Vec<HookDisable> = Vec::new();
 
     for layer in layers {
-        merged.session_start.extend(layer.entries.session_start);
-        merged
-            .user_prompt_submit
-            .extend(layer.entries.user_prompt_submit);
-        merged.pre_tool_use.extend(layer.entries.pre_tool_use);
-        merged.post_tool_use.extend(layer.entries.post_tool_use);
-        merged
-            .post_tool_use_failure
-            .extend(layer.entries.post_tool_use_failure);
+        for (event, list) in layer.entries.buckets {
+            merged.buckets.entry(event).or_default().extend(list);
+        }
         disables.extend(layer.disables);
     }
 
-    dedupe_in_place(&mut merged.session_start);
-    dedupe_in_place(&mut merged.user_prompt_submit);
-    dedupe_in_place(&mut merged.pre_tool_use);
-    dedupe_in_place(&mut merged.post_tool_use);
-    dedupe_in_place(&mut merged.post_tool_use_failure);
+    for bucket in merged.buckets.values_mut() {
+        dedupe_in_place(bucket);
+    }
 
     for disable in disables {
-        let bucket = match disable.event {
-            HookEventTag::SessionStart => &mut merged.session_start,
-            HookEventTag::UserPromptSubmit => &mut merged.user_prompt_submit,
-            HookEventTag::PreToolUse => &mut merged.pre_tool_use,
-            HookEventTag::PostToolUse => &mut merged.post_tool_use,
-            HookEventTag::PostToolUseFailure => &mut merged.post_tool_use_failure,
-        };
-        bucket.retain(|entry| {
-            !(entry.matcher == disable.matcher && entry.handler == disable.handler)
-        });
+        if let Some(bucket) = merged.buckets.get_mut(&disable.event) {
+            bucket.retain(|entry| {
+                !(entry.matcher == disable.matcher && entry.handler == disable.handler)
+            });
+        }
     }
 
     merged
@@ -226,22 +176,8 @@ fn dedupe_in_place(entries: &mut Vec<HookEntry>) {
 // Raw deserialization shapes
 // ---------------------------------------------------------------------------
 
-// TODO(hooks-async)：本结构**没有** `deny_unknown_fields`。后果：用户写
-// `[[hooks.turn_start]]` 之类超前/拼错的事件键会被 serde 静默丢弃，hook 永不
-// 触发却不报错——违反「要约束就 hard fail 别静默忽略」原则。落地 async 事件桶
-// 时一并补 `deny_unknown_fields`（与其余 config 层、skill manifest 对齐）。
-// 取舍与顺序见 `docs/internal/hooks.md` §11.2。
-#[derive(Debug, Default, Deserialize)]
-struct HooksSection {
-    session_start: Option<Vec<HookEntryRaw>>,
-    user_prompt_submit: Option<Vec<HookEntryRaw>>,
-    pre_tool_use: Option<Vec<HookEntryRaw>>,
-    post_tool_use: Option<Vec<HookEntryRaw>>,
-    post_tool_use_failure: Option<Vec<HookEntryRaw>>,
-    disable: Option<Vec<HookDisableRaw>>,
-}
-
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HookEntryRaw {
     #[serde(default)]
     #[serde(rename = "match")]
@@ -250,6 +186,7 @@ struct HookEntryRaw {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HookDisableRaw {
     event: String,
     #[serde(default)]
@@ -259,6 +196,7 @@ struct HookDisableRaw {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HookMatcherRaw {
     tool: Option<String>,
     tool_glob: Option<String>,
@@ -299,7 +237,7 @@ enum HookHandlerRaw {
 }
 
 impl HookHandlerRaw {
-    fn into_typed(self, event: HookEventTag, path: &Path) -> Result<HookHandlerSpec, ConfigError> {
+    fn into_typed(self, path: &std::path::Path) -> Result<HookHandlerSpec, ConfigError> {
         let invalid = |message: String| ConfigError::Invalid {
             path: path.to_path_buf(),
             message,
@@ -368,17 +306,12 @@ impl HookHandlerRaw {
                 system,
                 render,
                 timeout_sec,
-            } => {
-                // §4.3.2：所有 5 件套都允许 prompt handler；引擎不在配置层做
-                // 「不要把 prompt 挂到 PreToolUse」之类的策略校验。
-                let _ = event;
-                Ok(HookHandlerSpec::Prompt(HookPromptSpec {
-                    model,
-                    system,
-                    render: render.into_typed(),
-                    timeout_sec,
-                }))
-            }
+            } => Ok(HookHandlerSpec::Prompt(HookPromptSpec {
+                model,
+                system,
+                render: render.into_typed(),
+                timeout_sec,
+            })),
         }
     }
 }

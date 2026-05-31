@@ -1134,24 +1134,24 @@ fn parses_hooks_section_full_shape() {
     write(
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
-[[hooks.session_start]]
+[[hooks.after_session_enter]]
 handler = { type = "builtin", name = "preload-readme" }
 
-[[hooks.user_prompt_submit]]
+[[hooks.before_ingest]]
 handler = { type = "builtin", name = "skill-router" }
 
-[[hooks.pre_tool_use]]
+[[hooks.before_tool_apply]]
 match = { tool = "bash", safety = ["destructive"] }
 handler = { type = "command", argv = ["./scripts/audit.sh"], timeout_sec = 10 }
 
-[[hooks.pre_tool_use]]
+[[hooks.before_tool_apply]]
 match = { tool_glob = "fs.*" }
 handler = { type = "command", shell = "bash", command = "echo hi" }
 
-[[hooks.post_tool_use]]
+[[hooks.after_tool_apply]]
 handler = { type = "builtin", name = "tracing-audit" }
 
-[[hooks.post_tool_use_failure]]
+[[hooks.before_turn_end]]
 handler = { type = "prompt", system = "diagnose", render = { type = "json" }, timeout_sec = 5 }
 "#,
     );
@@ -1159,14 +1159,14 @@ handler = { type = "prompt", system = "diagnose", render = { type = "json" }, ti
     let loaded = load_config(test_options(&tmp)).expect("load config");
     let hooks = &loaded.effective.hooks;
 
-    assert_eq!(hooks.session_start.len(), 1);
+    assert_eq!(hooks.get("after_session_enter").len(), 1);
     assert!(matches!(
-        &hooks.session_start[0].handler,
+        &hooks.get("after_session_enter")[0].handler,
         HookHandlerSpec::Builtin { name } if name == "preload-readme"
     ));
 
-    assert_eq!(hooks.pre_tool_use.len(), 2);
-    let first = &hooks.pre_tool_use[0];
+    assert_eq!(hooks.get("before_tool_apply").len(), 2);
+    let first = &hooks.get("before_tool_apply")[0];
     assert_eq!(first.matcher.tool.as_deref(), Some("bash"));
     assert_eq!(first.matcher.safety, vec![SafetyClass::Destructive]);
     match &first.handler {
@@ -1179,23 +1179,20 @@ handler = { type = "prompt", system = "diagnose", render = { type = "json" }, ti
         other => panic!("expected argv command, got {other:?}"),
     }
 
-    let second = &hooks.pre_tool_use[1];
+    let second = &hooks.get("before_tool_apply")[1];
     assert!(matches!(
         &second.handler,
         HookHandlerSpec::Command(HookCommandSpec::Shell { .. })
     ));
 
-    assert_eq!(hooks.post_tool_use.len(), 1);
-    assert_eq!(hooks.post_tool_use_failure.len(), 1);
+    assert_eq!(hooks.get("after_tool_apply").len(), 1);
+    assert_eq!(hooks.get("before_turn_end").len(), 1);
     assert!(matches!(
-        &hooks.post_tool_use_failure[0].handler,
+        &hooks.get("before_turn_end")[0].handler,
         HookHandlerSpec::Prompt(_)
     ));
 
-    assert_eq!(hooks.session_start[0].source, ConfigSource::User);
-
-    // `[hooks]` 段被 `ConfigToml::hooks` 吸收字段放过，不会触发未知 key 报错。
-    // load_config 成功本身即证明这一点（deny_unknown_fields 不会误杀 hooks）。
+    assert_eq!(hooks.get("after_session_enter")[0].source, ConfigSource::User);
 }
 
 #[test]
@@ -1206,21 +1203,21 @@ fn hooks_append_across_layers_in_declaration_order() {
     write(
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
-[[hooks.pre_tool_use]]
+[[hooks.before_tool_apply]]
 handler = { type = "builtin", name = "user-hook" }
 "#,
     );
     write(
         &repo.join(".defect/config.toml"),
         r#"
-[[hooks.pre_tool_use]]
+[[hooks.before_tool_apply]]
 handler = { type = "builtin", name = "project-hook" }
 "#,
     );
     write(
         &repo.join(PROJECT_LOCAL_CONFIG_RELATIVE),
         r#"
-[[hooks.pre_tool_use]]
+[[hooks.before_tool_apply]]
 handler = { type = "builtin", name = "local-hook" }
 "#,
     );
@@ -1229,7 +1226,7 @@ handler = { type = "builtin", name = "local-hook" }
     let names: Vec<&str> = loaded
         .effective
         .hooks
-        .pre_tool_use
+        .get("before_tool_apply")
         .iter()
         .map(|e| match &e.handler {
             HookHandlerSpec::Builtin { name } => name.as_str(),
@@ -1241,7 +1238,7 @@ handler = { type = "builtin", name = "local-hook" }
     let sources: Vec<ConfigSource> = loaded
         .effective
         .hooks
-        .pre_tool_use
+        .get("before_tool_apply")
         .iter()
         .map(|e| e.source)
         .collect();
@@ -1261,14 +1258,14 @@ fn hooks_dedupe_identical_entries_across_layers() {
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
     let body = r#"
-[[hooks.post_tool_use]]
+[[hooks.after_tool_apply]]
 handler = { type = "builtin", name = "tracing-audit" }
 "#;
     write(&tmp.path().join("xdg/defect/config.toml"), body);
     write(&repo.join(".defect/config.toml"), body);
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
-    assert_eq!(loaded.effective.hooks.post_tool_use.len(), 1);
+    assert_eq!(loaded.effective.hooks.get("after_tool_apply").len(), 1);
 }
 
 #[test]
@@ -1279,7 +1276,7 @@ fn hooks_disable_removes_upstream_entry() {
     write(
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
-[[hooks.post_tool_use]]
+[[hooks.after_tool_apply]]
 handler = { type = "builtin", name = "tracing-audit" }
 "#,
     );
@@ -1287,13 +1284,13 @@ handler = { type = "builtin", name = "tracing-audit" }
         &repo.join(PROJECT_LOCAL_CONFIG_RELATIVE),
         r#"
 [[hooks.disable]]
-event = "post_tool_use"
+event = "after_tool_apply"
 handler = { type = "builtin", name = "tracing-audit" }
 "#,
     );
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
-    assert!(loaded.effective.hooks.post_tool_use.is_empty());
+    assert!(loaded.effective.hooks.get("after_tool_apply").is_empty());
 }
 
 #[test]
@@ -1304,7 +1301,7 @@ fn hooks_invalid_command_handler_errors_loud() {
     write(
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
-[[hooks.pre_tool_use]]
+[[hooks.before_tool_apply]]
 handler = { type = "command", argv = [], timeout_sec = 1 }
 "#,
     );

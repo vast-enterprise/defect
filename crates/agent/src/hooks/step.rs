@@ -27,6 +27,33 @@ use agent_client_protocol_schema::{ContentBlock, StopReason as AcpStopReason};
 use serde_json::{Value, json};
 
 use crate::llm::{ToolResultBody, Usage};
+use crate::tool::SafetyClass;
+
+/// 全部挂载点的 `event_name`（snake_case）——配置层校验事件名、CLI 装配分桶的唯一真相源。
+///
+/// 顺序无意义；新增 step 时在此追加一行，配置层即自动认这个新事件名（无需改 config crate）。
+pub const ALL_EVENT_NAMES: &[&str] = &[
+    "after_session_enter",
+    "after_turn_enter",
+    "before_ingest",
+    "after_ingest",
+    "before_compact",
+    "after_compact",
+    "before_generate",
+    "after_generate",
+    "before_permission",
+    "after_permission",
+    "before_tool_apply",
+    "after_tool_apply",
+    "after_tool_batch",
+    "before_turn_end",
+];
+
+/// 某个事件名是否是已知挂载点。配置层用它 fail-fast 掉拼错的事件键。
+#[must_use]
+pub fn is_known_event(name: &str) -> bool {
+    ALL_EVENT_NAMES.contains(&name)
+}
 
 // ---------------------------------------------------------------------------
 // 控制流
@@ -93,6 +120,16 @@ pub trait HookStep: Send {
 ///
 /// `break` 可带 `stop_reason`（缺省 `end_turn`）。校验在调用方做（哪个 step 允许哪个 control）。
 fn parse_control(verdict: &Value) -> Result<HookControl, VerdictError> {
+    // 默认：`veto` 解读为 `Break`（多数 step 的否决语义）。turn-end / compact 用
+    // `parse_control_veto` 覆盖成自己的语义。
+    parse_control_veto(verdict, HookControl::Break {
+        reason: AcpStopReason::EndTurn,
+    })
+}
+
+/// 同 [`parse_control`]，但把抽象的 `"veto"` 控制（command hook exit 2 产生）解读为 `veto_as`——
+/// 让每个 step 按自己的否决语义翻译（turn-end→Continue、compact→Skip、其余→Break）。
+fn parse_control_veto(verdict: &Value, veto_as: HookControl) -> Result<HookControl, VerdictError> {
     let Some(ctrl) = verdict.get("control") else {
         return Ok(HookControl::Proceed);
     };
@@ -102,6 +139,7 @@ fn parse_control(verdict: &Value) -> Result<HookControl, VerdictError> {
             "proceed" => Ok(HookControl::Proceed),
             "continue" => Ok(HookControl::Continue),
             "skip" => Ok(HookControl::Skip),
+            "veto" => Ok(veto_as),
             "break" => {
                 let reason = verdict
                     .get("stop_reason")
@@ -153,6 +191,37 @@ fn stop_reason_str(reason: AcpStopReason) -> &'static str {
     }
 }
 
+/// [`ToolResultBody`] → 信封 JSON。Text/Json 直接放；多模态 Content 退化成文本摘要
+/// （图片块标注占位），让 hook 信封保持紧凑可读。
+fn tool_result_body_to_json(body: &ToolResultBody) -> Value {
+    match body {
+        ToolResultBody::Text { text } => Value::String(text.clone()),
+        ToolResultBody::Json { value } => value.clone(),
+        ToolResultBody::Content { blocks } => {
+            use crate::llm::ToolResultContent;
+            let text: String = blocks
+                .iter()
+                .map(|b| match b {
+                    ToolResultContent::Text { text } => text.clone(),
+                    ToolResultContent::Image { mime, .. } => format!("[image: {mime}]"),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Value::String(text)
+        }
+    }
+}
+
+/// [`SafetyClass`] → snake_case 字符串（信封用，与引擎侧 `parse_safety` 对称）。
+fn safety_str(s: SafetyClass) -> &'static str {
+    match s {
+        SafetyClass::ReadOnly => "read_only",
+        SafetyClass::Mutating => "mutating",
+        SafetyClass::Destructive => "destructive",
+        SafetyClass::Network => "network",
+    }
+}
+
 /// snake_case 字符串 → [`AcpStopReason`]。未知值回退 `EndTurn`。
 fn parse_stop_reason(s: &str) -> AcpStopReason {
     match s {
@@ -201,7 +270,8 @@ impl HookStep for BeforeTurnEnd {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        let control = parse_control(verdict)?;
+        // turn-end 的"否决（veto）"= 续命（Continue）：command hook exit 2 在这里意味着"别停"。
+        let control = parse_control_veto(verdict, HookControl::Continue)?;
         let ctx = parse_additional_context(verdict)?;
         // 在 turn-end，additional_context 即续命反馈。
         self.feedback.extend(ctx);
@@ -229,6 +299,8 @@ pub struct SyntheticToolResult {
 #[derive(Debug, Clone)]
 pub struct BeforeToolApply {
     pub tool_name: String,
+    /// 工具的 safety 等级——进信封供 matcher 的 safety 过滤用。
+    pub safety: SafetyClass,
     /// 可改的工具参数。
     pub args: Value,
     /// 将产出的结果。`None` = 真去跑工具；`Some` = short-circuit。
@@ -243,6 +315,7 @@ impl HookStep for BeforeToolApply {
     fn to_envelope(&self) -> Value {
         json!({
             "tool": self.tool_name,
+            "safety": safety_str(self.safety),
             "args": self.args,
         })
     }
@@ -474,7 +547,8 @@ impl HookStep for BeforeCompact {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        parse_control(verdict)
+        // compact 的"否决（veto）"= 跳过本次压缩（Skip）。
+        parse_control_veto(verdict, HookControl::Skip)
     }
 }
 
@@ -603,6 +677,8 @@ impl HookStep for AfterPermission {
 pub struct AfterToolApply {
     pub tool_name: String,
     pub is_error: bool,
+    /// 工具产出的结果体（已产出，非 Option）——进信封供 hook 看到工具输出内容。
+    pub output: ToolResultBody,
     pub additional_context: Vec<ContentBlock>,
 }
 
@@ -612,7 +688,11 @@ impl HookStep for AfterToolApply {
     }
 
     fn to_envelope(&self) -> Value {
-        json!({ "tool": self.tool_name, "is_error": self.is_error })
+        json!({
+            "tool": self.tool_name,
+            "is_error": self.is_error,
+            "output": tool_result_body_to_json(&self.output),
+        })
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {

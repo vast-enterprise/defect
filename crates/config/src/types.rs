@@ -209,26 +209,31 @@ pub struct EffectiveConfig {
 // Hooks
 // ---------------------------------------------------------------------------
 
-/// hook 系统的有效配置：按事件类别分桶，组内按声明顺序执行 pipeline。
+/// hook 系统的有效配置：按 step `event_name` 分桶，组内按声明顺序执行 pipeline。
 ///
-/// 详见 `docs/internal/hooks.md` §3.4 / §5。
+/// 桶的键是挂载点的 `event_name`（snake_case，如 `before_turn_end`）——与
+/// `defect_agent::hooks::step::ALL_EVENT_NAMES` 同一套名字。用 map 而非固定字段：新增挂载点时
+/// 配置层零改动。详见 `docs/internal/hooks.md`。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HooksConfig {
-    pub session_start: Vec<HookEntry>,
-    pub user_prompt_submit: Vec<HookEntry>,
-    pub pre_tool_use: Vec<HookEntry>,
-    pub post_tool_use: Vec<HookEntry>,
-    pub post_tool_use_failure: Vec<HookEntry>,
+    /// `event_name` → 该事件下声明的条目（按声明顺序）。
+    pub buckets: std::collections::BTreeMap<String, Vec<HookEntry>>,
 }
 
 impl HooksConfig {
     /// 该配置上是否声明过任何 hook。`false` 时 CLI 装配可直接走 noop 引擎。
     pub fn is_empty(&self) -> bool {
-        self.session_start.is_empty()
-            && self.user_prompt_submit.is_empty()
-            && self.pre_tool_use.is_empty()
-            && self.post_tool_use.is_empty()
-            && self.post_tool_use_failure.is_empty()
+        self.buckets.values().all(Vec::is_empty)
+    }
+
+    /// 取某事件下的条目（无则空切片）。
+    pub fn get(&self, event_name: &str) -> &[HookEntry] {
+        self.buckets.get(event_name).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// 在某事件下追加一条。
+    pub fn push(&mut self, event_name: impl Into<String>, entry: HookEntry) {
+        self.buckets.entry(event_name.into()).or_default().push(entry);
     }
 }
 
