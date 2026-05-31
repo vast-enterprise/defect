@@ -217,6 +217,7 @@ text = "model-specific guidance"
 request_limit = 32
 max_llm_retries = 2
 compact_threshold_tokens = 120000
+max_hook_continues = 3   # before-turn-end hook 强制续命硬上限（防 hook 无限 Continue）
 
 [providers.anthropic]
 base_url = "https://api.anthropic.com"

@@ -112,6 +112,9 @@ pub struct TurnConfig {
     pub max_llm_retries: u32,
     /// `0` = 不限。v0 默认不限。
     pub max_concurrent_tools: usize,
+    /// `before turn-end` hook 强制续命的硬上限——防止 hook 一直 `Continue` 把 turn
+    /// 拖成死循环。见 `docs/internal/hook-step-context.md` §5.7。默认 3。
+    pub max_hook_continues: u32,
 }
 
 impl Default for TurnConfig {
@@ -133,6 +136,7 @@ impl Default for TurnConfig {
             compact_ratio: Some(0.85),
             max_llm_retries: 3,
             max_concurrent_tools: 0,
+            max_hook_continues: DEFAULT_MAX_HOOK_CONTINUES,
         }
     }
 }
@@ -280,7 +284,7 @@ impl<'a> TurnRunner<'a> {
     }
 
     async fn run_inner(&self) -> Result<TurnOutcome, TurnError> {
-        let mut state = TurnState::new(self.config.request_limit);
+        let mut state = TurnState::new(self.config.request_limit, self.config.max_hook_continues);
         loop {
             if self.cancel.is_cancelled() {
                 return Ok(turn_outcome(&state, AcpStopReason::Cancelled));
@@ -546,27 +550,31 @@ struct TurnOutcome {
 }
 
 
-/// `before turn-end` hook 强制续命的硬上限——防止 hook 一直 `Continue` 把 turn 拖成死循环。
+/// `before turn-end` hook 强制续命次数的**默认**上限。可被
+/// [`TurnConfig::max_hook_continues`] 覆盖（配置项 `[turn].max_hook_continues`）。
 /// 见 `docs/internal/hook-step-context.md` §5.7。
-const MAX_STOP_HOOK_CONTINUES: u32 = 3;
+pub(crate) const DEFAULT_MAX_HOOK_CONTINUES: u32 = 3;
 
 struct TurnState {
     request_count: u32,
     usage: Usage,
     cap: Option<u32>,
     expand_on_progress: bool,
-    /// 本 turn 已被 `before turn-end` hook 续命几次。硬上限 [`MAX_STOP_HOOK_CONTINUES`]。
+    /// 本 turn 已被 `before turn-end` hook 续命几次。上限 [`Self::max_stop_hook_continues`]。
     stop_hook_continues: u32,
+    /// 续命硬上限（来自 [`TurnConfig::max_hook_continues`]）。防 hook 无限 `Continue`。
+    max_stop_hook_continues: u32,
 }
 
 impl TurnState {
-    fn new(limit: TurnRequestLimit) -> Self {
+    fn new(limit: TurnRequestLimit, max_hook_continues: u32) -> Self {
         Self {
             request_count: 0,
             usage: Usage::default(),
             cap: limit.initial_cap(),
             expand_on_progress: limit.expand_on_progress(),
             stop_hook_continues: 0,
+            max_stop_hook_continues: max_hook_continues,
         }
     }
 
@@ -587,7 +595,7 @@ impl TurnState {
 
     /// 是否还允许 `before turn-end` hook 续命（未达硬上限）。
     fn may_stop_hook_continue(&self) -> bool {
-        self.stop_hook_continues < MAX_STOP_HOOK_CONTINUES
+        self.stop_hook_continues < self.max_stop_hook_continues
     }
 
     /// 记一次续命。

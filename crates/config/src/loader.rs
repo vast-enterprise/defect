@@ -266,6 +266,9 @@ fn build_effective_config(
     if let Some(max_concurrent_tools) = config.turn.max_concurrent_tools {
         turn.max_concurrent_tools = max_concurrent_tools;
     }
+    if let Some(max_hook_continues) = config.turn.max_hook_continues {
+        turn.max_hook_continues = max_hook_continues;
+    }
     if turn.sampling == SamplingParams::default() {
         // 保持 default sampling 显式落在 effective config 中，方便后续扩字段。
     }

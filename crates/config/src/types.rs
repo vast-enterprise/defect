@@ -830,6 +830,8 @@ pub(crate) struct TurnSection {
     pub(crate) compact_ratio: Option<f64>,
     pub(crate) max_llm_retries: Option<u32>,
     pub(crate) max_concurrent_tools: Option<usize>,
+    /// `before turn-end` hook 强制续命的硬上限。`None` ⇒ 用 agent 侧默认（3）。
+    pub(crate) max_hook_continues: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

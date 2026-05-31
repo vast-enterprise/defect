@@ -43,6 +43,7 @@ model = "user-model"
 
 [turn]
 max_llm_retries = 5
+max_hook_continues = 7
 "#,
     );
     write(
@@ -65,6 +66,7 @@ model = "local-model"
     assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
     assert_eq!(loaded.effective.cli.model, "local-model");
     assert_eq!(loaded.effective.turn.max_llm_retries, 5);
+    assert_eq!(loaded.effective.turn.max_hook_continues, 7);
     assert_eq!(loaded.layers.layers.len(), 4);
 }
 

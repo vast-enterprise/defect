@@ -4,7 +4,7 @@ use agent_client_protocol_schema::{
 };
 
 use super::content_block_to_message_content;
-use super::{MAX_STOP_HOOK_CONTINUES, TurnRequestLimit, TurnState};
+use super::{DEFAULT_MAX_HOOK_CONTINUES, TurnRequestLimit, TurnState};
 use crate::llm::{ImageData, MessageContent};
 use crate::session::TurnError;
 
@@ -12,11 +12,11 @@ use crate::session::TurnError;
 
 #[test]
 fn stop_hook_continues_capped() {
-    let mut state = TurnState::new(TurnRequestLimit::Unbounded);
+    let mut state = TurnState::new(TurnRequestLimit::Unbounded, DEFAULT_MAX_HOOK_CONTINUES);
     // 初始可续命。
     assert!(state.may_stop_hook_continue());
     // 续到上限。
-    for _ in 0..MAX_STOP_HOOK_CONTINUES {
+    for _ in 0..DEFAULT_MAX_HOOK_CONTINUES {
         assert!(state.may_stop_hook_continue());
         state.note_stop_hook_continue();
     }
@@ -25,8 +25,17 @@ fn stop_hook_continues_capped() {
 }
 
 #[test]
+fn stop_hook_continues_respects_custom_cap() {
+    // 自定义上限 1：续命一次后即到顶。
+    let mut state = TurnState::new(TurnRequestLimit::Unbounded, 1);
+    assert!(state.may_stop_hook_continue());
+    state.note_stop_hook_continue();
+    assert!(!state.may_stop_hook_continue());
+}
+
+#[test]
 fn stop_hook_continue_counter_starts_zero() {
-    let state = TurnState::new(TurnRequestLimit::Unbounded);
+    let state = TurnState::new(TurnRequestLimit::Unbounded, DEFAULT_MAX_HOOK_CONTINUES);
     assert_eq!(state.stop_hook_continues, 0);
     assert!(state.may_stop_hook_continue());
 }
