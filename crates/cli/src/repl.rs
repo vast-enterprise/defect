@@ -59,14 +59,34 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
     );
     write(&mut out, &banner.dimmed().to_string()).await?;
 
+    // 持久订阅：循环外订阅**一次**，跨所有 turn 排空——含 session driver 自发的
+    // 自主续转 turn（后台 subagent 完成后消化结果那一轮）。这是与 ACP
+    // `spawn_session_pump` 同构的关键：事件消费的生命周期 = session 生命周期，
+    // 而非单个 turn。早先按 turn 订阅时，turn 之间（卡在 read_line）无人排空，
+    // 自主续转 turn 的事件全丢——表现为"subagent 后台返回后父 agent 没续上"。
+    let mut events = session.subscribe();
+
     // 提示符（带 ANSI 着色，零显示宽度的颜色码不影响重绘对齐）。
     let prompt = "› ".cyan().bold().to_string();
     loop {
         out.flush().await?;
-        // 读一行：进 raw 模式自己做行编辑（见模块文档）。放 spawn_blocking——
-        // 读行在 turn 之间、不与事件流并发，阻塞读最简单。
+
+        // 读一行：进 raw 模式自己做行编辑（见模块文档）。放 spawn_blocking 阻塞读，
+        // **同时**继续排空事件流——这样用户在敲下一条 prompt 时，后台任务完成触发的
+        // 自主续转 turn 仍能实时打到屏幕上（不会等到下次 run_turn 才回放）。
         let prompt_for_read = prompt.clone();
-        let outcome = tokio::task::spawn_blocking(move || read_line(&prompt_for_read)).await??;
+        let mut read = tokio::task::spawn_blocking(move || read_line(&prompt_for_read));
+        let outcome = loop {
+            tokio::select! {
+                joined = &mut read => break joined??,
+                ev = events.next() => {
+                    if let Some(ev) = ev {
+                        render_event(&mut out, ev).await?;
+                        out.flush().await?;
+                    }
+                }
+            }
+        };
 
         let line = match outcome {
             ReadOutcome::Line(line) => line,
@@ -81,15 +101,12 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
             break;
         }
 
-        // 先订阅再 run_turn：事件在 turn 期间通过事件流推送，turn future
-        // 只返回最终 StopReason。两者并发跑。
-        let mut events = session.subscribe();
+        // run_turn future 只返回最终 StopReason；本轮事件经上面那条持久订阅推送。
         let prompt_blocks = vec![ContentBlock::Text(TextContent::new(prompt_text.to_owned()))];
         let turn = session.run_turn(prompt_blocks);
         tokio::pin!(turn);
 
-        // 把事件流泵到 stdout，直到 turn future resolve（它返回时本轮事件
-        // 已发完——TurnEnded 在 run_turn 返回前发出）。
+        // 把事件流泵到 stdout，直到 turn future resolve。
         let stop = loop {
             tokio::select! {
                 result = &mut turn => break result,
@@ -102,7 +119,8 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
             }
         };
 
-        // 排掉 turn 返回瞬间可能还在 buffer 里的尾部事件（如 TurnEnded）。
+        // 排掉 turn 返回瞬间可能还在 buffer 里的尾部事件（如 TurnEnded）。下一轮
+        // 输入阶段的 select 也会继续排空，这里只是尽早把本轮尾巴打全。
         while let Some(Some(ev)) = events.next().now_or_never() {
             render_event(&mut out, ev).await?;
         }

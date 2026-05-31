@@ -19,7 +19,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol_schema::ToolCallUpdateFields;
+use agent_client_protocol_schema::{ToolCallId, ToolCallUpdateFields};
 use futures::Stream;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::BoxError;
 use crate::fs::FsBackend;
 use crate::http::HttpClient;
+use crate::session::EventEmitter;
 use crate::shell::ShellBackend;
 
 mod skill;
@@ -174,6 +175,25 @@ pub struct ToolContext<'a> {
     /// future，借用无法跨过 await。由顶层 [`crate::session::turn::TurnRunner`]
     /// 在构造 ctx 时注入；嵌套子 agent turn 不注入（结构性禁止后台任务自我繁殖）。
     pub background: Option<crate::session::BackgroundTasks>,
+    /// subagent 事件桥：`Some` 时工具可把自己内部派生的子 turn 事件包成
+    /// [`crate::event::AgentEvent::Subagent`] 转发回父 session 的事件流，供
+    /// observability 嵌套展示。当前唯一使用者是 `spawn_agent`。由顶层
+    /// [`crate::session::turn::TurnRunner`] 在驱动每个工具时按该工具的
+    /// [`ToolCallId`] 注入；子 agent 嵌套 turn 不注入（不递归桥接）。
+    pub subagent_bridge: Option<SubagentBridge>,
+}
+
+/// 把工具内部派生的子 turn 事件桥接回父 session 事件流所需的句柄。
+///
+/// 持有父 session 的 [`EventEmitter`] 与发起本工具调用的 [`ToolCallId`]——
+/// 后者让 observability 把子事件嵌套到对应的父 tool span 之下。`Clone` 廉价
+/// （内部 `Arc` + 小字符串）。
+#[derive(Clone)]
+pub struct SubagentBridge {
+    /// 父 session 的事件总线。包好的 [`crate::event::AgentEvent::Subagent`] 投到这里。
+    pub parent_events: Arc<EventEmitter>,
+    /// 发起子 agent 的那次工具调用 id（父 trace 里对应的 tool span）。
+    pub parent_tool_call_id: ToolCallId,
 }
 
 impl<'a> ToolContext<'a> {
@@ -196,6 +216,7 @@ impl<'a> ToolContext<'a> {
             http,
             current_model,
             background: None,
+            subagent_bridge: None,
         }
     }
 
@@ -204,6 +225,14 @@ impl<'a> ToolContext<'a> {
     #[must_use]
     pub fn with_background(mut self, background: crate::session::BackgroundTasks) -> Self {
         self.background = Some(background);
+        self
+    }
+
+    /// 注入 subagent 事件桥。工具驱动 [`crate::session::turn`] 为每个工具调用按其
+    /// [`ToolCallId`] 注入，让 `spawn_agent` 能把子 turn 事件嵌套回父 trace。
+    #[must_use]
+    pub fn with_subagent_bridge(mut self, bridge: SubagentBridge) -> Self {
+        self.subagent_bridge = Some(bridge);
         self
     }
 }

@@ -521,6 +521,13 @@ async fn drive_tool_stream(
     if let Some(bg) = background {
         ctx = ctx.with_background(bg);
     }
+    // 注入 subagent 事件桥：让 `spawn_agent` 能把子 turn 事件包成
+    // AgentEvent::Subagent 转发回本 session 的事件流（按本次 tool_call_id 嵌套）。
+    // 对绝大多数工具是惰性的——只有 spawn_agent 会用到。
+    ctx = ctx.with_subagent_bridge(crate::tool::SubagentBridge {
+        parent_events: events.clone(),
+        parent_tool_call_id: id.clone(),
+    });
     let mut stream = tool.execute(args, ctx);
 
     let mut last_body: Option<ToolResultBody> = None;

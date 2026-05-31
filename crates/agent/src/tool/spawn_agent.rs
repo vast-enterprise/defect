@@ -26,11 +26,13 @@ use std::sync::Arc;
 use agent_client_protocol_schema::{
     Content, ContentBlock, SessionId, TextContent, ToolCallContent, ToolCallUpdateFields, ToolKind,
 };
+use futures::StreamExt;
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::BoxError;
+use crate::event::AgentEvent;
 use crate::hooks::NoopHookEngine;
 use crate::llm::{HostedCapabilities, MessageContent, ProviderRegistry, Role, SamplingParams};
 use crate::policy::{NonInteractivePolicy, SandboxPolicy};
@@ -223,6 +225,8 @@ impl Tool for SpawnAgentTool {
         let http = ctx.http.clone();
         let parent_model = ctx.current_model.to_string();
         let background = ctx.background.clone();
+        // subagent 事件桥：把子 turn 事件嵌套回父 trace（observability）。
+        let bridge = ctx.subagent_bridge.clone();
         // 同步路径用 turn 子 token（turn 结束即取消）；后台路径不用它，改用
         // BackgroundTasks 在 spawn 时 mint 的 session 级子 token（见下）。
         let turn_cancel = ctx.cancel.child_token();
@@ -260,6 +264,10 @@ impl Tool for SpawnAgentTool {
                     shell,
                     http,
                     parent_model,
+                    // 后台路径：发起它的 spawn_agent tool span 当场就收尾了，没有
+                    // 仍然张开的父 span 可嵌套——故不桥接（projector 那侧也会因
+                    // 父 turn trace 已结束而丢弃）。后台 subagent 的可观测性是独立议题。
+                    bridge: None,
                 };
                 // spawn 给任务 mint 一个 session 级子 token——任务的取消生命周期独立于
                 // 发起它的 turn，turn 结束不会杀掉它。
@@ -297,6 +305,9 @@ impl Tool for SpawnAgentTool {
                 shell,
                 http,
                 parent_model,
+                // 同步路径：父 spawn_agent tool span 全程张开（阻塞等子 turn），
+                // 子事件可嵌套其下。
+                bridge,
             };
             match run_subagent_core(parsed, deps, turn_cancel).await {
                 Ok(answer) => {
@@ -329,6 +340,8 @@ struct SubagentDeps {
     shell: Arc<dyn crate::shell::ShellBackend>,
     http: Arc<dyn crate::http::HttpClient>,
     parent_model: String,
+    /// subagent 事件桥：`Some` 时把子 turn 事件嵌套回父 trace。仅同步路径设置。
+    bridge: Option<crate::tool::SubagentBridge>,
 }
 
 /// 从原始 args 里尽力取 profile 名（仅供后台启动确认消息用，失败回退占位符）。
@@ -360,6 +373,7 @@ async fn run_subagent_core(
         shell,
         http,
         parent_model,
+        bridge,
     } = deps;
 
     let Some(profile) = profiles.get(&parsed.profile) else {
@@ -420,6 +434,28 @@ async fn run_subagent_core(
     // 子 turn 的局部件——全在本 async block 内，跑完即弃。
     let history = VecHistory::new();
     let events = Arc::new(EventEmitter::new());
+
+    // observability 桥：把子 turn 的每个事件包成 AgentEvent::Subagent 转发回父
+    // session 的事件流，让 langfuse 把子 turn 嵌套到父 spawn_agent tool span 下。
+    // 仅 observability——隔离契约对 storage / wire / REPL 不变（它们忽略 Subagent）。
+    // 桥接 task 订阅子 emitter；子 turn 跑完、本函数返回 drop 掉 `events`（最后一个
+    // 强引用）后，子流结束，task 自然退出，无需显式 join。
+    let bridge_task = bridge.map(|b| {
+        let mut sub_events = events.subscribe();
+        let agent_type = parsed.profile.clone();
+        tokio::spawn(async move {
+            while let Some(inner) = sub_events.next().await {
+                b.parent_events
+                    .emit(AgentEvent::Subagent {
+                        parent_tool_call_id: b.parent_tool_call_id.clone(),
+                        agent_type: agent_type.clone(),
+                        inner: Box::new(inner),
+                    })
+                    .await;
+            }
+        })
+    });
+
     let permissions = PermissionGate::new();
     let sub_policy = NonInteractivePolicy::new(policy);
     let hooks = NoopHookEngine;
@@ -460,7 +496,18 @@ async fn run_subagent_core(
     };
 
     let prompt = vec![ContentBlock::Text(TextContent::new(parsed.task))];
-    if let Err(err) = runner.run(prompt).await {
+    let run_result = runner.run(prompt).await;
+
+    // 子 turn 结束：drop 掉 runner 与本地 `events` 强引用，让子事件流走向关闭，
+    // 桥接 task 把缓冲里剩余事件冲刷给父 emitter 后退出。await 它确保所有子事件
+    // 在父 spawn_agent tool span 收尾（本函数返回 → ToolCallFinished）之前到达。
+    drop(runner);
+    drop(events);
+    if let Some(task) = bridge_task {
+        let _ = task.await;
+    }
+
+    if let Err(err) = run_result {
         return Err(ToolError::Execution(BoxError::new(io_err(format!(
             "subagent turn failed: {err}"
         )))));

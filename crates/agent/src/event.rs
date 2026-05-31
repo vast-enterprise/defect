@@ -130,6 +130,29 @@ pub enum AgentEvent {
         tokens_before: u64,
         tokens_after: u64,
     },
+
+    // ---------- subagent 嵌套（仅 observability） ----------
+    /// 一个 `spawn_agent` 子 agent turn 内部产生的事件，**包裹**后从子 turn
+    /// 的隔离事件流桥接到父 session 的事件流。
+    ///
+    /// 设计意图：子 agent 在 fresh、隔离上下文里跑（自己的 [`crate::session::EventEmitter`]），
+    /// 父 agent **看不到**它的中间过程——这是 `spawn_agent` 的隔离契约。但
+    /// observability（langfuse）希望把子 turn 的 LLM 调用 / 工具调用嵌套展示在
+    /// 父那次 `spawn_agent` 工具调用的 span 之下。于是 `spawn_agent` 在子 emitter
+    /// 上挂一个桥接订阅者，把每个子事件包成本变体转发给父 emitter。
+    ///
+    /// **消费约定**：只有 langfuse projector 处理它（投成挂在父 tool span 下的
+    /// 嵌套 generation / span）。其余消费者（`defect-storage` 落盘、`defect-acp`
+    /// wire 投射、REPL 渲染）一律**忽略**——隔离契约对它们不变。
+    Subagent {
+        /// 父 session 里发起本子 agent 的那次 `spawn_agent` 工具调用 id，用于把
+        /// 子事件嵌套到对应的父 tool span 之下。
+        parent_tool_call_id: ToolCallId,
+        /// 子 agent 的 profile 名（如 `weebs-in`），进嵌套 span 的命名 / 元数据。
+        agent_type: String,
+        /// 被包裹的子 turn 事件。`Box` 避免 enum 因自引用而无界膨胀。
+        inner: Box<AgentEvent>,
+    },
 }
 
 /// 一次 LLM 调用的请求快照——只带 observability 还原 generation `input`

@@ -241,6 +241,47 @@ fn run_tool(tool: &SpawnAgentTool, args: serde_json::Value, cwd: &Path) -> Vec<T
     })
 }
 
+/// 跑工具，但注入一个指向 `parent_events` 的 subagent 桥，并在跑之前订阅父
+/// emitter；返回 (工具事件, 父 emitter 收到的事件)。用于验证子 turn 事件被包成
+/// `AgentEvent::Subagent` 桥接回父。
+fn run_tool_with_bridge(
+    tool: &SpawnAgentTool,
+    args: serde_json::Value,
+    cwd: &Path,
+    parent_tool_call_id: &str,
+) -> (Vec<ToolEvent>, Vec<AgentEvent>) {
+    let fs: Arc<dyn FsBackend> = Arc::new(NoopFsBackend);
+    let shell: Arc<dyn ShellBackend> = Arc::new(crate::shell::NoopShellBackend);
+    let http = Arc::new(NoopHttpClient);
+    let parent_events = Arc::new(EventEmitter::new());
+    let bridge = crate::tool::SubagentBridge {
+        parent_events: parent_events.clone(),
+        parent_tool_call_id: agent_client_protocol_schema::ToolCallId::new(parent_tool_call_id),
+    };
+    let ctx = ToolContext::new(cwd, CancellationToken::new(), fs, shell, http, "fake-1")
+        .with_subagent_bridge(bridge);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("rt");
+    rt.block_on(async {
+        let mut parent_sub = parent_events.subscribe();
+        let mut tool_events = Vec::new();
+        let mut stream = tool.execute(args, ctx);
+        while let Some(ev) = stream.next().await {
+            tool_events.push(ev);
+        }
+        // 工具返回前已 await 桥接 task（drop events + task.await），父 emitter 的
+        // 事件此刻都已 send 完毕——逐条排空（不会阻塞，缓冲里就这些）。
+        drop(parent_events);
+        let mut bridged = Vec::new();
+        while let Some(ev) = parent_sub.next().await {
+            bridged.push(ev);
+        }
+        (tool_events, bridged)
+    })
+}
+
 fn completed_text(events: &[ToolEvent]) -> Option<String> {
     events.iter().find_map(|ev| match ev {
         ToolEvent::Completed(fields) => fields.content.as_ref().and_then(|c| {
@@ -312,6 +353,66 @@ fn returns_subagent_final_text() {
         tmp.path(),
     );
     assert_eq!(completed_text(&events).as_deref(), Some("the answer"));
+}
+
+#[test]
+fn subagent_events_bridged_to_parent() {
+    // 子 turn 跑一个回文本的 provider。注入 subagent 桥后，父 emitter 应收到
+    // 一串 AgentEvent::Subagent（带正确的 parent_tool_call_id / agent_type），
+    // 内含子 turn 的 TurnStarted / LlmCall / AssistantText / TurnEnded。
+    let tmp = tempfile::TempDir::new().expect("tmp");
+    let profile = SubagentProfile {
+        description: "d".to_string(),
+        model: None,
+        system_prompt: "sys".to_string(),
+        tool_allow: vec![],
+        sampling: None,
+    };
+    let tool = SpawnAgentTool::new(
+        profiles_with(profile),
+        registry_with(Arc::new(TextProvider {
+            text: "the answer".into(),
+        })),
+        Arc::new(AskWritesPolicy::new()),
+        process_tools_with(vec![]),
+        None,
+    );
+    let (tool_events, bridged) = run_tool_with_bridge(
+        &tool,
+        json!({"profile": "reviewer", "task": "do it"}),
+        tmp.path(),
+        "parent-call-1",
+    );
+    // 工具本身仍正常返回最终文本。
+    assert_eq!(completed_text(&tool_events).as_deref(), Some("the answer"));
+
+    // 父 emitter 收到的全是 Subagent 包裹，且 parent_tool_call_id / agent_type 正确。
+    assert!(!bridged.is_empty(), "expected bridged subagent events");
+    for ev in &bridged {
+        match ev {
+            AgentEvent::Subagent {
+                parent_tool_call_id,
+                agent_type,
+                ..
+            } => {
+                assert_eq!(parent_tool_call_id.0.as_ref(), "parent-call-1");
+                assert_eq!(agent_type, "reviewer");
+            }
+            other => panic!("expected Subagent wrapper, got {other:?}"),
+        }
+    }
+    // 至少应包含子 turn 的边界与一段助手文本。
+    let has_turn_started = bridged.iter().any(|ev| {
+        matches!(ev, AgentEvent::Subagent { inner, .. } if matches!(**inner, AgentEvent::TurnStarted))
+    });
+    let has_assistant_text = bridged.iter().any(|ev| {
+        matches!(ev, AgentEvent::Subagent { inner, .. } if matches!(**inner, AgentEvent::AssistantText { .. }))
+    });
+    assert!(has_turn_started, "subagent TurnStarted should be bridged");
+    assert!(
+        has_assistant_text,
+        "subagent AssistantText should be bridged"
+    );
 }
 
 #[test]
