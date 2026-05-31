@@ -50,23 +50,6 @@ file = "AGENTS.md"
 
 更完整的字段说明、合并语义、安全边界与 MCP / HTTP 代理等高级配置，参见 [`docs/internal/config.md`](docs/internal/config.md)。
 
-## CLI 可接入能力一览
-
-| 能力域         | 支持项                                                                                                 | 配置入口                                                                             | lib 模块                                                  |
-| -------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| Provider       | echo / anthropic / openai / deepseek / litellm / bedrock / custom（OpenAI 或 Anthropic-Messages）      | `[default].provider`、`[providers.*]`、`--provider` / `DEFECT_PROVIDER`              | `defect_cli::providers`                                   |
-| Tool（进程内） | bash / read_file / write_file / edit_file / fetch / search                                             | `[tools.*]`                                                                          | `defect_cli::tools`                                       |
-| Tool（hosted） | web_search                                                                                             | `[capabilities.web_search]`（详见 [capabilities.md](docs/internal/capabilities.md)） | provider adapter                                          |
-| Tool（MCP）    | stdio / streamable-http，按 `enabled_servers` 白名单装配                                               | `[mcp]`                                                                              | `defect_cli::mcp_servers`                                 |
-| Sandbox        | read-only / ask-writes / open / deny-all                                                               | `[sandbox].mode`                                                                     | `defect_cli::policy`                                      |
-| Hook           | 5 件套 sync 事件 × 3 种 handler（builtin / command / prompt），详见 [hooks.md](docs/internal/hooks.md) | `[hooks.*]`                                                                          | `defect_cli::hooks`                                       |
-| HTTP 栈 / 代理 | 超时、重试、退避、UA、from-env / disabled / explicit 代理                                              | `[http]`                                                                             | `defect_cli::http_stack`                                  |
-| Storage        | session 持久化、resume                                                                                 | —                                                                                    | `defect_storage`（默认根目录由 `defect_cli::paths` 解析） |
-| Tracing        | EnvFilter（stderr，自动 ANSI），OTLP endpoint schema 已落地                                            | `RUST_LOG` / `[tracing]`                                                             | `defect_cli::tracing_init`                                |
-| CLI 参数       | `--provider` / `--model` / `--config key.path=value`（多次）                                           | —                                                                                    | `defect_cli::args`                                        |
-
-字段级细节（每家 provider 的可选项、每个 tool 的限额、hook 5 件套 outcome 表等）见 [`docs/internal/config.md`](docs/internal/config.md) 与各专题文档。
-
 ## 二次开发/裁剪
 
 `defect-cli` 已拆成 `lib` + `bin/cli`：所有装配 helper（provider / tool / hook / mcp / sandbox / http / storage / tracing）都在 `defect_cli::*` 模块导出，主 binary `src/bin/cli.rs` 只剩三段拼装逻辑。要做二次开发：
