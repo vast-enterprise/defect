@@ -18,8 +18,7 @@ use defect_agent::hooks::builtin::BuiltinRegistry;
 use defect_agent::hooks::command::{CommandHandler, CommandSpec, ShellKind as AgentShellKind};
 use defect_agent::hooks::prompt::{PromptHandler, PromptRender as AgentPromptRender, PromptSpec};
 use defect_agent::hooks::{
-    DefaultHookEngine, HandlerEntry, HandlerTable, HookEventKind, HookHandler,
-    HookMatcher as AgentHookMatcher,
+    DefaultHookEngine, HandlerTable, HookMatcher as AgentHookMatcher, StepHandler, StepHandlerEntry,
 };
 use defect_agent::llm::{LlmProvider, ProviderRegistry};
 use defect_config::{
@@ -57,17 +56,17 @@ pub fn build_hook_engine(
 ) -> Result<DefaultHookEngine, HookEngineBuildError> {
     let mut table = HandlerTable::empty();
 
-    for (kind, entries) in [
-        (HookEventKind::SessionStart, &hooks.session_start),
-        (HookEventKind::UserPromptSubmit, &hooks.user_prompt_submit),
-        (HookEventKind::PreToolUse, &hooks.pre_tool_use),
-        (HookEventKind::PostToolUse, &hooks.post_tool_use),
-        (
-            HookEventKind::PostToolUseFailure,
-            &hooks.post_tool_use_failure,
-        ),
+    // config 的事件桶名 → step 模型的挂载点 event_name。迁移期映射：
+    // session_start → after_session_enter；user_prompt_submit → before_ingest；
+    // pre_tool_use → before_tool_apply；post_tool_use[_failure] → after_tool_apply。
+    for (event_name, entries) in [
+        ("after_session_enter", &hooks.session_start),
+        ("before_ingest", &hooks.user_prompt_submit),
+        ("before_tool_apply", &hooks.pre_tool_use),
+        ("after_tool_apply", &hooks.post_tool_use),
+        ("after_tool_apply", &hooks.post_tool_use_failure),
     ] {
-        push_bucket(&mut table, kind, entries, builtins, rt)?;
+        push_bucket(&mut table, event_name, entries, builtins, rt)?;
     }
 
     let engine = DefaultHookEngine::new();
@@ -77,7 +76,7 @@ pub fn build_hook_engine(
 
 fn push_bucket(
     table: &mut HandlerTable,
-    kind: HookEventKind,
+    event_name: &'static str,
     entries: &[HookEntry],
     builtins: &BuiltinRegistry,
     rt: &HookEngineCtx<'_>,
@@ -85,11 +84,11 @@ fn push_bucket(
     for entry in entries {
         let matcher = translate_matcher(&entry.matcher);
         let (handler, timeout) = build_handler(&entry.handler, builtins, rt)?;
-        let mut hook = HandlerEntry::new(matcher, handler);
+        let mut hook = StepHandlerEntry::new(matcher, handler);
         if let Some(t) = timeout {
             hook = hook.with_timeout(t);
         }
-        table.push(kind, hook);
+        table.push_step(event_name, hook);
     }
     Ok(())
 }
@@ -98,10 +97,10 @@ fn build_handler(
     spec: &HookHandlerSpec,
     builtins: &BuiltinRegistry,
     rt: &HookEngineCtx<'_>,
-) -> Result<(Arc<dyn HookHandler>, Option<Duration>), HookEngineBuildError> {
+) -> Result<(Arc<dyn StepHandler>, Option<Duration>), HookEngineBuildError> {
     match spec {
         HookHandlerSpec::Builtin { name } => {
-            let handler = builtins.lookup(name).ok_or_else(|| {
+            let handler = builtins.lookup_step(name).ok_or_else(|| {
                 let available = builtins.names().collect::<Vec<_>>().join(", ");
                 HookEngineBuildError::UnknownBuiltin {
                     name: name.clone(),
@@ -114,14 +113,14 @@ fn build_handler(
             let agent_spec = translate_command(cmd);
             let handler = CommandHandler::new(agent_spec);
             let timeout = handler.timeout();
-            Ok((Arc::new(handler) as Arc<dyn HookHandler>, timeout))
+            Ok((Arc::new(handler) as Arc<dyn StepHandler>, timeout))
         }
         HookHandlerSpec::Prompt(prompt) => {
             let provider = resolve_prompt_provider(prompt, rt)?;
             let agent_spec = translate_prompt(prompt, provider, rt.default_model.to_string());
             let handler = PromptHandler::new(agent_spec);
             let timeout = handler.timeout();
-            Ok((Arc::new(handler) as Arc<dyn HookHandler>, timeout))
+            Ok((Arc::new(handler) as Arc<dyn StepHandler>, timeout))
         }
         // `HookHandlerSpec` 是 non_exhaustive 的——出现新形态时强制 CLI 显式
         // 加一条分支，避免默默 noop。
@@ -339,13 +338,15 @@ mod test {
         let session_id = agent_client_protocol_schema::SessionId::new("s");
         let cwd = std::path::Path::new("/");
         let hctx = defect_agent::hooks::HookCtx::new(&session_id, cwd, CancellationToken::new());
-        let ev = defect_agent::hooks::HookEvent::SessionStart {
-            source: defect_agent::hooks::SessionSource::New,
-            cwd,
+        // 空配置 → NoopHookEngine：dispatch 返回 Proceed，step 不被改动。
+        let mut step = defect_agent::hooks::step::AfterSessionEnter {
+            cwd: "/".to_string(),
+            source: defect_agent::hooks::step::SessionSource::New,
+            additional_context: Vec::new(),
         };
-        let outcome = futures::executor::block_on(arc.fire(ev, hctx));
-        assert!(outcome.block.is_none());
-        assert!(outcome.append.is_empty());
+        let control = futures::executor::block_on(arc.dispatch(&mut step, hctx));
+        assert_eq!(control, defect_agent::hooks::step::HookControl::Proceed);
+        assert!(step.additional_context.is_empty());
     }
 
     #[test]

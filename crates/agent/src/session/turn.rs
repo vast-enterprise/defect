@@ -9,39 +9,25 @@
 //! - [`EventEmitter`]：事件发布（`Arc` 共享，使工具 task 也能 emit）
 //! - [`PermissionGate`]：权限请求等待
 
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
-use agent_client_protocol_schema::{
-    Content as AcpContent, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
-    ResourceLink, StopReason as AcpStopReason, TextContent, TextResourceContents, ToolCallContent,
-    ToolCallId, ToolCallStatus, ToolCallUpdateFields,
-};
-use futures::StreamExt;
-use serde_json::Value as JsonValue;
-use tokio::task::JoinSet;
+use agent_client_protocol_schema::{ContentBlock, SessionId, StopReason as AcpStopReason};
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
 
-use crate::error::BoxError;
-use crate::event::{AgentEvent, LlmRequestSnapshot, PermissionResolution};
+use crate::event::AgentEvent;
 use crate::fs::FsBackend;
-use crate::hooks::{HookCtx, HookEngine, HookEvent, HookPatch};
+use crate::hooks::{HookCtx, HookEngine};
 use crate::http::HttpClient;
 use crate::llm::{
-    CompletionRequest, HostedCapabilities, LlmProvider, Message, MessageContent, ProviderChunk,
-    ImageData, ProviderStream, RetryHint, Role, SamplingParams, StopReason as LlmStopReason,
-    ToolChoice, ToolResultBody, ToolResultContent, Usage,
+    CompletionRequest, HostedCapabilities, LlmProvider, Message, MessageContent, Role,
+    SamplingParams, StopReason as LlmStopReason, ToolChoice, Usage,
 };
-use crate::policy::{PolicyCtx, PolicyDecision, RecordedOutcome, SandboxPolicy};
+use crate::policy::SandboxPolicy;
 use crate::session::events::EventEmitter;
 use crate::session::permissions::PermissionGate;
 use crate::session::{History, ToolRegistry, TurnError};
 use crate::shell::ShellBackend;
-use crate::tool::{Tool, ToolContext, ToolError, ToolEvent};
-use agent_client_protocol_schema::SessionId;
 
 const DEFAULT_PROMPT_FILE: &str = "AGENTS.md";
 
@@ -50,6 +36,23 @@ mod request_audit;
 
 #[path = "turn/compact.rs"]
 mod compact;
+
+#[path = "turn/content.rs"]
+mod content;
+
+#[path = "turn/llm.rs"]
+mod llm_drive;
+
+#[path = "turn/tools.rs"]
+mod tools;
+
+#[path = "turn/hooks.rs"]
+mod hooks;
+
+use content::content_block_to_message_content;
+use hooks::UserPromptHookFlow;
+use llm_drive::{assistant_message, real_input_tokens};
+use tools::{Approved, DecisionFlow, approved_tool_name, tool_results_message};
 
 pub(crate) use request_audit::RequestAuditTracker;
 
@@ -223,7 +226,36 @@ impl<'a> TurnRunner<'a> {
                 .collect(),
         });
 
+        // after Ingest hook：输入已并入 history。仅可注入。
+        {
+            let mut step = crate::hooks::step::AfterIngest {
+                committed_len: 1,
+                additional_context: Vec::new(),
+            };
+            let _ = self.hooks.dispatch(&mut step, self.hook_ctx()).await;
+            if !step.additional_context.is_empty() {
+                self.append_user_feedback(step.additional_context);
+            }
+        }
+
         self.events.emit(AgentEvent::TurnStarted).await;
+
+        // after turn enter hook：turn 作用域已进入。可注入 system context / Break 拒该 turn。
+        // 注：现状埋点在 prompt 摄入之后（设计 §6 标注的"落地调整：埋点前移"待后续）。
+        {
+            let mut step = crate::hooks::step::AfterTurnEnter {
+                is_subagent: false,
+                agent_type: None,
+                additional_context: Vec::new(),
+            };
+            let control = self.hooks.dispatch(&mut step, self.hook_ctx()).await;
+            if !step.additional_context.is_empty() {
+                self.append_user_feedback(step.additional_context);
+            }
+            if let crate::hooks::step::HookControl::Break { .. } = control {
+                return Ok(AcpStopReason::EndTurn);
+            }
+        }
 
         let result = self.run_inner().await;
 
@@ -249,7 +281,32 @@ impl<'a> TurnRunner<'a> {
 
             self.maybe_compact().await?;
 
-            let req = self.build_request();
+            let mut req = self.build_request();
+
+            // before Generate hook：可改 request（model）/ short-circuit（填合成 assistant，跳过 LLM）/ Break。
+            let mut before_gen = crate::hooks::step::BeforeGenerate {
+                model: req.model.clone(),
+                message_count: req.messages.len(),
+                attempt: state.request_count.saturating_add(1),
+                assistant_text: None,
+            };
+            let bg_control = self.hooks.dispatch(&mut before_gen, self.hook_ctx()).await;
+            req.model = before_gen.model;
+            if let Some(text) = before_gen.assistant_text {
+                // short-circuit：用合成 assistant 回复跳过真实 LLM 调用，然后走 before-turn-end 判定。
+                self.history.append(Message {
+                    role: Role::Assistant,
+                    content: vec![MessageContent::Text { text }].into(),
+                });
+                if self.decide_turn_end(&mut state).await {
+                    continue;
+                }
+                return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
+            }
+            if let crate::hooks::step::HookControl::Break { reason } = bg_control {
+                return Ok(turn_outcome(&state, reason));
+            }
+
             let (mut stream, attempt) = self.call_llm_with_retry(&req, &mut state).await?;
 
             let outcome = self.drain_provider_stream(&mut stream, &mut state).await?;
@@ -269,6 +326,21 @@ impl<'a> TurnRunner<'a> {
                 })
                 .await;
 
+            // after Generate hook：观察（usage / stop / error）。无可填产出；要干预下一轮走 before-turn-end。
+            let stop_reason_for_hook = match outcome.stop {
+                LlmStopReason::EndTurn | LlmStopReason::StopSequence => AcpStopReason::EndTurn,
+                LlmStopReason::Refusal => AcpStopReason::Refusal,
+                LlmStopReason::MaxTokens => AcpStopReason::MaxTokens,
+                LlmStopReason::ToolUse => AcpStopReason::EndTurn,
+            };
+            let mut after_gen = crate::hooks::step::AfterGenerate {
+                model: req.model.clone(),
+                usage: outcome.usage,
+                stop: stop_reason_for_hook,
+                error: None,
+            };
+            let _ = self.hooks.dispatch(&mut after_gen, self.hook_ctx()).await;
+
             // 把本次调用回报的真实输入 token 喂给 history，作为压缩阈值判断的
             // 精确基线（详见 `session/turn/compact.rs`）。本次发出的 messages 即
             // req.messages，其真实输入量就是 outcome.usage 的输入侧三项之和。
@@ -281,8 +353,14 @@ impl<'a> TurnRunner<'a> {
                 self.history.append(assistant);
             }
 
+            // 被动停止（Refusal / MaxTokens）：不经 before-turn-end hook（hook 不能续命这些），
+            // 直接退出。见 `docs/internal/hook-step-context.md` §5.7。
             match outcome.stop {
                 LlmStopReason::EndTurn | LlmStopReason::StopSequence => {
+                    // 自愿停止 → before-turn-end 判定点。
+                    if self.decide_turn_end(&mut state).await {
+                        continue;
+                    }
                     return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
                 }
                 LlmStopReason::Refusal => {
@@ -295,7 +373,21 @@ impl<'a> TurnRunner<'a> {
             }
 
             if outcome.tool_uses.is_empty() {
+                // 自愿停止（没要工具）→ 同一个 before-turn-end 判定点。
+                if self.decide_turn_end(&mut state).await {
+                    continue;
+                }
                 return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
+            }
+
+            // before Permission hook（v0 仅 observe 打桩；policy 仍是放行权威，见 hooks.md §7.3）。
+            for tu in &outcome.tool_uses {
+                let mut bp = crate::hooks::step::BeforePermission {
+                    tool: tu.name.clone(),
+                    decision: "ask".to_string(),
+                    resolved: None,
+                };
+                let _ = self.hooks.dispatch(&mut bp, self.hook_ctx()).await;
             }
 
             let approved = match self.decide_permissions(&outcome.tool_uses).await? {
@@ -305,13 +397,45 @@ impl<'a> TurnRunner<'a> {
                 }
             };
 
+            // after Permission hook（v0 仅 observe 打桩）。
+            for a in &approved {
+                let (tool, granted) = match a {
+                    Approved::Run { .. } => (approved_tool_name(a), true),
+                    Approved::Denied { .. } | Approved::FailedArgs { .. } => {
+                        (approved_tool_name(a), false)
+                    }
+                };
+                let mut ap = crate::hooks::step::AfterPermission { tool, granted };
+                let _ = self.hooks.dispatch(&mut ap, self.hook_ctx()).await;
+            }
+
             let progressed = approved.iter().any(|a| matches!(a, Approved::Run { .. }));
             if progressed {
                 state.note_progress();
             }
 
             let results = self.run_tools_concurrently(approved).await;
+
+            // after ToolBatch hook：整批并行工具结束后、下次 LLM 调用前。可注入 / Break（graceful）。
+            let mut batch = crate::hooks::step::AfterToolBatch {
+                results: results
+                    .iter()
+                    .map(|r| crate::hooks::step::ToolBatchEntry {
+                        tool_name: r.name.clone(),
+                        is_error: r.is_error,
+                    })
+                    .collect(),
+                additional_context: Vec::new(),
+            };
+            let batch_control = self.hooks.dispatch(&mut batch, self.hook_ctx()).await;
+
             self.history.append(tool_results_message(results));
+            if !batch.additional_context.is_empty() {
+                self.append_user_feedback(batch.additional_context);
+            }
+            if let crate::hooks::step::HookControl::Break { reason } = batch_control {
+                return Ok(turn_outcome(&state, reason));
+            }
 
             if state.exceeded_request_cap() {
                 return Ok(turn_outcome(&state, AcpStopReason::MaxTurnRequests));
@@ -350,6 +474,18 @@ impl<'a> TurnRunner<'a> {
             return Ok(());
         }
 
+        // before Compact hook：hook 可 `Skip` 否决本次压缩（变更型 step，无"填产出"）。
+        let mut before = crate::hooks::step::BeforeCompact {
+            token_estimate: estimate,
+            threshold,
+        };
+        if let crate::hooks::step::HookControl::Skip =
+            self.hooks.dispatch(&mut before, self.hook_ctx()).await
+        {
+            tracing::info!("compaction vetoed by before-compact hook");
+            return Ok(());
+        }
+
         let Some(report) = compact::run(self, threshold).await? else {
             // 没有安全的压缩边界（如单个超长轮次）——本次跳过，不发事件。
             return Ok(());
@@ -360,6 +496,17 @@ impl<'a> TurnRunner<'a> {
                 tokens_after: report.tokens_after,
             })
             .await;
+
+        // after Compact hook：观察 + 可注入（注入物落 history）。
+        let mut after = crate::hooks::step::AfterCompact {
+            tokens_before: report.tokens_before,
+            tokens_after: report.tokens_after,
+            additional_context: Vec::new(),
+        };
+        let _ = self.hooks.dispatch(&mut after, self.hook_ctx()).await;
+        if !after.additional_context.is_empty() {
+            self.append_user_feedback(after.additional_context);
+        }
         Ok(())
     }
 
@@ -375,743 +522,15 @@ impl<'a> TurnRunner<'a> {
         (threshold > 0).then_some(threshold)
     }
 
-    /// 返回成功拿到的流 + 成功时的 attempt 号（供 run_inner 发 LlmCallFinished）。
-    async fn call_llm_with_retry(
-        &self,
-        req: &CompletionRequest,
-        state: &mut TurnState,
-    ) -> Result<(ProviderStream, u32), TurnError> {
-        let max_attempts = self.config.max_llm_retries.saturating_add(1).max(1);
-        let vendor = self.provider.info().vendor.to_string();
-        let mut attempt: u32 = 0;
-        loop {
-            attempt += 1;
-            state.request_count = state.request_count.saturating_add(1);
-            // 一次 attempt = 一个 llm_call span。span 包住"发请求 + 等响应 +
-            // 决定是否重试 + 退避 sleep"四步——失败后进入下一轮重试时
-            // 重新建 span（attempt 字段 +1），便于排障对齐每次实际请求。
-            // 注意：用 .instrument(span).await，**不要** span.enter() 然后 await
-            // ——后者会在 await 时把 entered guard 跨过 await，是 tracing
-            // 文档显式警告的 anti-pattern。
-            let span = tracing::info_span!(
-                "llm_call",
-                vendor = %vendor,
-                model = %req.model,
-                attempt,
-            );
-            let step = self
-                .call_llm_attempt(req, attempt, max_attempts)
-                .instrument(span)
-                .await;
-            match step {
-                LlmAttempt::Done(stream) => return Ok((stream, attempt)),
-                LlmAttempt::Failed(err) => return Err(TurnError::Provider(err)),
-                // Cancelled：返回空流，attempt 号无意义（不会发 Finished，见 run_inner）。
-                LlmAttempt::Cancelled => return Ok((empty_stream(), attempt)),
-                LlmAttempt::Retry => continue,
-            }
-        }
-    }
-
-    /// 一次 llm 调用 attempt：发请求、emit 事件、决定下一步。
-    /// 与 [`Self::call_llm_with_retry`] 拆开是为了让 `info_span!` 通过
-    /// `.instrument(...)` 包住整段 future 而不跨 await 持 entered guard。
-    async fn call_llm_attempt(
-        &self,
-        req: &CompletionRequest,
-        attempt: u32,
-        max_attempts: u32,
-    ) -> LlmAttempt {
-        self.events
-            .emit(AgentEvent::LlmCallStarted {
-                model: req.model.clone(),
-                attempt,
-                // Arc 包裹：fan-out 给多个订阅者时 clone 退化成引用计数，
-                // 避免长上下文下整份 messages 历史被反复深拷贝。
-                request: Arc::new(LlmRequestSnapshot {
-                    system: req.system.clone(),
-                    messages: req.messages.clone(),
-                }),
-            })
-            .await;
-
-        match self
-            .provider
-            .complete(req.clone(), self.cancel.clone())
-            .await
-        {
-            Ok(stream) => {
-                // 成功路径**不在这里**发 LlmCallFinished——此刻流还没 drain，
-                // 本次调用的 usage 尚未到达。Finished 由 run_inner 在 drain 之后
-                // 带上 outcome.usage（单次调用真 usage）发出。
-                LlmAttempt::Done(stream)
-            }
-            Err(err) => {
-                let hint = err.retry_hint();
-                let err_text = err.to_string();
-                self.events
-                    .emit(AgentEvent::LlmCallFinished {
-                        model: req.model.clone(),
-                        attempt,
-                        usage: Usage::default(),
-                        error: Some(err_text),
-                    })
-                    .await;
-
-                if attempt >= max_attempts || matches!(hint, RetryHint::No) {
-                    tracing::warn!(error = %err, ?hint, "llm call failed permanently");
-                    return LlmAttempt::Failed(err);
-                }
-                if let Some(delay) = retry_delay(hint) {
-                    tracing::info!(
-                        ?hint,
-                        delay_ms = delay.as_millis() as u64,
-                        "llm call failed, retrying after delay"
-                    );
-                    tokio::select! {
-                        biased;
-                        () = self.cancel.cancelled() => return LlmAttempt::Cancelled,
-                        () = tokio::time::sleep(delay) => {}
-                    }
-                } else {
-                    tracing::info!(?hint, "llm call failed, retrying immediately");
-                }
-                LlmAttempt::Retry
-            }
-        }
-    }
-
-    async fn drain_provider_stream(
-        &self,
-        stream: &mut ProviderStream,
-        state: &mut TurnState,
-    ) -> Result<DrainOutcome, TurnError> {
-        let mut outcome = DrainOutcome::default();
-
-        loop {
-            tokio::select! {
-                biased;
-                () = self.cancel.cancelled() => {
-                    outcome.cancelled = true;
-                    return Ok(outcome);
-                }
-                next = stream.next() => match next {
-                    None => {
-                        if !outcome.saw_stop {
-                            outcome.stop = LlmStopReason::EndTurn;
-                        }
-                        return Ok(outcome);
-                    }
-                    Some(Err(err)) => {
-                        return Err(TurnError::Provider(err));
-                    }
-                    Some(Ok(chunk)) => {
-                        if self.handle_chunk(chunk, &mut outcome, state).await {
-                            return Ok(outcome);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// 处理单个 chunk。返回 `true` 表示流已到 Stop。
-    async fn handle_chunk(
-        &self,
-        chunk: ProviderChunk,
-        outcome: &mut DrainOutcome,
-        state: &mut TurnState,
-    ) -> bool {
-        match chunk {
-            ProviderChunk::MessageStart { .. } => false,
-            ProviderChunk::TextDelta { text } => {
-                outcome.text_buf.push_str(&text);
-                self.events
-                    .emit(AgentEvent::AssistantText {
-                        content: ContentBlock::Text(TextContent::new(text)),
-                    })
-                    .await;
-                false
-            }
-            ProviderChunk::ThinkingDelta { text } => {
-                outcome.thinking_buf.push_str(&text);
-                self.events
-                    .emit(AgentEvent::AssistantThought {
-                        content: ContentBlock::Text(TextContent::new(text)),
-                    })
-                    .await;
-                false
-            }
-            ProviderChunk::ThinkingSignature { signature } => {
-                outcome.thinking_signature = Some(signature);
-                false
-            }
-            ProviderChunk::ToolUseStart { id, name } => {
-                outcome.tool_uses.push(ToolUseAccumulated {
-                    id,
-                    name,
-                    args_buf: String::new(),
-                });
-                false
-            }
-            ProviderChunk::ToolUseArgsDelta { id, fragment } => {
-                if let Some(slot) = outcome.tool_uses.iter_mut().find(|t| t.id == id) {
-                    slot.args_buf.push_str(&fragment);
-                }
-                false
-            }
-            ProviderChunk::ToolUseEnd { .. } => false,
-            ProviderChunk::Stop { reason } => {
-                outcome.saw_stop = true;
-                outcome.stop = reason;
-                false
-            }
-            ProviderChunk::Usage(u) => {
-                outcome.usage = add_usage(outcome.usage, u);
-                state.usage = add_usage(state.usage, u);
-                false
-            }
-        }
-    }
-
-    async fn decide_permissions(
-        &self,
-        tool_uses: &[ToolUseAccumulated],
-    ) -> Result<DecisionFlow, TurnError> {
-        let mut approved: Vec<Approved> = Vec::with_capacity(tool_uses.len());
-
-        for tu in tool_uses {
-            let id = ToolCallId::new(tu.id.clone());
-
-            let Some(tool) = self.tools.get(&tu.name) else {
-                let reason = format!("tool not found: {}", tu.name);
-                self.emit_tool_failed(&id, reason.clone()).await;
-                approved.push(Approved::FailedArgs {
-                    id: id.clone(),
-                    tool_use_id: tu.id.clone(),
-                    name: tu.name.clone(),
-                    reason,
-                });
-                continue;
-            };
-
-            let mut args: JsonValue = match parse_args(&tu.args_buf) {
-                Ok(v) => v,
-                Err(reason) => {
-                    let reason = format!("invalid args: {reason}");
-                    self.emit_tool_failed(&id, reason.clone()).await;
-                    approved.push(Approved::FailedArgs {
-                        id: id.clone(),
-                        tool_use_id: tu.id.clone(),
-                        name: tu.name.clone(),
-                        reason,
-                    });
-                    continue;
-                }
-            };
-
-            // ② PreToolUse hook（Sync 拦截）
-            // 在 policy 之前——hook 可改写 args / 直接 block 让 policy 都不用算。
-            // 详见 `docs/internal/hooks.md` §7.1 / §7.3。
-            let safety_hint_pre = tool.safety_hint(&args);
-            match self
-                .fire_pre_tool_use(&id, &tu.name, &args, safety_hint_pre)
-                .await
-            {
-                PreToolHookFlow::Continue { args: new_args } => {
-                    args = new_args;
-                }
-                PreToolHookFlow::Block(reason) => {
-                    self.emit_tool_failed(&id, reason).await;
-                    approved.push(Approved::Denied {
-                        id: id.clone(),
-                        tool_use_id: tu.id.clone(),
-                        name: tu.name.clone(),
-                    });
-                    continue;
-                }
-            }
-
-            let describe_ctx = ToolContext::new(
-                self.cwd,
-                self.cancel.clone(),
-                self.fs.clone(),
-                self.shell.clone(),
-                self.http.clone(),
-                &self.config.model,
-            );
-            let description = tool.describe(&args, describe_ctx).await;
-            // raw_input 由主循环在外层填充原始 args（见 tool.rs 注释：工具自己不塞）。
-            // 不填则 ACP wire 上的 tool_call 与 langfuse span 都没有 input。
-            let mut started_fields =
-                with_status(description.fields.clone(), ToolCallStatus::Pending);
-            if started_fields.raw_input.is_none() {
-                started_fields.raw_input = Some(args.clone());
-            }
-            self.events
-                .emit(AgentEvent::ToolCallStarted {
-                    id: id.clone(),
-                    name: tu.name.clone(),
-                    fields: started_fields,
-                })
-                .await;
-
-            let safety_hint = tool.safety_hint(&args);
-            let decision =
-                self.policy
-                    .classify(PolicyCtx::new(&tu.name, safety_hint, &args, self.cwd));
-            self.events
-                .emit(AgentEvent::PolicyDecision {
-                    id: id.clone(),
-                    decision: decision.clone(),
-                })
-                .await;
-
-            match decision {
-                PolicyDecision::Allow => approved.push(Approved::Run {
-                    id,
-                    tool_use_id: tu.id.clone(),
-                    tool: tool.clone(),
-                    args,
-                }),
-                PolicyDecision::Deny => {
-                    self.emit_tool_failed(&id, "denied by policy".to_string())
-                        .await;
-                    approved.push(Approved::Denied {
-                        id: id.clone(),
-                        tool_use_id: tu.id.clone(),
-                        name: tu.name.clone(),
-                    });
-                }
-                PolicyDecision::Ask(ask) => {
-                    if ask.options.is_empty() {
-                        // 空 options 等价 Deny（见 sandbox-policy.md §2）
-                        self.emit_tool_failed(&id, "denied by policy".to_string())
-                            .await;
-                        approved.push(Approved::Denied {
-                            id: id.clone(),
-                            tool_use_id: tu.id.clone(),
-                            name: tu.name.clone(),
-                        });
-                        continue;
-                    }
-                    let outcome = self.permissions.wait(id.clone(), self.cancel.clone()).await;
-                    self.events
-                        .emit(AgentEvent::PermissionResolved {
-                            id: id.clone(),
-                            outcome: outcome.clone(),
-                        })
-                        .await;
-                    match outcome {
-                        PermissionResolution::Selected { option_id } => {
-                            let allows = ask
-                                .options
-                                .iter()
-                                .find(|o| o.id == option_id)
-                                .map(|o| o.allows)
-                                .unwrap_or(false);
-                            self.policy.record(
-                                PolicyCtx::new(&tu.name, safety_hint, &args, self.cwd),
-                                RecordedOutcome::Selected { option_id, allows },
-                            );
-                            if allows {
-                                approved.push(Approved::Run {
-                                    id,
-                                    tool_use_id: tu.id.clone(),
-                                    tool: tool.clone(),
-                                    args,
-                                });
-                            } else {
-                                self.emit_tool_failed(&id, "denied by user".to_string())
-                                    .await;
-                                approved.push(Approved::Denied {
-                                    id: id.clone(),
-                                    tool_use_id: tu.id.clone(),
-                                    name: tu.name.clone(),
-                                });
-                            }
-                        }
-                        PermissionResolution::Cancelled => {
-                            self.policy.record(
-                                PolicyCtx::new(&tu.name, safety_hint, &args, self.cwd),
-                                RecordedOutcome::Cancelled,
-                            );
-                            return Ok(DecisionFlow::Cancelled);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(DecisionFlow::Continue(approved))
-    }
-
-    async fn emit_tool_failed(&self, id: &ToolCallId, text: String) {
-        let fields = failed_fields_text(text);
-        self.events
-            .emit(AgentEvent::ToolCallStarted {
-                id: id.clone(),
-                name: String::new(),
-                fields: fields.clone(),
-            })
-            .await;
-        self.events
-            .emit(AgentEvent::ToolCallFinished {
-                id: id.clone(),
-                fields,
-            })
-            .await;
-    }
-
-    async fn run_tools_concurrently(&self, approved: Vec<Approved>) -> Vec<ToolResult> {
-        let mut joinset: JoinSet<ToolResult> = JoinSet::new();
-        let mut results: Vec<ToolResult> = Vec::with_capacity(approved.len());
-
-        // `max_concurrent_tools == 0` ⇒ 不限并发（None，快路径，永不 await permit）。
-        // 否则所有工具 task 共享一个 `Semaphore`：每个 task 在驱动工具流之前先抢一个
-        // permit，跑完（task future 结束）即归还。这给同一 turn 内一次发出 N 个
-        // `spawn_agent`（fanout）的场景一个上限，避免 spawn 风暴打爆 provider/资源。
-        let semaphore = (self.config.max_concurrent_tools > 0)
-            .then(|| Arc::new(tokio::sync::Semaphore::new(self.config.max_concurrent_tools)));
-
-        for a in approved {
-            match a {
-                Approved::Run {
-                    id,
-                    tool_use_id,
-                    tool,
-                    args,
-                } => {
-                    let cancel = self.cancel.child_token();
-                    let events = self.events.clone();
-                    let cwd = self.cwd.to_path_buf();
-                    let fs = self.fs.clone();
-                    let shell = self.shell.clone();
-                    let http = self.http.clone();
-                    let model = self.config.model.clone();
-                    let name = tool.schema().name.clone();
-                    let span = tracing::info_span!(
-                        "tool_call",
-                        tool = %name,
-                        tool_call_id = %id,
-                    );
-                    let semaphore = semaphore.clone();
-                    joinset.spawn(
-                        async move {
-                            // 抢 permit；持有到本 task future 结束（drive 跑完）自动归还。
-                            // `acquire_owned` 仅在 Semaphore 被 close 时返回 Err——本处
-                            // 永不 close，故 unwrap 安全。
-                            let _permit = match semaphore {
-                                Some(sem) => Some(sem.acquire_owned().await.expect("semaphore not closed")),
-                                None => None,
-                            };
-                            drive_tool_stream(
-                                id,
-                                tool_use_id,
-                                name,
-                                tool,
-                                args,
-                                cwd,
-                                cancel,
-                                events,
-                                fs,
-                                shell,
-                                http,
-                                model,
-                            )
-                            .await
-                        }
-                        .instrument(span),
-                    );
-                }
-                Approved::Denied {
-                    id,
-                    tool_use_id,
-                    name,
-                } => {
-                    results.push(ToolResult {
-                        id,
-                        name,
-                        tool_use_id,
-                        body: ToolResultBody::Text {
-                            text: "denied".to_string(),
-                        },
-                        is_error: true,
-                        fields: None,
-                        error: Some("denied".to_string()),
-                    });
-                }
-                Approved::FailedArgs {
-                    id,
-                    tool_use_id,
-                    name,
-                    reason,
-                } => {
-                    results.push(ToolResult {
-                        id,
-                        name,
-                        tool_use_id,
-                        body: ToolResultBody::Text {
-                            text: reason.clone(),
-                        },
-                        is_error: true,
-                        fields: None,
-                        error: Some(reason),
-                    });
-                }
-            }
-        }
-
-        while let Some(res) = joinset.join_next().await {
-            match res {
-                Ok(r) => results.push(r),
-                Err(join_err) => {
-                    tracing::error!(error = ?join_err, "tool task panicked");
-                    results.push(ToolResult {
-                        id: ToolCallId::new(""),
-                        name: String::new(),
-                        tool_use_id: String::new(),
-                        body: ToolResultBody::Text {
-                            text: format!("tool task crashed: {join_err}"),
-                        },
-                        is_error: true,
-                        fields: None,
-                        error: Some(format!("tool task crashed: {join_err}")),
-                    });
-                }
-            }
-        }
-
-        // ③/④ PostToolUse / PostToolUseFailure hook（Sync 拦截）
-        // 在 tool_result 落 history 之前给 hook 追加注释的机会。详见
-        // `docs/internal/hooks.md` §3.2 / §7.1。
-        for result in results.iter_mut() {
-            self.fire_post_tool_hook(result).await;
-        }
-
-        results
-    }
-}
-
-// ----- hook helpers -----
-
-impl<'a> TurnRunner<'a> {
-    fn hook_ctx(&self) -> HookCtx<'_> {
+    pub(super) fn hook_ctx(&self) -> HookCtx<'_> {
         HookCtx::new(self.session_id, self.cwd, self.cancel.clone())
     }
-
-    /// 触发 `UserPromptSubmit` hook。
-    ///
-    /// 处理三类 outcome：
-    /// - `block` → 拒绝该 turn（调用方返回 `Refusal`）
-    /// - `patch = UserPrompt { prepend, append }` → 改写 prompt 顺序为
-    ///   `[prepend, original, append]`，落 history 时按改写后形态
-    /// - `append` → 暂未拼到 system prompt（v0 无落点；待 system_prompt
-    ///   动态拼接落地后填上，详见 `docs/internal/hooks.md` §3.2）
-    async fn fire_user_prompt_submit(&self, prompt: Vec<ContentBlock>) -> UserPromptHookFlow {
-        let outcome = {
-            let event = HookEvent::UserPromptSubmit { content: &prompt };
-            self.hooks.fire(event, self.hook_ctx()).await
-        };
-        if let Some(reason) = outcome.block {
-            tracing::info!(reason = %reason, "user prompt blocked by hook");
-            return UserPromptHookFlow::Refused;
-        }
-        let prompt = match outcome.patch {
-            Some(HookPatch::UserPrompt { prepend, append }) => {
-                let mut combined = Vec::with_capacity(prepend.len() + prompt.len() + append.len());
-                combined.extend(prepend);
-                combined.extend(prompt);
-                combined.extend(append);
-                combined
-            }
-            Some(_) | None => prompt,
-        };
-        if !outcome.append.is_empty() {
-            // v0：UserPromptSubmit 上 outcome.append 的承诺落点是"system prompt 后缀"，
-            // 但 system_prompt 在 turn 装配时已经定型；先记 warn 以保证未来落地时
-            // 行为可观测。详见 hooks.md §3.2。
-            tracing::warn!(
-                count = outcome.append.len(),
-                "UserPromptSubmit hook returned append blocks but system_prompt is fixed at this point; dropped"
-            );
-        }
-        UserPromptHookFlow::Continue(prompt)
-    }
-
-    /// 触发 `PreToolUse` hook。
-    async fn fire_pre_tool_use(
-        &self,
-        id: &ToolCallId,
-        name: &str,
-        args: &JsonValue,
-        safety: crate::tool::SafetyClass,
-    ) -> PreToolHookFlow {
-        let event = HookEvent::PreToolUse {
-            id,
-            name,
-            args,
-            safety,
-        };
-        let outcome = self.hooks.fire(event, self.hook_ctx()).await;
-        if let Some(reason) = outcome.block {
-            tracing::info!(tool = %name, reason = %reason, "tool blocked by pre-hook");
-            return PreToolHookFlow::Block(reason);
-        }
-        let args = match outcome.patch {
-            Some(HookPatch::ToolArgs(v)) => v,
-            Some(_) | None => args.clone(),
-        };
-        if !outcome.append.is_empty() {
-            // PreToolUse 上 append 没有自然落点（hooks.md §3.2/§3.3 表）。
-            tracing::warn!(
-                tool = %name,
-                count = outcome.append.len(),
-                "PreToolUse hook returned append blocks; dropped (no landing site)"
-            );
-        }
-        PreToolHookFlow::Continue { args }
-    }
-
-    /// 触发 `PostToolUse` 或 `PostToolUseFailure` hook。把 `outcome.append`
-    /// 拼到 `result.body` 末尾——下一轮 LLM 看到 hook 注释作为工具输出的一部分。
-    async fn fire_post_tool_hook(&self, result: &mut ToolResult) {
-        let outcome = if !result.is_error
-            && let Some(fields) = result.fields.as_ref()
-        {
-            let event = HookEvent::PostToolUse {
-                id: &result.id,
-                name: &result.name,
-                fields,
-            };
-            self.hooks.fire(event, self.hook_ctx()).await
-        } else if let Some(err) = result.error.as_deref() {
-            let event = HookEvent::PostToolUseFailure {
-                id: &result.id,
-                name: &result.name,
-                error: err,
-            };
-            self.hooks.fire(event, self.hook_ctx()).await
-        } else {
-            return;
-        };
-
-        if outcome.block.is_some() {
-            // hooks.md §3.2：Post* 不允许 block；引擎层应已丢弃 + warn，
-            // 这里再次保护，确保 result 行为不变。
-        }
-
-        if outcome.append.is_empty() {
-            return;
-        }
-
-        // 把 hook 追加的 ContentBlock（仅取 Text 块）拼到 tool_result body。
-        let extra: String = outcome
-            .append
-            .iter()
-            .filter_map(|b| match b {
-                ContentBlock::Text(t) => Some(t.text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if extra.is_empty() {
-            return;
-        }
-        match &mut result.body {
-            ToolResultBody::Text { text } => {
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(&extra);
-            }
-            // 多模态结果：把追加文本作为新的文本块挂到末尾，不动图片块。
-            ToolResultBody::Content { blocks } => {
-                blocks.push(ToolResultContent::Text { text: extra });
-            }
-            ToolResultBody::Json { .. } => {}
-        }
-    }
 }
 
-enum UserPromptHookFlow {
-    Continue(Vec<ContentBlock>),
-    Refused,
-}
-
-enum PreToolHookFlow {
-    Continue { args: JsonValue },
-    Block(String),
-}
 
 // ----- internal types -----
 
-/// 一次 LLM 调用 attempt 的结果（包给 `.instrument(span).await` 的最小分支）。
-enum LlmAttempt {
-    Done(ProviderStream),
-    Failed(crate::llm::ProviderError),
-    Cancelled,
-    Retry,
-}
 
-struct DrainOutcome {
-    saw_stop: bool,
-    stop: LlmStopReason,
-    text_buf: String,
-    thinking_buf: String,
-    thinking_signature: Option<String>,
-    tool_uses: Vec<ToolUseAccumulated>,
-    usage: Usage,
-    cancelled: bool,
-}
-
-impl Default for DrainOutcome {
-    fn default() -> Self {
-        Self {
-            saw_stop: false,
-            stop: LlmStopReason::EndTurn,
-            text_buf: String::new(),
-            thinking_buf: String::new(),
-            thinking_signature: None,
-            tool_uses: Vec::new(),
-            usage: Usage::default(),
-            cancelled: false,
-        }
-    }
-}
-
-struct ToolUseAccumulated {
-    id: String,
-    name: String,
-    args_buf: String,
-}
-
-enum Approved {
-    Run {
-        id: ToolCallId,
-        tool_use_id: String,
-        tool: Arc<dyn Tool>,
-        args: JsonValue,
-    },
-    Denied {
-        id: ToolCallId,
-        tool_use_id: String,
-        name: String,
-    },
-    FailedArgs {
-        id: ToolCallId,
-        tool_use_id: String,
-        name: String,
-        reason: String,
-    },
-}
-
-/// `decide_permissions` 的返回：要么继续把 approved 列表交给执行阶段，
-/// 要么用户在 `Ask` 阶段取消了 turn。
-enum DecisionFlow {
-    Continue(Vec<Approved>),
-    Cancelled,
-}
 
 #[derive(Clone, Copy)]
 struct TurnOutcome {
@@ -1119,26 +538,18 @@ struct TurnOutcome {
     usage: Usage,
 }
 
-struct ToolResult {
-    /// 工具调用的 ACP id。`tool_use_id` 是 LLM 给的 wire id；hook 事件用
-    /// ACP id（与 `ToolCallStarted` 等事件同款），更稳定。
-    id: ToolCallId,
-    /// 工具名。`PostToolUse[Failure]` hook matcher 按 tool 名过滤要用。
-    name: String,
-    tool_use_id: String,
-    body: ToolResultBody,
-    is_error: bool,
-    /// 终态字段。`PostToolUse` 成功路径要把它喂给 hook。失败路径为 `None`。
-    fields: Option<ToolCallUpdateFields>,
-    /// 失败文本。`PostToolUseFailure` 路径要把它喂给 hook。成功路径为 `None`。
-    error: Option<String>,
-}
+
+/// `before turn-end` hook 强制续命的硬上限——防止 hook 一直 `Continue` 把 turn 拖成死循环。
+/// 见 `docs/internal/hook-step-context.md` §5.7。
+const MAX_STOP_HOOK_CONTINUES: u32 = 3;
 
 struct TurnState {
     request_count: u32,
     usage: Usage,
     cap: Option<u32>,
     expand_on_progress: bool,
+    /// 本 turn 已被 `before turn-end` hook 续命几次。硬上限 [`MAX_STOP_HOOK_CONTINUES`]。
+    stop_hook_continues: u32,
 }
 
 impl TurnState {
@@ -1148,6 +559,7 @@ impl TurnState {
             usage: Usage::default(),
             cap: limit.initial_cap(),
             expand_on_progress: limit.expand_on_progress(),
+            stop_hook_continues: 0,
         }
     }
 
@@ -1165,187 +577,23 @@ impl TurnState {
             Some(cap) => self.request_count >= cap,
         }
     }
+
+    /// 是否还允许 `before turn-end` hook 续命（未达硬上限）。
+    fn may_stop_hook_continue(&self) -> bool {
+        self.stop_hook_continues < MAX_STOP_HOOK_CONTINUES
+    }
+
+    /// 记一次续命。
+    fn note_stop_hook_continue(&mut self) {
+        self.stop_hook_continues = self.stop_hook_continues.saturating_add(1);
+    }
 }
 
 // ----- helpers -----
 
-fn content_block_to_message_content(cb: ContentBlock) -> Result<Vec<MessageContent>, TurnError> {
-    match cb {
-        ContentBlock::Text(TextContent { text, .. }) => Ok(vec![MessageContent::Text { text }]),
-        ContentBlock::Image(image) => Ok(vec![image_content_to_message_content(image)?]),
-        ContentBlock::ResourceLink(link) => Ok(vec![MessageContent::Text {
-            text: resource_link_to_text(link),
-        }]),
-        ContentBlock::Resource(resource) => resource_to_message_content(resource),
-        ContentBlock::Audio(_) => Err(invalid_prompt_content(
-            "ACP audio content is not supported yet",
-        )),
-        _ => Err(invalid_prompt_content(
-            "unsupported ACP content block variant",
-        )),
-    }
-}
 
-fn image_content_to_message_content(image: ImageContent) -> Result<MessageContent, TurnError> {
-    let data = if image.data.is_empty() {
-        let Some(uri) = image.uri else {
-            return Err(invalid_prompt_content(
-                "ACP image content must include data or uri",
-            ));
-        };
-        crate::llm::ImageData::Url { url: uri }
-    } else {
-        crate::llm::ImageData::Base64 {
-            encoded: image.data,
-        }
-    };
 
-    Ok(MessageContent::Image {
-        mime: image.mime_type,
-        data,
-    })
-}
 
-fn resource_to_message_content(
-    resource: EmbeddedResource,
-) -> Result<Vec<MessageContent>, TurnError> {
-    match resource.resource {
-        EmbeddedResourceResource::TextResourceContents(text) => Ok(vec![MessageContent::Text {
-            text: text_resource_to_text(text),
-        }]),
-        EmbeddedResourceResource::BlobResourceContents(blob) => {
-            Err(invalid_prompt_content(&format!(
-                "embedded binary resource is not supported yet: {}",
-                blob.uri
-            )))
-        }
-        _ => Err(invalid_prompt_content(
-            "unsupported embedded resource variant",
-        )),
-    }
-}
-
-fn resource_link_to_text(link: ResourceLink) -> String {
-    let mut lines = vec![format!("resource: {}", link.name)];
-    if let Some(title) = link.title {
-        lines.push(format!("title: {title}"));
-    }
-    if let Some(description) = link.description {
-        lines.push(format!("description: {description}"));
-    }
-    if let Some(mime_type) = link.mime_type {
-        lines.push(format!("mime_type: {mime_type}"));
-    }
-    if let Some(size) = link.size {
-        lines.push(format!("size: {size}"));
-    }
-    lines.push(format!("uri: {}", link.uri));
-    lines.join("\n")
-}
-
-fn text_resource_to_text(resource: TextResourceContents) -> String {
-    let mut text = format!("resource: {}", resource.uri);
-    if let Some(mime_type) = resource.mime_type {
-        text.push_str(&format!("\nmime_type: {mime_type}"));
-    }
-    text.push_str("\n\n");
-    text.push_str(&resource.text);
-    text
-}
-
-fn invalid_prompt_content(message: &str) -> TurnError {
-    TurnError::Internal(BoxError::new(io::Error::other(message)))
-}
-
-fn assistant_message(outcome: &DrainOutcome) -> Message {
-    let mut content: Vec<MessageContent> = Vec::new();
-    // Thinking 必须排在 Text / ToolUse 之前 —— Anthropic wire 顺序约定
-    // 是 thinking → text → tool_use，错位会被服务端拒；OpenAI 兼容侧
-    // reasoning_content 是 message 顶级字段不在乎顺序，统一形态便于阅读。
-    if !outcome.thinking_buf.is_empty() || outcome.thinking_signature.is_some() {
-        content.push(MessageContent::Thinking {
-            text: outcome.thinking_buf.clone(),
-            signature: outcome.thinking_signature.clone(),
-        });
-    }
-    if !outcome.text_buf.is_empty() {
-        content.push(MessageContent::Text {
-            text: outcome.text_buf.clone(),
-        });
-    }
-    for tu in &outcome.tool_uses {
-        let args = parse_args(&tu.args_buf).unwrap_or(JsonValue::Object(Default::default()));
-        content.push(MessageContent::ToolUse {
-            id: tu.id.clone(),
-            name: tu.name.clone(),
-            args,
-        });
-    }
-    Message {
-        role: Role::Assistant,
-        content: content.into(),
-    }
-}
-
-fn tool_results_message(results: Vec<ToolResult>) -> Message {
-    Message {
-        role: Role::User,
-        content: results
-            .into_iter()
-            .map(|r| MessageContent::ToolResult {
-                tool_use_id: r.tool_use_id,
-                output: r.body,
-                is_error: r.is_error,
-            })
-            .collect(),
-    }
-}
-
-fn parse_args(buf: &str) -> Result<JsonValue, String> {
-    if buf.trim().is_empty() {
-        return Ok(JsonValue::Object(Default::default()));
-    }
-    serde_json::from_str(buf).map_err(|e| e.to_string())
-}
-
-fn add_usage(a: Usage, b: Usage) -> Usage {
-    Usage {
-        input_tokens: add_opt(a.input_tokens, b.input_tokens),
-        output_tokens: add_opt(a.output_tokens, b.output_tokens),
-        cache_read_input_tokens: add_opt(a.cache_read_input_tokens, b.cache_read_input_tokens),
-        cache_creation_input_tokens: add_opt(
-            a.cache_creation_input_tokens,
-            b.cache_creation_input_tokens,
-        ),
-    }
-}
-
-/// 一次 LLM 调用的「真实输入 token」= `input + cache_read + cache_creation`。
-/// 对齐 Claude Code 的 `getTokenCountFromUsage`：缓存命中/创建的部分也都进了
-/// 模型输入侧，必须计入。任一字段 `None` 视为 0；三项全 `None` 则返回 `None`
-/// （provider 没报输入量，无法作为基线）。
-fn real_input_tokens(usage: &Usage) -> Option<u64> {
-    let input = usage.input_tokens;
-    let cache_read = usage.cache_read_input_tokens;
-    let cache_creation = usage.cache_creation_input_tokens;
-    if input.is_none() && cache_read.is_none() && cache_creation.is_none() {
-        return None;
-    }
-    Some(
-        input
-            .unwrap_or(0)
-            .saturating_add(cache_read.unwrap_or(0))
-            .saturating_add(cache_creation.unwrap_or(0)),
-    )
-}
-
-fn add_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(x.saturating_add(y)),
-        (Some(x), None) | (None, Some(x)) => Some(x),
-        (None, None) => None,
-    }
-}
 
 fn turn_outcome(state: &TurnState, reason: AcpStopReason) -> TurnOutcome {
     TurnOutcome {
@@ -1354,194 +602,9 @@ fn turn_outcome(state: &TurnState, reason: AcpStopReason) -> TurnOutcome {
     }
 }
 
-fn with_status(mut f: ToolCallUpdateFields, status: ToolCallStatus) -> ToolCallUpdateFields {
-    f.status = Some(status);
-    f
-}
 
-fn failed_fields_text(text: String) -> ToolCallUpdateFields {
-    let mut f = ToolCallUpdateFields::default();
-    f.status = Some(ToolCallStatus::Failed);
-    f.content = Some(vec![ToolCallContent::Content(AcpContent::new(text))]);
-    f
-}
 
-fn retry_delay(hint: RetryHint) -> Option<Duration> {
-    match hint {
-        RetryHint::No => None,
-        RetryHint::Immediate => Some(Duration::from_millis(0)),
-        RetryHint::After(d) => Some(d),
-        RetryHint::Backoff => Some(Duration::from_millis(500)),
-        RetryHint::AfterAction(_) => Some(Duration::from_millis(0)),
-    }
-}
-
-fn empty_stream() -> ProviderStream {
-    Box::pin(futures::stream::empty())
-}
 
 #[cfg(test)]
 mod test;
 
-/// 把 [`ToolCallUpdateFields::content`] 收成喂回 LLM 的 [`ToolResultBody`]。
-///
-/// 规则：扫描所有 `ToolCallContent::Content` 块——
-/// - 纯文本（含零图片）：拼成单条 [`ToolResultBody::Text`]，与历史行为一致，
-///   也让 `fire_post_tool_hook` 的文本追加、OpenAI tool message 走简单路径
-/// - 一旦出现图片块：升级为 [`ToolResultBody::Content`]，文本与图片块按原序
-///   混排，交给 codec 按 provider 物化
-///
-/// `Diff` / `ResourceLink` 等非文本非图片块不进 tool_result（它们是给 UI 看的
-/// ACP 展示内容，不喂模型）；返回 `None` 表示没有可喂回的内容。
-fn extract_body(fields: &ToolCallUpdateFields) -> Option<ToolResultBody> {
-    let raw = fields.content.as_ref()?;
-    let mut blocks: Vec<ToolResultContent> = Vec::new();
-    let mut has_image = false;
-    for c in raw {
-        let ToolCallContent::Content(inner) = c else {
-            continue;
-        };
-        match &inner.content {
-            ContentBlock::Text(t) => blocks.push(ToolResultContent::Text {
-                text: t.text.clone(),
-            }),
-            ContentBlock::Image(img) => {
-                has_image = true;
-                blocks.push(ToolResultContent::Image {
-                    mime: img.mime_type.clone(),
-                    data: ImageData::Base64 {
-                        encoded: img.data.clone(),
-                    },
-                });
-            }
-            _ => {}
-        }
-    }
-    if blocks.is_empty() {
-        return None;
-    }
-    if has_image {
-        return Some(ToolResultBody::Content { blocks });
-    }
-    // 纯文本：拼成单条 Text。
-    let text = blocks
-        .into_iter()
-        .filter_map(|b| match b {
-            ToolResultContent::Text { text } => Some(text),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Some(ToolResultBody::Text { text })
-}
-
-/// 单个工具流的驱动 task。把 [`ToolEvent`] 转发为 [`AgentEvent`]，最后产出
-/// [`ToolResult`] 喂回 LLM。
-#[allow(clippy::too_many_arguments)]
-async fn drive_tool_stream(
-    id: ToolCallId,
-    tool_use_id: String,
-    name: String,
-    tool: Arc<dyn Tool>,
-    args: JsonValue,
-    cwd: std::path::PathBuf,
-    cancel: CancellationToken,
-    events: Arc<EventEmitter>,
-    fs: Arc<dyn FsBackend>,
-    shell: Arc<dyn ShellBackend>,
-    http: Arc<dyn HttpClient>,
-    model: String,
-) -> ToolResult {
-    let ctx = ToolContext::new(
-        &cwd,
-        cancel.clone(),
-        fs.clone(),
-        shell.clone(),
-        http.clone(),
-        &model,
-    );
-    let mut stream = tool.execute(args, ctx);
-
-    let mut last_body: Option<ToolResultBody> = None;
-
-    // 注意：cancel 通过 ctx.cancel 注入工具内部，由工具自己感知并产出
-    // [`ToolEvent::Failed(ToolError::Canceled)`]——不要在驱动层加 cancel arm。
-    // 一旦驱动层 select 里 drop 掉 stream，工具内部任何在飞的 ACP 反向请求
-    // 的 oneshot::Receiver 都会被 drop，server 把"无人接收"映射成 internal_error
-    // 并撕掉整条连接（详见 `agent_client_protocol::jsonrpc::incoming_actor`
-    // 里 `router.respond_with_result` 的 ?）。Tool trait 契约：必须感知 cancel。
-    while let Some(ev) = stream.next().await {
-        match ev {
-            ToolEvent::Progress(fields) => {
-                if let Some(body) = extract_body(&fields) {
-                    last_body = Some(body);
-                }
-                events
-                    .emit(AgentEvent::ToolCallProgress {
-                        id: id.clone(),
-                        fields: with_status(fields, ToolCallStatus::InProgress),
-                    })
-                    .await;
-            }
-            ToolEvent::Completed(fields) => {
-                if let Some(body) = extract_body(&fields) {
-                    last_body = Some(body);
-                }
-                let fields = with_status(fields, ToolCallStatus::Completed);
-                events
-                    .emit(AgentEvent::ToolCallFinished {
-                        id: id.clone(),
-                        fields: fields.clone(),
-                    })
-                    .await;
-                return ToolResult {
-                    id,
-                    name,
-                    tool_use_id,
-                    body: last_body.unwrap_or(ToolResultBody::Text {
-                        text: String::new(),
-                    }),
-                    is_error: false,
-                    fields: Some(fields),
-                    error: None,
-                };
-            }
-            ToolEvent::Failed(err) => {
-                let text = err.to_string();
-                let is_cancel = matches!(err, ToolError::Canceled);
-                events
-                    .emit(AgentEvent::ToolCallFinished {
-                        id: id.clone(),
-                        fields: failed_fields_text(text.clone()),
-                    })
-                    .await;
-                return ToolResult {
-                    id,
-                    name,
-                    tool_use_id,
-                    body: ToolResultBody::Text { text: text.clone() },
-                    is_error: !is_cancel,
-                    fields: None,
-                    error: Some(text),
-                };
-            }
-        }
-    }
-
-    events
-        .emit(AgentEvent::ToolCallFinished {
-            id: id.clone(),
-            fields: failed_fields_text("tool stream closed without terminal event".to_string()),
-        })
-        .await;
-    let text = "tool stream closed without terminal event".to_string();
-    ToolResult {
-        id,
-        name,
-        tool_use_id,
-        body: ToolResultBody::Text { text: text.clone() },
-        is_error: true,
-        fields: None,
-        error: Some(text),
-    }
-}

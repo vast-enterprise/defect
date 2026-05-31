@@ -40,10 +40,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol_schema::{
-    ContentBlock, RequestPermissionRequest, SessionId, StopReason as AcpStopReason, ToolCallId,
-    ToolCallUpdateFields,
-};
+use agent_client_protocol_schema::SessionId;
 use arc_swap::ArcSwap;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -51,191 +48,15 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::BoxError;
-use crate::llm::Usage;
 use crate::tool::SafetyClass;
 
 pub mod builtin;
 pub mod command;
 pub mod prompt;
+pub mod step;
 
 /// `DefaultHookEngine` 的默认 per-handler 超时（hooks.md §8）。
 const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(5);
-
-// ---------------------------------------------------------------------------
-// HookEvent
-// ---------------------------------------------------------------------------
-
-/// 主循环 emit 给 hook 引擎的事件。
-///
-/// **借用形式**：构造时不付 clone 代价；engine 内部按需 clone 到 owned 形态
-/// 喂 Command / Prompt handler。具体 owned 形态见 §4 / `docs/internal/hooks.md`。
-///
-/// 类别（详见 `docs/internal/hooks.md` §1.1）：
-/// - **Sync 拦截**（v0 实际 emit）：`SessionStart` / `UserPromptSubmit` /
-///   `PreToolUse` / `PostToolUse` / `PostToolUseFailure`
-/// - **Async 观察**（v0 仅 enum 占位，未落地——投影器缺失，见模块级文档）：
-///   `SessionEnd` / `TurnStart` / `TurnEnd` / `PreLlmCall` / `PostLlmCall` /
-///   `PreCompact` / `PostCompact` / `PermissionAsk`
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum HookEvent<'a> {
-    // ── Sync 拦截 ──
-    SessionStart {
-        source: SessionSource<'a>,
-        cwd: &'a Path,
-    },
-    UserPromptSubmit {
-        content: &'a [ContentBlock],
-    },
-    PreToolUse {
-        id: &'a ToolCallId,
-        name: &'a str,
-        args: &'a Value,
-        safety: SafetyClass,
-    },
-    PostToolUse {
-        id: &'a ToolCallId,
-        name: &'a str,
-        fields: &'a ToolCallUpdateFields,
-    },
-    PostToolUseFailure {
-        id: &'a ToolCallId,
-        name: &'a str,
-        error: &'a str,
-    },
-
-    // ── Async 观察（v0 仅占位、未落地：投影器缺失，见模块级文档） ──
-    SessionEnd {
-        reason: AcpStopReason,
-    },
-    TurnStart {
-        prompt: &'a [ContentBlock],
-    },
-    TurnEnd {
-        reason: AcpStopReason,
-        usage: &'a Usage,
-    },
-    PreLlmCall {
-        model: &'a str,
-        attempt: u32,
-    },
-    PostLlmCall {
-        model: &'a str,
-        attempt: u32,
-        usage: &'a Usage,
-        error: Option<&'a str>,
-    },
-    PreCompact {
-        tokens_before: u64,
-    },
-    PostCompact {
-        tokens_before: u64,
-        tokens_after: u64,
-    },
-    PermissionAsk {
-        id: &'a ToolCallId,
-        request: &'a RequestPermissionRequest,
-    },
-}
-
-/// `SessionStart` 的"是新建还是 resume"提示。
-#[non_exhaustive]
-#[derive(Debug, Clone)]
-pub enum SessionSource<'a> {
-    /// 全新创建的 session。
-    New,
-    /// resume 既有 session。
-    Resume { session_id: &'a SessionId },
-}
-
-/// 事件类别枚举——用于 handler 表分桶 / matcher 校验。
-///
-/// 1:1 对应 [`HookEvent`] 的变体；引擎内部按 kind 索引 handler 列表。
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HookEventKind {
-    SessionStart,
-    UserPromptSubmit,
-    PreToolUse,
-    PostToolUse,
-    PostToolUseFailure,
-    SessionEnd,
-    TurnStart,
-    TurnEnd,
-    PreLlmCall,
-    PostLlmCall,
-    PreCompact,
-    PostCompact,
-    PermissionAsk,
-}
-
-impl HookEvent<'_> {
-    /// 该事件所属的类别。配置加载与引擎派发都按 kind 分桶。
-    pub fn kind(&self) -> HookEventKind {
-        match self {
-            Self::SessionStart { .. } => HookEventKind::SessionStart,
-            Self::UserPromptSubmit { .. } => HookEventKind::UserPromptSubmit,
-            Self::PreToolUse { .. } => HookEventKind::PreToolUse,
-            Self::PostToolUse { .. } => HookEventKind::PostToolUse,
-            Self::PostToolUseFailure { .. } => HookEventKind::PostToolUseFailure,
-            Self::SessionEnd { .. } => HookEventKind::SessionEnd,
-            Self::TurnStart { .. } => HookEventKind::TurnStart,
-            Self::TurnEnd { .. } => HookEventKind::TurnEnd,
-            Self::PreLlmCall { .. } => HookEventKind::PreLlmCall,
-            Self::PostLlmCall { .. } => HookEventKind::PostLlmCall,
-            Self::PreCompact { .. } => HookEventKind::PreCompact,
-            Self::PostCompact { .. } => HookEventKind::PostCompact,
-            Self::PermissionAsk { .. } => HookEventKind::PermissionAsk,
-        }
-    }
-
-    /// 事件名 snake_case——env 注入 / stdin envelope / 模板渲染共用。
-    pub fn kind_str(&self) -> &'static str {
-        match self {
-            Self::SessionStart { .. } => "session_start",
-            Self::UserPromptSubmit { .. } => "user_prompt_submit",
-            Self::PreToolUse { .. } => "pre_tool_use",
-            Self::PostToolUse { .. } => "post_tool_use",
-            Self::PostToolUseFailure { .. } => "post_tool_use_failure",
-            Self::SessionEnd { .. } => "session_end",
-            Self::TurnStart { .. } => "turn_start",
-            Self::TurnEnd { .. } => "turn_end",
-            Self::PreLlmCall { .. } => "pre_llm_call",
-            Self::PostLlmCall { .. } => "post_llm_call",
-            Self::PreCompact { .. } => "pre_compact",
-            Self::PostCompact { .. } => "post_compact",
-            Self::PermissionAsk { .. } => "permission_ask",
-        }
-    }
-
-    /// 判断该事件是否属于 Sync 拦截类别。
-    pub fn is_sync(&self) -> bool {
-        matches!(
-            self.kind(),
-            HookEventKind::SessionStart
-                | HookEventKind::UserPromptSubmit
-                | HookEventKind::PreToolUse
-                | HookEventKind::PostToolUse
-                | HookEventKind::PostToolUseFailure
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// HookHandler 与 outcome
-// ---------------------------------------------------------------------------
-
-/// Handler 自我宣告的语义类别。引擎按此校验"能否挂在该事件上"。
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookCapability {
-    /// 仅适用于 Async 观察事件——只能日志/审计；返回非 `Pass` outcome
-    /// 由引擎丢弃 + warn。**当前无代码路径用到**：observe 投影 task 未落地
-    /// （见模块级文档），暂无 handler 真正以此 capability 被调度。
-    Observe,
-    /// 完整能力——可 block / patch / append；仅适用于 Sync 拦截事件。
-    Intercept,
-}
 
 /// 单条 hook 的匹配条件。
 ///
@@ -256,41 +77,18 @@ pub struct HookMatcher {
 }
 
 impl HookMatcher {
-    /// 该 matcher 是否命中给定事件。
+    /// Step 模型的匹配：按工具名（从 step 信封取，非工具 step 传 `None`）。
     ///
-    /// 匹配语义：
-    /// - 非工具事件（`SessionStart` / `UserPromptSubmit` / Async 类）matcher
-    ///   字段全部应当为空；填了字段也直接命中（hooks.md §3.3 的"不向上报错"原则）
-    /// - `tool` 与事件 `name` 精确匹配（区分大小写）
-    /// - `tool_glob` 用 [`glob_match`] 简单匹配（仅 `*` / `?` 通配符；hooks.md §5.3
-    ///   明确不上 regex）
-    /// - `safety` 仅对 `PreToolUse` 生效，命中条件为 `safety.contains(event.safety)`
-    pub fn matches(&self, event: &HookEvent<'_>) -> bool {
-        let (name, safety) = match event {
-            HookEvent::PreToolUse {
-                name, safety: s, ..
-            } => (Some(*name), Some(*s)),
-            HookEvent::PostToolUse { name, .. } | HookEvent::PostToolUseFailure { name, .. } => {
-                (Some(*name), None)
-            }
-            _ => (None, None),
-        };
-
+    /// 字段全空 = 命中所有。`tool` 精确、`tool_glob` 通配。`safety` 过滤在 step 模型下由信封字段
+    /// 承载，迁移期暂只按工具名过滤（safety 过滤待 step 信封补 safety 字段后接入）。
+    pub fn matches_step(&self, tool: Option<&str>) -> bool {
         if let Some(expected) = &self.tool
-            && name.is_none_or(|n| n != expected)
+            && tool.is_none_or(|n| n != expected)
         {
             return false;
         }
         if let Some(pat) = &self.tool_glob
-            && name.is_none_or(|n| !glob_match(pat, n))
-        {
-            return false;
-        }
-        // safety 过滤仅对 PreToolUse 生效；其他工具事件上 safety 空 = 不过滤，
-        // 非空 = 该 matcher 写错了用法但不阻塞——按 §3.3 静默跳过该条件。
-        if !self.safety.is_empty()
-            && let Some(s) = safety
-            && !self.safety.contains(&s)
+            && tool.is_none_or(|n| !glob_match(pat, n))
         {
             return false;
         }
@@ -356,35 +154,6 @@ impl<'a> HookCtx<'a> {
     }
 }
 
-/// Handler 返回给引擎的结果。
-///
-/// 三个字段独立可组合（详见 `docs/internal/hooks.md` §3.1）：一个 handler
-/// 可一次返回"修改 args + 追加 system context"。`Pass` = 全字段默认值。
-#[derive(Debug, Default, Clone)]
-#[non_exhaustive]
-pub struct HookOutcome {
-    /// 早退理由。`Some` 时引擎不再调用后续 handler；其他字段忽略。
-    pub block: Option<String>,
-    /// 修改 in-flight 事件数据。具体补丁形态由事件决定。
-    pub patch: Option<HookPatch>,
-    /// 追加内容到 system prompt / tool_result.content（具体落点见 §3.2）。
-    pub append: Vec<ContentBlock>,
-}
-
-/// 事件可被 patch 的形态。具体允许哪种 patch 见
-/// `docs/internal/hooks.md` §3.2。
-#[non_exhaustive]
-#[derive(Debug, Clone)]
-pub enum HookPatch {
-    /// `PreToolUse`：替换工具参数。
-    ToolArgs(Value),
-    /// `UserPromptSubmit`：在用户原文前后追加。**不允许完全替换**（见 §3.6）。
-    UserPrompt {
-        prepend: Vec<ContentBlock>,
-        append: Vec<ContentBlock>,
-    },
-}
-
 /// Handler 失败原因。
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -400,78 +169,83 @@ pub enum HookError {
     Configuration(String),
 }
 
-/// 处理 [`HookEvent`] 的执行器。
-///
-/// `BoxFuture` 是 workspace [No async_trait] 约定。
-///
-/// [No async_trait]: ../../CLAUDE.MD
-pub trait HookHandler: Send + Sync {
-    /// handler 的语义类别。配置加载时按事件类别 + capability 校验。
-    fn capability(&self) -> HookCapability;
 
-    /// 执行 hook。返回 outcome 给引擎；具体效果见
-    /// `docs/internal/hooks.md` §3.2。
-    fn handle<'a>(
+/// **Step 模型的 handler**（迁移目标）。引擎给它一个挂载点的输入信封（[`step::HookStep::to_envelope`]
+/// 的产物），它产出一个 verdict JSON——引擎再用 [`step::HookStep::apply_verdict`] 把 verdict 应用回
+/// step。两种 hook 都实现它：内部 Rust hook 直接算 verdict；command/prompt hook 把信封喂子进程/LLM、
+/// 把输出解析成 verdict。详见 `docs/internal/hook-step-context.md`。
+///
+/// 返回 `Ok(None)` = 不干预（等价空 verdict）；`Ok(Some(verdict))` = 应用该 verdict；`Err` = 失败，
+/// 由引擎按降级表处理。
+pub trait StepHandler: Send + Sync {
+    /// 处理一个挂载点：输入信封 → verdict JSON。
+    fn handle_step<'a>(
         &'a self,
-        event: &'a HookEvent<'a>,
+        envelope: &'a Value,
         ctx: HookCtx<'a>,
-    ) -> BoxFuture<'a, Result<HookOutcome, HookError>>;
+    ) -> BoxFuture<'a, Result<Option<Value>, HookError>>;
 }
 
 // ---------------------------------------------------------------------------
 // HookEngine
 // ---------------------------------------------------------------------------
 
-/// 主循环面向的派发器。
+/// 主循环面向的派发器（step 模型）。
 ///
-/// - [`Self::fire`]：Sync 拦截事件入口；阻塞主循环直到所有匹配 handler 跑完，
-///   返回合并 outcome
-/// - [`Self::observe`]：Async 观察入口；本应由订阅 [`crate::event::AgentEvent`]
-///   流的 fan-out task 投影后调用，不阻塞主循环。**该投影 task 尚未落地**
-///   （见模块级文档与 `docs/internal/hooks.md` §11），故当前 `observe` 无调用方。
+/// 唯一入口 [`Self::dispatch`]：给定一个挂载点的 [`step::HookStep`]，引擎按 `event_name` 找到匹配
+/// handler，逐个把 step 的信封喂进去、把 verdict 应用回 step（数据轴累积），合并出最终
+/// [`step::HookControl`]（控制轴早退）。step 上的字段改动（注入 / 改 args / 填产出…）就地生效；
+/// 调用方读改动 + 控制指示。详见 `docs/internal/hook-step-context.md`。
 ///
 /// 默认实现 [`DefaultHookEngine`]；测试 / 默认 session 装配走 [`NoopHookEngine`]。
 pub trait HookEngine: Send + Sync {
-    fn fire<'a>(&'a self, event: HookEvent<'a>, ctx: HookCtx<'a>) -> BoxFuture<'a, HookOutcome>;
-
-    fn observe<'a>(&'a self, event: HookEvent<'a>, ctx: HookCtx<'a>);
+    /// **默认实现返回 [`step::HookControl::Proceed`]**（= 不干预），[`NoopHookEngine`] 即用它。
+    /// [`DefaultHookEngine`] 覆盖它走真实派发。
+    fn dispatch<'a>(
+        &'a self,
+        _step: &'a mut dyn step::HookStep,
+        _ctx: HookCtx<'a>,
+    ) -> BoxFuture<'a, step::HookControl> {
+        Box::pin(async { step::HookControl::Proceed })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // NoopHookEngine
 // ---------------------------------------------------------------------------
 
-/// 默认 hook 引擎：所有 fire 返回 `Pass`，observe 直接丢弃。
+/// 默认 hook 引擎：`dispatch` 走 trait 默认实现（`Proceed`，即不干预）。
 ///
 /// session / turn 装配时若没有显式注入 hook 引擎走它——保证"未配置 hook
 /// = 主循环行为完全不变"，与 [`crate::http::NoopHttpClient`] 同款。
 #[derive(Debug, Default)]
 pub struct NoopHookEngine;
 
-impl HookEngine for NoopHookEngine {
-    fn fire<'a>(&'a self, _event: HookEvent<'a>, _ctx: HookCtx<'a>) -> BoxFuture<'a, HookOutcome> {
-        Box::pin(async { HookOutcome::default() })
-    }
-
-    fn observe<'a>(&'a self, _event: HookEvent<'a>, _ctx: HookCtx<'a>) {}
-}
+impl HookEngine for NoopHookEngine {}
 
 // ---------------------------------------------------------------------------
 // DefaultHookEngine
 // ---------------------------------------------------------------------------
 
-/// 一条已装配 hook：matcher + handler + 单条超时。
+/// 一份按 step `event_name` 分桶的 handler 表。
 ///
-/// 由 CLI 装配期 / 测试构造；engine 仅按事件类别索引并 `matches` 后串行调用。
-pub struct HandlerEntry {
+/// 装配在 [`DefaultHookEngine`] 内，外部用 [`DefaultHookEngine::reload`]
+/// 整体替换——`ArcSwap` 让运行期热加载几乎零开销。
+#[derive(Default)]
+pub struct HandlerTable {
+    /// 按 step `event_name`（snake_case）索引的 handler 列表。声明顺序即 pipeline 执行顺序。
+    pub step_buckets: std::collections::HashMap<&'static str, Vec<StepHandlerEntry>>,
+}
+
+/// 一条已装配的 step handler：matcher + handler + 单条超时。
+pub struct StepHandlerEntry {
     pub matcher: HookMatcher,
-    pub handler: Arc<dyn HookHandler>,
-    /// `None` = 用引擎默认（5 秒）；CLI 把 TOML 上的 `timeout_sec` 翻进来。
+    pub handler: Arc<dyn StepHandler>,
     pub timeout: Option<Duration>,
 }
 
-impl HandlerEntry {
-    pub fn new(matcher: HookMatcher, handler: Arc<dyn HookHandler>) -> Self {
+impl StepHandlerEntry {
+    pub fn new(matcher: HookMatcher, handler: Arc<dyn StepHandler>) -> Self {
         Self {
             matcher,
             handler,
@@ -485,29 +259,22 @@ impl HandlerEntry {
     }
 }
 
-/// 一份按事件类别分桶的 handler 表。
-///
-/// 装配在 [`DefaultHookEngine`] 内，外部用 [`DefaultHookEngine::reload`]
-/// 整体替换——`ArcSwap` 让运行期热加载几乎零开销。
-#[derive(Default)]
-pub struct HandlerTable {
-    /// 按事件类别索引的 handler 列表。声明顺序即 pipeline 执行顺序
-    /// （详见 `docs/internal/hooks.md` §3.4）。
-    pub buckets: std::collections::HashMap<HookEventKind, Vec<HandlerEntry>>,
-}
-
 impl HandlerTable {
     pub fn empty() -> Self {
         Self::default()
     }
 
-    pub fn handlers(&self, kind: HookEventKind) -> &[HandlerEntry] {
-        self.buckets.get(&kind).map(Vec::as_slice).unwrap_or(&[])
+    /// 某 step `event_name` 下已装配的 step handler。
+    pub fn step_handlers(&self, event_name: &str) -> &[StepHandlerEntry] {
+        self.step_buckets
+            .get(event_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
-    /// 在指定事件类别下追加一条已装配 hook。
-    pub fn push(&mut self, kind: HookEventKind, entry: HandlerEntry) {
-        self.buckets.entry(kind).or_default().push(entry);
+    /// 在某 step `event_name` 下追加一条 step handler。
+    pub fn push_step(&mut self, event_name: &'static str, entry: StepHandlerEntry) {
+        self.step_buckets.entry(event_name).or_default().push(entry);
     }
 }
 
@@ -550,314 +317,64 @@ impl Default for DefaultHookEngine {
 }
 
 impl HookEngine for DefaultHookEngine {
-    fn fire<'a>(&'a self, event: HookEvent<'a>, ctx: HookCtx<'a>) -> BoxFuture<'a, HookOutcome> {
+    fn dispatch<'a>(
+        &'a self,
+        step: &'a mut dyn step::HookStep,
+        ctx: HookCtx<'a>,
+    ) -> BoxFuture<'a, step::HookControl> {
         let table = self.table.load_full();
         Box::pin(async move {
-            let kind = event.kind();
-            let entries = table.handlers(kind);
+            let entries = table.step_handlers(step.event_name());
             if entries.is_empty() {
-                return HookOutcome::default();
+                return step::HookControl::Proceed;
             }
 
-            // Owned 副本：pipeline 之间累积的 patch 落在这里，下一个 handler
-            // 看到的是改写后的 event。
-            let mut state = OwnedHookEvent::from_borrowed(&event);
-            let mut accumulated = HookOutcome::default();
+            // matcher 用工具名过滤——从 step 信封里取（仅 *ToolApply* step 带 tool）。
+            let envelope0 = step.to_envelope();
+            let tool = envelope0.get("tool").and_then(Value::as_str);
 
             for entry in entries {
-                // 借用形式重新构造一次 event 给 handler 看（详见 hooks.md §2.2）
-                let borrowed = state.borrow();
-                if !entry.matcher.matches(&borrowed) {
+                if !entry.matcher.matches_step(tool) {
                     continue;
                 }
-
+                // 每个 handler 看到的是上一个 handler 改写后的信封。
+                let envelope = step.to_envelope();
                 let timeout = entry.timeout.unwrap_or(DEFAULT_HANDLER_TIMEOUT);
                 let handler_ctx = HookCtx::new(ctx.session_id, ctx.cwd, ctx.cancel.clone());
-                // 在 BoxFuture 上跑 catch_unwind：handler 内 panic 转 HandlerFailed
-                // 后由下方 outcome 处理逻辑按 §3.5 降级。
-                let fut =
-                    AssertUnwindSafe(entry.handler.handle(&borrowed, handler_ctx)).catch_unwind();
-                let result = match tokio::time::timeout(timeout, fut).await {
-                    Ok(Ok(Ok(outcome))) => Ok(outcome),
-                    Ok(Ok(Err(err))) => Err(err),
-                    Ok(Err(panic)) => Err(HookError::HandlerFailed(BoxError::new(PanicError(
-                        panic_message(&panic),
-                    )))),
-                    Err(_elapsed) => Err(HookError::Timeout),
+                let fut = AssertUnwindSafe(entry.handler.handle_step(&envelope, handler_ctx))
+                    .catch_unwind();
+                let verdict = match tokio::time::timeout(timeout, fut).await {
+                    Ok(Ok(Ok(v))) => v,
+                    Ok(Ok(Err(err))) => {
+                        tracing::warn!(event = %step.event_name(), error = %err, "step hook handler error; skipped");
+                        continue;
+                    }
+                    Ok(Err(panic)) => {
+                        tracing::warn!(event = %step.event_name(), panic = %panic_message(&panic), "step hook handler panicked; skipped");
+                        continue;
+                    }
+                    Err(_elapsed) => {
+                        tracing::warn!(event = %step.event_name(), "step hook handler timed out; skipped");
+                        continue;
+                    }
                 };
-
-                if let Some(block) = merge_outcome(&mut state, &mut accumulated, kind, result) {
-                    accumulated.block = Some(block);
-                    return accumulated;
+                let Some(verdict) = verdict else { continue };
+                match step.apply_verdict(&verdict) {
+                    // 控制轴早退：非 Proceed 即停止 pipeline。
+                    Ok(step::HookControl::Proceed) => {}
+                    Ok(control) => return control,
+                    Err(err) => {
+                        tracing::warn!(event = %step.event_name(), error = %err, "step verdict malformed; skipped");
+                    }
                 }
             }
-
-            accumulated
+            step::HookControl::Proceed
         })
     }
-
-    fn observe<'a>(&'a self, _event: HookEvent<'a>, _ctx: HookCtx<'a>) {
-        // 未落地：observe-only handler 还没接入 AgentEvent fan-out。
-        // 核心缺口是 AgentEvent → HookEvent 投影 task（订阅 session 事件流、
-        // 投影后调本方法）尚未实现；config 也还没有 async 事件桶。
-        // 完整落地步骤见 `docs/internal/hooks.md` §11，且本方法目前无调用方。
-    }
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline 内部：owned event + outcome 合并
-// ---------------------------------------------------------------------------
-
-/// `HookEvent` 的 owned 副本——pipeline 之间携带 patch 演化。
-///
-/// 字段命名跟 [`HookEvent`] 1:1 对应；只承载 v0 实际 emit 的 5 件套。
-/// Async 类事件不进 pipeline（observe 不会走 fire），所以这里不收 owned
-/// 表示也无影响；遇到 Async 事件 fire 直接 noop（见上方 `for entry`
-/// 之前的 borrow，matcher 永远命中但 owned 形态保留原始借用语义）。
-enum OwnedHookEvent {
-    SessionStart {
-        source: OwnedSessionSource,
-        cwd: std::path::PathBuf,
-    },
-    UserPromptSubmit {
-        content: Vec<ContentBlock>,
-    },
-    PreToolUse {
-        id: ToolCallId,
-        name: String,
-        args: Value,
-        safety: SafetyClass,
-    },
-    PostToolUse {
-        id: ToolCallId,
-        name: String,
-        fields: ToolCallUpdateFields,
-    },
-    PostToolUseFailure {
-        id: ToolCallId,
-        name: String,
-        error: String,
-    },
-    /// Async 事件——不进 pipeline 的 patch 累积逻辑，只为补完 enum 完整性。
-    /// `fire` 里其实不会走到这条分支（async 事件不应当通过 fire 入口）。
-    Other,
-}
-
-#[derive(Debug, Clone)]
-enum OwnedSessionSource {
-    New,
-    Resume { session_id: SessionId },
-}
-
-impl OwnedHookEvent {
-    fn from_borrowed(event: &HookEvent<'_>) -> Self {
-        match event {
-            HookEvent::SessionStart { source, cwd } => Self::SessionStart {
-                source: match source {
-                    SessionSource::New => OwnedSessionSource::New,
-                    SessionSource::Resume { session_id } => OwnedSessionSource::Resume {
-                        session_id: (*session_id).clone(),
-                    },
-                },
-                cwd: cwd.to_path_buf(),
-            },
-            HookEvent::UserPromptSubmit { content } => Self::UserPromptSubmit {
-                content: content.to_vec(),
-            },
-            HookEvent::PreToolUse {
-                id,
-                name,
-                args,
-                safety,
-            } => Self::PreToolUse {
-                id: (*id).clone(),
-                name: (*name).to_string(),
-                args: (*args).clone(),
-                safety: *safety,
-            },
-            HookEvent::PostToolUse { id, name, fields } => Self::PostToolUse {
-                id: (*id).clone(),
-                name: (*name).to_string(),
-                fields: (*fields).clone(),
-            },
-            HookEvent::PostToolUseFailure { id, name, error } => Self::PostToolUseFailure {
-                id: (*id).clone(),
-                name: (*name).to_string(),
-                error: (*error).to_string(),
-            },
-            _ => Self::Other,
-        }
-    }
-
-    fn borrow(&self) -> HookEvent<'_> {
-        match self {
-            Self::SessionStart { source, cwd } => HookEvent::SessionStart {
-                source: match source {
-                    OwnedSessionSource::New => SessionSource::New,
-                    OwnedSessionSource::Resume { session_id } => {
-                        SessionSource::Resume { session_id }
-                    }
-                },
-                cwd,
-            },
-            Self::UserPromptSubmit { content } => HookEvent::UserPromptSubmit { content },
-            Self::PreToolUse {
-                id,
-                name,
-                args,
-                safety,
-            } => HookEvent::PreToolUse {
-                id,
-                name,
-                args,
-                safety: *safety,
-            },
-            Self::PostToolUse { id, name, fields } => HookEvent::PostToolUse { id, name, fields },
-            Self::PostToolUseFailure { id, name, error } => {
-                HookEvent::PostToolUseFailure { id, name, error }
-            }
-            Self::Other => unreachable!("OwnedHookEvent::Other should never be borrowed"),
-        }
-    }
-}
-
-/// 把 handler 返回的 [`HookOutcome`] 合并进 pipeline 状态。
-///
-/// 返回 `Some(reason)` 表示 pipeline 早退（block 命中 + 该事件允许 block）。
-/// 返回 `None` 表示继续下一个 handler。`HookError` 按 hooks.md §3.5 的表降级：
-/// - 允许 block 的事件（`UserPromptSubmit` / `PreToolUse`）：错误等价 block
-/// - 不允许 block 的事件：错误降为 warning，继续 pipeline
-fn merge_outcome(
-    state: &mut OwnedHookEvent,
-    accumulated: &mut HookOutcome,
-    kind: HookEventKind,
-    result: Result<HookOutcome, HookError>,
-) -> Option<String> {
-    let outcome = match result {
-        Ok(o) => o,
-        Err(err) => {
-            return handle_handler_error(kind, err);
-        }
-    };
-
-    // ── block 字段处理 ──
-    if let Some(reason) = outcome.block {
-        if event_allows_block(kind) {
-            return Some(reason);
-        }
-        tracing::warn!(
-            kind = ?kind,
-            reason = %reason,
-            "hook outcome.block ignored: event does not allow block"
-        );
-    }
-
-    // ── patch 字段处理 ──
-    if let Some(patch) = outcome.patch {
-        match (kind, patch) {
-            (HookEventKind::PreToolUse, HookPatch::ToolArgs(new_args)) => {
-                if let OwnedHookEvent::PreToolUse { args, .. } = state {
-                    *args = new_args.clone();
-                }
-                accumulated.patch = Some(HookPatch::ToolArgs(new_args));
-            }
-            (HookEventKind::UserPromptSubmit, HookPatch::UserPrompt { prepend, append }) => {
-                if let OwnedHookEvent::UserPromptSubmit { content } = state {
-                    let mut next = Vec::with_capacity(prepend.len() + content.len() + append.len());
-                    next.extend(prepend.clone());
-                    next.append(content);
-                    next.extend(append.clone());
-                    *content = next;
-                }
-                // accumulated.patch 反映"组合后的"前后追加块——下一个 handler
-                // 看到的 state.content 已经把它合进去了，这里给 caller 保留
-                // 一份合并视图（caller 通常在 turn 主循环里用不到，因为 state
-                // 已经直接被改写）。
-                accumulated.patch = match accumulated.patch.take() {
-                    Some(HookPatch::UserPrompt {
-                        prepend: old_prepend,
-                        append: old_append,
-                    }) => {
-                        let mut combined_prepend = prepend.clone();
-                        combined_prepend.extend(old_prepend);
-                        let mut combined_append = old_append;
-                        combined_append.extend(append.clone());
-                        Some(HookPatch::UserPrompt {
-                            prepend: combined_prepend,
-                            append: combined_append,
-                        })
-                    }
-                    _ => Some(HookPatch::UserPrompt { prepend, append }),
-                };
-            }
-            (kind, patch) => {
-                tracing::warn!(
-                    kind = ?kind,
-                    patch_kind = patch.kind_str(),
-                    "hook outcome.patch ignored: not allowed for this event kind"
-                );
-            }
-        }
-    }
-
-    // ── append 字段处理 ──
-    if !outcome.append.is_empty() {
-        if event_allows_append(kind) {
-            accumulated.append.extend(outcome.append);
-        } else {
-            tracing::warn!(
-                kind = ?kind,
-                count = outcome.append.len(),
-                "hook outcome.append ignored: event has no landing site"
-            );
-        }
-    }
-
-    None
-}
-
-fn handle_handler_error(kind: HookEventKind, err: HookError) -> Option<String> {
-    if event_allows_block(kind) {
-        // 保守：handler 出问题就别让事件继续——把错误信息当作 block reason。
-        tracing::info!(kind = ?kind, error = %err, "hook handler error treated as block");
-        Some(err.to_string())
-    } else {
-        tracing::warn!(kind = ?kind, error = %err, "hook handler error downgraded to warning");
-        None
-    }
-}
-
-fn event_allows_block(kind: HookEventKind) -> bool {
-    matches!(
-        kind,
-        HookEventKind::UserPromptSubmit | HookEventKind::PreToolUse
-    )
-}
-
-fn event_allows_append(kind: HookEventKind) -> bool {
-    matches!(
-        kind,
-        HookEventKind::SessionStart
-            | HookEventKind::UserPromptSubmit
-            | HookEventKind::PostToolUse
-            | HookEventKind::PostToolUseFailure
-    )
-}
-
-impl HookPatch {
-    fn kind_str(&self) -> &'static str {
-        match self {
-            Self::ToolArgs(_) => "tool_args",
-            Self::UserPrompt { .. } => "user_prompt",
-        }
-    }
-}
 
 // catch_unwind payload → 文本，避免依赖具体 panic 类型
-#[derive(Debug, thiserror::Error)]
-#[error("hook handler panicked: {0}")]
-struct PanicError(String);
-
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
@@ -871,455 +388,10 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 #[cfg(test)]
 mod test {
     use super::*;
-    use agent_client_protocol_schema::ContentBlock;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use agent_client_protocol_schema::StopReason as AcpStopReason;
 
     fn ctx<'a>(session_id: &'a SessionId, cwd: &'a Path) -> HookCtx<'a> {
         HookCtx::new(session_id, cwd, CancellationToken::new())
-    }
-
-    /// 简单 handler：返回固定 outcome，记录 handle 调用次数与每次看到的 args（仅
-    /// `PreToolUse` 用）。
-    struct StubHandler {
-        outcome: Mutex<HookOutcome>,
-        observed_args: Mutex<Vec<Value>>,
-        observed_user_prompt: Mutex<Vec<Vec<ContentBlock>>>,
-        calls: AtomicUsize,
-    }
-
-    impl StubHandler {
-        fn new(outcome: HookOutcome) -> Arc<Self> {
-            Arc::new(Self {
-                outcome: Mutex::new(outcome),
-                observed_args: Mutex::new(Vec::new()),
-                observed_user_prompt: Mutex::new(Vec::new()),
-                calls: AtomicUsize::new(0),
-            })
-        }
-    }
-
-    impl HookHandler for StubHandler {
-        fn capability(&self) -> HookCapability {
-            HookCapability::Intercept
-        }
-
-        fn handle<'a>(
-            &'a self,
-            event: &'a HookEvent<'a>,
-            _ctx: HookCtx<'a>,
-        ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            if let HookEvent::PreToolUse { args, .. } = event {
-                self.observed_args
-                    .lock()
-                    .expect("stub mutex")
-                    .push((*args).clone());
-            }
-            if let HookEvent::UserPromptSubmit { content } = event {
-                self.observed_user_prompt
-                    .lock()
-                    .expect("stub mutex")
-                    .push(content.to_vec());
-            }
-            let outcome = self.outcome.lock().expect("stub mutex").clone();
-            Box::pin(async move { Ok(outcome) })
-        }
-    }
-
-    /// Handler 永久挂起——用于测试超时。
-    struct HangHandler;
-
-    impl HookHandler for HangHandler {
-        fn capability(&self) -> HookCapability {
-            HookCapability::Intercept
-        }
-
-        fn handle<'a>(
-            &'a self,
-            _event: &'a HookEvent<'a>,
-            _ctx: HookCtx<'a>,
-        ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
-            Box::pin(std::future::pending())
-        }
-    }
-
-    /// Handler panic——用于测试 catch_unwind 降级。
-    struct PanicHandler;
-
-    impl HookHandler for PanicHandler {
-        fn capability(&self) -> HookCapability {
-            HookCapability::Intercept
-        }
-
-        fn handle<'a>(
-            &'a self,
-            _event: &'a HookEvent<'a>,
-            _ctx: HookCtx<'a>,
-        ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
-            Box::pin(async { panic!("boom") })
-        }
-    }
-
-    fn pre_tool_use<'a>(
-        id: &'a ToolCallId,
-        name: &'a str,
-        args: &'a Value,
-        safety: SafetyClass,
-    ) -> HookEvent<'a> {
-        HookEvent::PreToolUse {
-            id,
-            name,
-            args,
-            safety,
-        }
-    }
-
-    #[tokio::test]
-    async fn noop_engine_returns_pass() {
-        let engine = NoopHookEngine;
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        let outcome = engine.fire(ev, ctx(&session_id, cwd)).await;
-        assert!(outcome.block.is_none());
-        assert!(outcome.patch.is_none());
-        assert!(outcome.append.is_empty());
-    }
-
-    #[tokio::test]
-    async fn default_engine_empty_table_returns_pass() {
-        let engine = DefaultHookEngine::new();
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let ev = HookEvent::UserPromptSubmit { content: &[] };
-        let outcome = engine.fire(ev, ctx(&session_id, cwd)).await;
-        assert!(outcome.block.is_none());
-        assert!(outcome.patch.is_none());
-        assert!(outcome.append.is_empty());
-    }
-
-    #[test]
-    fn event_kind_matches_variant() {
-        let cwd = std::path::Path::new("/");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        assert_eq!(ev.kind(), HookEventKind::SessionStart);
-        assert!(ev.is_sync());
-
-        let ev = HookEvent::SessionEnd {
-            reason: AcpStopReason::EndTurn,
-        };
-        assert_eq!(ev.kind(), HookEventKind::SessionEnd);
-        assert!(!ev.is_sync());
-    }
-
-    #[test]
-    fn reload_swaps_table() {
-        let engine = DefaultHookEngine::new();
-        assert!(engine.snapshot().buckets.is_empty());
-        let mut t = HandlerTable::empty();
-        t.buckets.insert(HookEventKind::PreToolUse, Vec::new());
-        engine.reload(t);
-        assert!(
-            engine
-                .snapshot()
-                .buckets
-                .contains_key(&HookEventKind::PreToolUse)
-        );
-    }
-
-    // ----- matcher -----
-
-    #[test]
-    fn matcher_filters_by_tool_name() {
-        let id = ToolCallId::new("c1");
-        let args = Value::Null;
-        let bash = pre_tool_use(&id, "bash", &args, SafetyClass::Destructive);
-        let edit = pre_tool_use(&id, "edit", &args, SafetyClass::Mutating);
-        let m = HookMatcher {
-            tool: Some("bash".to_string()),
-            ..Default::default()
-        };
-        assert!(m.matches(&bash));
-        assert!(!m.matches(&edit));
-    }
-
-    #[test]
-    fn matcher_filters_by_glob() {
-        let id = ToolCallId::new("c1");
-        let args = Value::Null;
-        let mcp_a = pre_tool_use(&id, "mcp.fs.read", &args, SafetyClass::ReadOnly);
-        let mcp_b = pre_tool_use(&id, "mcp.git.status", &args, SafetyClass::ReadOnly);
-        let plain = pre_tool_use(&id, "bash", &args, SafetyClass::Destructive);
-        let m = HookMatcher {
-            tool_glob: Some("mcp.*".to_string()),
-            ..Default::default()
-        };
-        assert!(m.matches(&mcp_a));
-        assert!(m.matches(&mcp_b));
-        assert!(!m.matches(&plain));
-    }
-
-    #[test]
-    fn matcher_filters_by_safety() {
-        let id = ToolCallId::new("c1");
-        let args = Value::Null;
-        let destructive = pre_tool_use(&id, "bash", &args, SafetyClass::Destructive);
-        let read_only = pre_tool_use(&id, "fs.read", &args, SafetyClass::ReadOnly);
-        let m = HookMatcher {
-            safety: vec![SafetyClass::Destructive, SafetyClass::Network],
-            ..Default::default()
-        };
-        assert!(m.matches(&destructive));
-        assert!(!m.matches(&read_only));
-    }
-
-    #[test]
-    fn matcher_empty_matches_anything() {
-        let id = ToolCallId::new("c1");
-        let args = Value::Null;
-        let m = HookMatcher::default();
-        assert!(m.matches(&pre_tool_use(&id, "anything", &args, SafetyClass::ReadOnly)));
-        let cwd = std::path::Path::new("/");
-        assert!(m.matches(&HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        }));
-    }
-
-    // ----- pipeline -----
-
-    #[tokio::test]
-    async fn pipeline_pre_tool_use_passes_patched_args_downstream() {
-        let engine = DefaultHookEngine::new();
-        let mut table = HandlerTable::empty();
-
-        let h1 = StubHandler::new(HookOutcome {
-            patch: Some(HookPatch::ToolArgs(serde_json::json!({"redacted": true}))),
-            ..Default::default()
-        });
-        let h2 = StubHandler::new(HookOutcome::default());
-
-        table.push(
-            HookEventKind::PreToolUse,
-            HandlerEntry::new(HookMatcher::default(), h1.clone()),
-        );
-        table.push(
-            HookEventKind::PreToolUse,
-            HandlerEntry::new(HookMatcher::default(), h2.clone()),
-        );
-        engine.reload(table);
-
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let args = serde_json::json!({"command": "echo hi"});
-        let outcome = engine
-            .fire(
-                pre_tool_use(&id, "bash", &args, SafetyClass::Destructive),
-                ctx(&session_id, cwd),
-            )
-            .await;
-
-        // h2 看到的 args 是 h1 改写之后的
-        let observed = h2.observed_args.lock().expect("mutex").clone();
-        assert_eq!(observed, vec![serde_json::json!({"redacted": true})]);
-
-        assert!(matches!(
-            outcome.patch,
-            Some(HookPatch::ToolArgs(ref v)) if v == &serde_json::json!({"redacted": true})
-        ));
-    }
-
-    #[tokio::test]
-    async fn pipeline_blocks_early() {
-        let engine = DefaultHookEngine::new();
-        let mut table = HandlerTable::empty();
-
-        let h1 = StubHandler::new(HookOutcome {
-            block: Some("nope".to_string()),
-            ..Default::default()
-        });
-        let h2 = StubHandler::new(HookOutcome::default());
-
-        table.push(
-            HookEventKind::PreToolUse,
-            HandlerEntry::new(HookMatcher::default(), h1.clone()),
-        );
-        table.push(
-            HookEventKind::PreToolUse,
-            HandlerEntry::new(HookMatcher::default(), h2.clone()),
-        );
-        engine.reload(table);
-
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let args = Value::Null;
-        let outcome = engine
-            .fire(
-                pre_tool_use(&id, "bash", &args, SafetyClass::ReadOnly),
-                ctx(&session_id, cwd),
-            )
-            .await;
-
-        assert_eq!(outcome.block.as_deref(), Some("nope"));
-        assert_eq!(h2.calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn post_tool_use_drops_stray_block_field() {
-        let engine = DefaultHookEngine::new();
-        let mut table = HandlerTable::empty();
-        let h1 = StubHandler::new(HookOutcome {
-            block: Some("ignored".to_string()),
-            append: vec![ContentBlock::from("hello")],
-            ..Default::default()
-        });
-        table.push(
-            HookEventKind::PostToolUse,
-            HandlerEntry::new(HookMatcher::default(), h1),
-        );
-        engine.reload(table);
-
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let fields = ToolCallUpdateFields::default();
-        let ev = HookEvent::PostToolUse {
-            id: &id,
-            name: "bash",
-            fields: &fields,
-        };
-        let outcome = engine.fire(ev, ctx(&session_id, cwd)).await;
-        // Post* 不允许 block；append 落地
-        assert!(outcome.block.is_none());
-        assert_eq!(outcome.append.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn session_start_drops_stray_block() {
-        let engine = DefaultHookEngine::new();
-        let mut table = HandlerTable::empty();
-        let h1 = StubHandler::new(HookOutcome {
-            block: Some("ignored".to_string()),
-            append: vec![ContentBlock::from("preload")],
-            ..Default::default()
-        });
-        table.push(
-            HookEventKind::SessionStart,
-            HandlerEntry::new(HookMatcher::default(), h1),
-        );
-        engine.reload(table);
-
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        let outcome = engine.fire(ev, ctx(&session_id, cwd)).await;
-        // SessionStart 不允许 block；append 落地
-        assert!(outcome.block.is_none());
-        assert_eq!(outcome.append.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn user_prompt_submit_pipeline_combines_prepend_append() {
-        let engine = DefaultHookEngine::new();
-        let mut table = HandlerTable::empty();
-        let h1 = StubHandler::new(HookOutcome {
-            patch: Some(HookPatch::UserPrompt {
-                prepend: vec![ContentBlock::from("[hint] ")],
-                append: vec![],
-            }),
-            ..Default::default()
-        });
-        let h2 = StubHandler::new(HookOutcome::default());
-        table.push(
-            HookEventKind::UserPromptSubmit,
-            HandlerEntry::new(HookMatcher::default(), h1),
-        );
-        table.push(
-            HookEventKind::UserPromptSubmit,
-            HandlerEntry::new(HookMatcher::default(), h2.clone()),
-        );
-        engine.reload(table);
-
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let original = vec![ContentBlock::from("hello")];
-        let ev = HookEvent::UserPromptSubmit { content: &original };
-        let _ = engine.fire(ev, ctx(&session_id, cwd)).await;
-
-        // h2 看到的是 [hint, hello]
-        let observed = h2.observed_user_prompt.lock().expect("mutex").clone();
-        assert_eq!(observed.len(), 1);
-        assert_eq!(observed[0].len(), 2);
-    }
-
-    #[tokio::test]
-    async fn pre_tool_use_handler_timeout_blocks() {
-        let engine = DefaultHookEngine::new();
-        let mut table = HandlerTable::empty();
-        table.push(
-            HookEventKind::PreToolUse,
-            HandlerEntry::new(HookMatcher::default(), Arc::new(HangHandler))
-                .with_timeout(Duration::from_millis(10)),
-        );
-        engine.reload(table);
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let args = Value::Null;
-        let outcome = engine
-            .fire(
-                pre_tool_use(&id, "bash", &args, SafetyClass::ReadOnly),
-                ctx(&session_id, cwd),
-            )
-            .await;
-        // PreToolUse 上 error → block
-        assert!(outcome.block.is_some());
-    }
-
-    #[tokio::test]
-    async fn post_tool_use_handler_panic_downgrades_to_warning() {
-        let engine = DefaultHookEngine::new();
-        let mut table = HandlerTable::empty();
-        table.push(
-            HookEventKind::PostToolUse,
-            HandlerEntry::new(HookMatcher::default(), Arc::new(PanicHandler)),
-        );
-        // 跟一个正常 handler，确认 pipeline 没被中断
-        let h2 = StubHandler::new(HookOutcome {
-            append: vec![ContentBlock::from("after-panic")],
-            ..Default::default()
-        });
-        table.push(
-            HookEventKind::PostToolUse,
-            HandlerEntry::new(HookMatcher::default(), h2.clone()),
-        );
-        engine.reload(table);
-
-        let session_id = SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let fields = ToolCallUpdateFields::default();
-        let ev = HookEvent::PostToolUse {
-            id: &id,
-            name: "bash",
-            fields: &fields,
-        };
-        let outcome = engine.fire(ev, ctx(&session_id, cwd)).await;
-        assert!(outcome.block.is_none());
-        assert_eq!(outcome.append.len(), 1);
-        assert_eq!(h2.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1332,5 +404,100 @@ mod test {
         assert!(glob_match("???", "abc"));
         assert!(!glob_match("???", "abcd"));
         assert!(glob_match("mcp.*", "mcp.fs.read"));
+    }
+
+    // ----- step 模型派发（迁移 slice 1）-----
+
+    /// 返回固定 verdict 的 step handler。
+    struct StubStepHandler {
+        verdict: Value,
+    }
+
+    impl StepHandler for StubStepHandler {
+        fn handle_step<'a>(
+            &'a self,
+            _envelope: &'a Value,
+            _ctx: HookCtx<'a>,
+        ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
+            let v = self.verdict.clone();
+            Box::pin(async move { Ok(Some(v)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_to_step_handler_by_event_name() {
+        let engine = DefaultHookEngine::new();
+        let mut table = HandlerTable::empty();
+        table.push_step(
+            "before_turn_end",
+            StepHandlerEntry::new(
+                HookMatcher::default(),
+                Arc::new(StubStepHandler {
+                    verdict: serde_json::json!({
+                        "control": "continue",
+                        "additional_context": ["keep going"],
+                    }),
+                }),
+            ),
+        );
+        engine.reload(table);
+
+        let session_id = SessionId::new("s1");
+        let cwd = Path::new("/");
+        let mut step = step::BeforeTurnEnd {
+            stop_reason: AcpStopReason::EndTurn,
+            continues_so_far: 0,
+            voluntary: true,
+            feedback: Vec::new(),
+        };
+        let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
+        assert_eq!(control, step::HookControl::Continue);
+        // verdict 的注入落到了 step 上。
+        assert_eq!(step.feedback.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_no_handler_returns_proceed() {
+        let engine = DefaultHookEngine::new();
+        let session_id = SessionId::new("s1");
+        let cwd = Path::new("/");
+        let mut step = step::BeforeToolApply {
+            tool_name: "bash".to_string(),
+            args: serde_json::json!({}),
+            result: None,
+        };
+        let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
+        assert_eq!(control, step::HookControl::Proceed);
+    }
+
+    #[tokio::test]
+    async fn dispatch_matcher_filters_by_tool() {
+        let engine = DefaultHookEngine::new();
+        let mut table = HandlerTable::empty();
+        // 只匹配 tool=="edit" 的 handler；step 的 tool 是 "bash" → 不命中。
+        table.push_step(
+            "before_tool_apply",
+            StepHandlerEntry::new(
+                HookMatcher {
+                    tool: Some("edit".to_string()),
+                    ..Default::default()
+                },
+                Arc::new(StubStepHandler {
+                    verdict: serde_json::json!({"control": "break"}),
+                }),
+            ),
+        );
+        engine.reload(table);
+
+        let session_id = SessionId::new("s1");
+        let cwd = Path::new("/");
+        let mut step = step::BeforeToolApply {
+            tool_name: "bash".to_string(),
+            args: serde_json::json!({}),
+            result: None,
+        };
+        let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
+        // 不命中 → Proceed。
+        assert_eq!(control, step::HookControl::Proceed);
     }
 }

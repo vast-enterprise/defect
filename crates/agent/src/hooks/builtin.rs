@@ -8,11 +8,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use agent_client_protocol_schema::ContentBlock;
 use futures::future::BoxFuture;
 use serde_json::{Map, Value};
 
-use super::{HookCapability, HookCtx, HookError, HookEvent, HookHandler, HookOutcome, HookPatch};
+use super::{HookCtx, HookError, StepHandler};
 use crate::tool::SkillEntry;
 
 /// Builtin handler 的注册表：name → 工厂闭包。
@@ -25,37 +24,38 @@ use crate::tool::SkillEntry;
 /// 多个 `[[hooks.*]]` 引用同名 builtin 共享同一份 `Arc`。后续若有 builtin 需要
 /// 配置参数，再把 `name` 升级成结构化 enum，registry 改成 `match` 分发。
 pub struct BuiltinRegistry {
-    factories: BTreeMap<String, Box<dyn Fn() -> Arc<dyn HookHandler> + Send + Sync>>,
+    /// name → `Arc<dyn StepHandler>` 工厂。
+    step_factories: BTreeMap<String, Box<dyn Fn() -> Arc<dyn StepHandler> + Send + Sync>>,
 }
 
 impl BuiltinRegistry {
     /// v0 默认 registry：`tracing-audit` + `redact-secrets`。
     pub fn defaults() -> Self {
         let mut reg = Self {
-            factories: BTreeMap::new(),
+            step_factories: BTreeMap::new(),
         };
-        reg.register("tracing-audit", || Arc::new(TracingAuditHook));
-        reg.register("redact-secrets", || Arc::new(RedactSecretsHook));
+        reg.register_step("tracing-audit", || Arc::new(TracingAuditHook));
+        reg.register_step("redact-secrets", || Arc::new(RedactSecretsHook));
         reg
     }
 
-    /// 注册一条 builtin。重复 name 直接覆盖——测试用例可以 stub 出测试 builtin
-    /// 替换默认行为。
-    pub fn register<F>(&mut self, name: &str, factory: F)
+    /// 注册一条 builtin 的 step handler 工厂。重复 name 直接覆盖——测试可 stub 替换默认行为。
+    pub fn register_step<F>(&mut self, name: &str, factory: F)
     where
-        F: Fn() -> Arc<dyn HookHandler> + Send + Sync + 'static,
+        F: Fn() -> Arc<dyn StepHandler> + Send + Sync + 'static,
     {
-        self.factories.insert(name.to_string(), Box::new(factory));
+        self.step_factories
+            .insert(name.to_string(), Box::new(factory));
     }
 
-    /// 按名查 handler。`None` = 配置层应当 fail-fast 报错。
-    pub fn lookup(&self, name: &str) -> Option<Arc<dyn HookHandler>> {
-        self.factories.get(name).map(|f| f())
+    /// 按名查 step handler。`None` = 配置层应当 fail-fast 报错。
+    pub fn lookup_step(&self, name: &str) -> Option<Arc<dyn StepHandler>> {
+        self.step_factories.get(name).map(|f| f())
     }
 
     /// 列出已注册的 builtin name——`defect hooks list` CLI 用。
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.factories.keys().map(String::as_str)
+        self.step_factories.keys().map(String::as_str)
     }
 }
 
@@ -75,43 +75,26 @@ impl Default for BuiltinRegistry {
 /// 审计 trail；其他事件上挂会被 [`HookHandler::handle`] 直接 `Pass`。
 pub struct TracingAuditHook;
 
-impl HookHandler for TracingAuditHook {
-    fn capability(&self) -> HookCapability {
-        HookCapability::Intercept
-    }
-
-    fn handle<'a>(
+impl StepHandler for TracingAuditHook {
+    /// Step 模型：吃 `after_tool_apply` 信封 `{tool, is_error}`，记一条结构化审计日志，不产 verdict。
+    fn handle_step<'a>(
         &'a self,
-        event: &'a HookEvent<'a>,
+        envelope: &'a Value,
         _ctx: HookCtx<'a>,
-    ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
+    ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
         Box::pin(async move {
-            match event {
-                HookEvent::PostToolUse { id, name, .. } => {
-                    tracing::info!(
-                        target: "defect_agent::hooks::audit",
-                        tool = %name,
-                        tool_call_id = %id.0,
-                        outcome = "ok",
-                        "tool call completed",
-                    );
-                }
-                HookEvent::PostToolUseFailure { id, name, error } => {
-                    tracing::info!(
-                        target: "defect_agent::hooks::audit",
-                        tool = %name,
-                        tool_call_id = %id.0,
-                        outcome = "error",
-                        error = %error,
-                        "tool call failed",
-                    );
-                }
-                _ => {
-                    // 其他事件挂这条 builtin 不报错，仅 silent pass——hook 配置
-                    // 写错也别炸。
-                }
-            }
-            Ok(HookOutcome::default())
+            let tool = envelope.get("tool").and_then(Value::as_str).unwrap_or("?");
+            let is_error = envelope
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            tracing::info!(
+                target: "defect_agent::hooks::audit",
+                tool = %tool,
+                outcome = if is_error { "error" } else { "ok" },
+                "tool call completed",
+            );
+            Ok(None)
         })
     }
 }
@@ -141,33 +124,21 @@ const SECRET_KEY_NEEDLES: &[&str] = &[
     "authorization",
 ];
 
-impl HookHandler for RedactSecretsHook {
-    fn capability(&self) -> HookCapability {
-        HookCapability::Intercept
-    }
-
-    fn handle<'a>(
+impl StepHandler for RedactSecretsHook {
+    /// Step 模型：吃 `before_tool_apply` 信封 `{tool, args}`，对 args 里疑似敏感字段就地脱敏，
+    /// 命中则返回 `{args: <redacted>}` verdict（引擎 apply 回 step → 改 args）。
+    fn handle_step<'a>(
         &'a self,
-        event: &'a HookEvent<'a>,
+        envelope: &'a Value,
         _ctx: HookCtx<'a>,
-    ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
-        let HookEvent::PreToolUse { args, .. } = event else {
-            return Box::pin(async { Ok(HookOutcome::default()) });
-        };
-        let Some(obj) = args.as_object() else {
-            return Box::pin(async { Ok(HookOutcome::default()) });
-        };
-        let redacted = redact_object(obj);
-        Box::pin(async move {
-            if redacted.changed {
-                Ok(HookOutcome {
-                    patch: Some(HookPatch::ToolArgs(Value::Object(redacted.value))),
-                    ..Default::default()
-                })
-            } else {
-                Ok(HookOutcome::default())
-            }
-        })
+    ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
+        let verdict = envelope
+            .get("args")
+            .and_then(Value::as_object)
+            .map(redact_object)
+            .filter(|r| r.changed)
+            .map(|r| serde_json::json!({ "args": Value::Object(r.value) }));
+        Box::pin(async move { Ok(verdict) })
     }
 }
 
@@ -243,38 +214,23 @@ fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String
     Some(out)
 }
 
-impl HookHandler for SkillManifestHook {
-    fn capability(&self) -> HookCapability {
-        HookCapability::Intercept
-    }
-
-    fn handle<'a>(
+impl StepHandler for SkillManifestHook {
+    /// Step 模型：在 `after_session_enter` 把 L1 skill 清单作为 `additional_context` 注入
+    /// （引擎 apply 回 step → 拼进 system prompt 后缀）。
+    fn handle_step<'a>(
         &'a self,
-        event: &'a HookEvent<'a>,
+        _envelope: &'a Value,
         _ctx: HookCtx<'a>,
-    ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
-        Box::pin(async move {
-            let HookEvent::SessionStart { .. } = event else {
-                // 其他事件挂这条 builtin 不报错，仅 silent pass。
-                return Ok(HookOutcome::default());
-            };
-            let Some(manifest) = render_skill_manifest(&self.skills) else {
-                return Ok(HookOutcome::default());
-            };
-            Ok(HookOutcome {
-                append: vec![ContentBlock::from(manifest)],
-                ..Default::default()
-            })
-        })
+    ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
+        let verdict = render_skill_manifest(&self.skills)
+            .map(|manifest| serde_json::json!({ "additional_context": [manifest] }));
+        Box::pin(async move { Ok(verdict) })
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hooks::{HookEvent, SessionSource};
-    use crate::tool::SafetyClass;
-    use agent_client_protocol_schema::{ToolCallId, ToolCallUpdateFields};
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
@@ -296,144 +252,71 @@ mod test {
     #[test]
     fn registry_lookup_unknown_returns_none() {
         let reg = BuiltinRegistry::defaults();
-        assert!(reg.lookup("does-not-exist").is_none());
-    }
-
-    #[tokio::test]
-    async fn tracing_audit_passes_through() {
-        let h = TracingAuditHook;
-        let session_id = agent_client_protocol_schema::SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let fields = ToolCallUpdateFields::default();
-        let ev = HookEvent::PostToolUse {
-            id: &id,
-            name: "bash",
-            fields: &fields,
-        };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        assert!(outcome.block.is_none());
-        assert!(outcome.patch.is_none());
-        assert!(outcome.append.is_empty());
-    }
-
-    #[tokio::test]
-    async fn tracing_audit_silently_passes_other_events() {
-        let h = TracingAuditHook;
-        let session_id = agent_client_protocol_schema::SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        assert!(outcome.block.is_none());
-    }
-
-    #[tokio::test]
-    async fn redact_replaces_password_field() {
-        let h = RedactSecretsHook;
-        let session_id = agent_client_protocol_schema::SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let args = serde_json::json!({"password": "hunter2", "user": "alice"});
-        let ev = HookEvent::PreToolUse {
-            id: &id,
-            name: "login",
-            args: &args,
-            safety: SafetyClass::Network,
-        };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        let Some(HookPatch::ToolArgs(value)) = outcome.patch else {
-            panic!("expected ToolArgs patch, got {:?}", outcome.patch);
-        };
-        assert_eq!(value["password"], Value::String("***".to_string()));
-        assert_eq!(value["user"], Value::String("alice".to_string()));
-    }
-
-    #[tokio::test]
-    async fn redact_no_op_when_no_secret_key() {
-        let h = RedactSecretsHook;
-        let session_id = agent_client_protocol_schema::SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let id = ToolCallId::new("c1");
-        let args = serde_json::json!({"command": "echo hi"});
-        let ev = HookEvent::PreToolUse {
-            id: &id,
-            name: "bash",
-            args: &args,
-            safety: SafetyClass::Destructive,
-        };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        assert!(outcome.patch.is_none());
+        assert!(reg.lookup_step("does-not-exist").is_none());
     }
 
     #[test]
-    fn key_is_secret_matches_common_variants() {
-        assert!(key_is_secret("password"));
-        assert!(key_is_secret("Password"));
-        assert!(key_is_secret("API_KEY"));
-        assert!(key_is_secret("auth_token"));
-        assert!(key_is_secret("authorization"));
-        assert!(!key_is_secret("user"));
-        assert!(!key_is_secret("command"));
-    }
-
-    fn skill_entry(description: &str) -> SkillEntry {
-        SkillEntry {
-            description: description.to_string(),
-            body: "body".to_string(),
-            dir: std::path::PathBuf::from("/skills/x"),
-        }
+    fn registry_step_factories_match_event_factories() {
+        let reg = BuiltinRegistry::defaults();
+        assert!(reg.lookup_step("tracing-audit").is_some());
+        assert!(reg.lookup_step("redact-secrets").is_some());
+        assert!(reg.lookup_step("does-not-exist").is_none());
     }
 
     #[tokio::test]
-    async fn skill_manifest_injects_catalog_on_session_start() {
+    async fn redact_secrets_step_redacts_args() {
+        let h = RedactSecretsHook;
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let envelope = serde_json::json!({
+            "tool": "login",
+            "args": {"user": "alice", "password": "hunter2"},
+        });
+        let verdict = h
+            .handle_step(&envelope, ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        assert_eq!(verdict["args"]["password"], "***");
+        assert_eq!(verdict["args"]["user"], "alice");
+    }
+
+    #[tokio::test]
+    async fn redact_secrets_step_no_secrets_no_verdict() {
+        let h = RedactSecretsHook;
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let envelope = serde_json::json!({"tool": "ls", "args": {"path": "/tmp"}});
+        let verdict = h
+            .handle_step(&envelope, ctx(&session_id, cwd))
+            .await
+            .expect("ok");
+        assert!(verdict.is_none());
+    }
+
+    #[tokio::test]
+    async fn skill_manifest_step_injects_context() {
         let mut skills = BTreeMap::new();
-        skills.insert("code-review".to_string(), skill_entry("review Rust diffs"));
+        skills.insert(
+            "deploy".to_string(),
+            SkillEntry {
+                description: "deploy the app".to_string(),
+                body: String::new(),
+                dir: std::path::PathBuf::from("/skills/deploy"),
+            },
+        );
         let h = SkillManifestHook::new(Arc::new(skills));
         let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        assert_eq!(outcome.append.len(), 1);
-        let ContentBlock::Text(t) = &outcome.append[0] else {
-            panic!("expected text block");
-        };
-        assert!(t.text.contains("Available Skills"));
-        assert!(t.text.contains("- **code-review**: review Rust diffs"));
+        let envelope = serde_json::json!({"cwd": "/", "source": "new"});
+        let verdict = h
+            .handle_step(&envelope, ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        let ctx_arr = verdict["additional_context"].as_array().expect("array");
+        assert_eq!(ctx_arr.len(), 1);
+        assert!(ctx_arr[0].as_str().unwrap().contains("deploy"));
     }
 
-    #[tokio::test]
-    async fn skill_manifest_empty_index_injects_nothing() {
-        let h = SkillManifestHook::new(Arc::new(BTreeMap::new()));
-        let session_id = agent_client_protocol_schema::SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        assert!(outcome.append.is_empty());
-    }
-
-    #[tokio::test]
-    async fn skill_manifest_passes_other_events() {
-        let mut skills = BTreeMap::new();
-        skills.insert("x".to_string(), skill_entry("d"));
-        let h = SkillManifestHook::new(Arc::new(skills));
-        let session_id = agent_client_protocol_schema::SessionId::new("s1");
-        let cwd = std::path::Path::new("/");
-        let ev = HookEvent::UserPromptSubmit { content: &[] };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        assert!(outcome.append.is_empty());
-    }
-
-    // Make sure the unused-import warning doesn't fire on Arc when Arc isn't used.
-    fn _arc_used() {
-        let _: Arc<dyn HookHandler> = Arc::new(TracingAuditHook);
-    }
 }

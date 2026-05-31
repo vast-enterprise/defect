@@ -41,7 +41,7 @@ use tracing::Instrument;
 use crate::error::BoxError;
 use crate::event::PermissionResolution;
 use crate::fs::FsBackend;
-use crate::hooks::{HookCtx, HookEngine, HookEvent, NoopHookEngine, SessionSource};
+use crate::hooks::{HookCtx, HookEngine, NoopHookEngine};
 use crate::http::{HttpClient, NoopHttpClient};
 use crate::llm::{
     HostedCapabilities, LlmProvider, Message, ModelCandidate, ModelInfo, ProviderError,
@@ -304,17 +304,17 @@ impl AgentCore for DefaultAgentCore {
                 self.process_tools.clone(),
             ));
 
-            // SessionStart hook（Sync 拦截，但 block 字段被引擎丢弃；
-            // 仅吸收 outcome.append 作为系统 prompt 后缀候选）。
+            // after session enter hook：吸收注入的 additional_context 作为系统 prompt 后缀候选。
             let session_start_append = {
                 let cancel = CancellationToken::new();
                 let ctx = HookCtx::new(&id, &cwd, cancel);
-                let event = HookEvent::SessionStart {
-                    source: SessionSource::New,
-                    cwd: &cwd,
+                let mut step = crate::hooks::step::AfterSessionEnter {
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    source: crate::hooks::step::SessionSource::New,
+                    additional_context: Vec::new(),
                 };
-                let outcome = self.hook_engine.fire(event, ctx).await;
-                outcome.append
+                let _ = self.hook_engine.dispatch(&mut step, ctx).await;
+                step.additional_context
             };
 
             let session = Arc::new(DefaultSession {
@@ -388,19 +388,17 @@ impl AgentCore for DefaultAgentCore {
                 None => Arc::new(StaticToolRegistry::empty()) as Arc<dyn ToolRegistry>,
             };
 
-            // SessionStart hook（resume 路径）。同 create_session：
-            // block 被引擎丢弃；仅取 append。
+            // after session enter hook（resume 路径）。同 create_session：取注入的 context。
             let session_start_append = {
                 let cancel = CancellationToken::new();
                 let ctx = HookCtx::new(&loaded.info.id, &loaded.info.cwd, cancel);
-                let event = HookEvent::SessionStart {
-                    source: SessionSource::Resume {
-                        session_id: &loaded.info.id,
-                    },
-                    cwd: &loaded.info.cwd,
+                let mut step = crate::hooks::step::AfterSessionEnter {
+                    cwd: loaded.info.cwd.to_string_lossy().into_owned(),
+                    source: crate::hooks::step::SessionSource::Resume,
+                    additional_context: Vec::new(),
                 };
-                let outcome = self.hook_engine.fire(event, ctx).await;
-                outcome.append
+                let _ = self.hook_engine.dispatch(&mut step, ctx).await;
+                step.additional_context
             };
 
             let session = Arc::new(DefaultSession {

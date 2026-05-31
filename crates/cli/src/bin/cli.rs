@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     let mut builtin_registry = BuiltinRegistry::defaults();
     {
         let skills_for_hook = Arc::new(skills.clone());
-        builtin_registry.register("skill-manifest", move || {
+        builtin_registry.register_step("skill-manifest", move || {
             Arc::new(defect_agent::hooks::builtin::SkillManifestHook::new(
                 skills_for_hook.clone(),
             ))

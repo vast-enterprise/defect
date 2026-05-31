@@ -24,11 +24,9 @@
 //!
 //! [`LlmProvider::complete`]: crate::llm::LlmProvider::complete
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol_schema::ContentBlock;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 
@@ -38,7 +36,7 @@ use crate::llm::{
     ToolChoice,
 };
 
-use super::{HookCapability, HookCtx, HookError, HookEvent, HookHandler, HookOutcome};
+use super::{HookCtx, HookError, StepHandler};
 
 /// 模板渲染策略。详见 `docs/internal/hooks.md` §4.3。
 ///
@@ -102,18 +100,16 @@ impl PromptHandler {
     }
 }
 
-impl HookHandler for PromptHandler {
-    fn capability(&self) -> HookCapability {
-        HookCapability::Intercept
-    }
-
-    fn handle<'a>(
+impl StepHandler for PromptHandler {
+    /// Step 模型：把 step 信封渲染成 user 文本（JSON 形态直接序列化信封；Template 形态按
+    /// `{{key}}` 取信封顶层字段），跑一次 LLM，输出文本作为 `additional_context` verdict。
+    fn handle_step<'a>(
         &'a self,
-        event: &'a HookEvent<'a>,
+        envelope: &'a serde_json::Value,
         ctx: HookCtx<'a>,
-    ) -> BoxFuture<'a, Result<HookOutcome, HookError>> {
+    ) -> BoxFuture<'a, Result<Option<serde_json::Value>, HookError>> {
         Box::pin(async move {
-            let user_text = render_event(event, &ctx, &self.spec.render);
+            let user_text = render_envelope(envelope, &self.spec.render);
             let request = CompletionRequest {
                 model: self
                     .spec
@@ -130,23 +126,56 @@ impl HookHandler for PromptHandler {
                 sampling: SamplingParams::default(),
                 hosted_capabilities: Default::default(),
             };
-
             let stream = self
                 .spec
                 .provider
                 .complete(request, ctx.cancel.clone())
                 .await
                 .map_err(|err| HookError::HandlerFailed(BoxError::new(err)))?;
-
             let text = collect_text(stream).await?;
             if text.is_empty() {
-                return Ok(HookOutcome::default());
+                return Ok(None);
             }
-            Ok(HookOutcome {
-                append: vec![ContentBlock::from(text)],
-                ..Default::default()
-            })
+            Ok(Some(serde_json::json!({ "additional_context": [text] })))
         })
+    }
+}
+
+/// Step 信封渲染：JSON = 序列化信封；Template = `{{key}}` 取信封顶层字段（字符串/数字直接转文本）。
+fn render_envelope(envelope: &serde_json::Value, render: &PromptRender) -> String {
+    match render {
+        PromptRender::Json => serde_json::to_string(envelope).unwrap_or_default(),
+        PromptRender::Template { template } => {
+            let mut out = String::with_capacity(template.len());
+            let mut rest = template.as_str();
+            while let Some(start) = rest.find("{{") {
+                let Some((head, tail)) = rest.split_at_checked(start) else {
+                    break;
+                };
+                out.push_str(head);
+                let Some(after_open) = tail.get(2..) else {
+                    break;
+                };
+                let Some(close) = after_open.find("}}") else {
+                    out.push_str(tail);
+                    return out;
+                };
+                let Some(key) = after_open.get(..close).map(str::trim) else {
+                    break;
+                };
+                match envelope.get(key) {
+                    Some(serde_json::Value::String(s)) => out.push_str(s),
+                    Some(other) => out.push_str(&other.to_string()),
+                    None => {}
+                }
+                rest = match after_open.get(close + 2..) {
+                    Some(s) => s,
+                    None => break,
+                };
+            }
+            out.push_str(rest);
+            out
+        }
     }
 }
 
@@ -165,111 +194,14 @@ async fn collect_text(mut stream: crate::llm::ProviderStream) -> Result<String, 
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// rendering
-// ---------------------------------------------------------------------------
-
-fn render_event(event: &HookEvent<'_>, ctx: &HookCtx<'_>, render: &PromptRender) -> String {
-    match render {
-        PromptRender::Json => {
-            let envelope = super::command::CommandEventEnvelope::from_event(event);
-            serde_json::to_string(&envelope).unwrap_or_default()
-        }
-        PromptRender::Template { template } => render_template(template, event, ctx),
-    }
-}
-
-fn render_template(template: &str, event: &HookEvent<'_>, ctx: &HookCtx<'_>) -> String {
-    let vars = template_vars(event, ctx);
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some(start) = rest.find("{{") {
-        let (head, tail) = match rest.split_at_checked(start) {
-            Some(parts) => parts,
-            None => break,
-        };
-        out.push_str(head);
-        // tail 以 "{{" 开头
-        let after_open = match tail.get(2..) {
-            Some(s) => s,
-            None => break,
-        };
-        let Some(close) = after_open.find("}}") else {
-            // 没闭合——按字面输出 "{{" 后剩余部分
-            out.push_str(tail);
-            return out;
-        };
-        let key = match after_open.get(..close) {
-            Some(k) => k.trim(),
-            None => break,
-        };
-        if let Some(value) = vars.get(key) {
-            out.push_str(value);
-        }
-        // 否则未识别 key 替换成空串
-        rest = match after_open.get(close + 2..) {
-            Some(s) => s,
-            None => break,
-        };
-    }
-    out.push_str(rest);
-    out
-}
-
-fn template_vars(event: &HookEvent<'_>, ctx: &HookCtx<'_>) -> BTreeMap<&'static str, String> {
-    let mut vars: BTreeMap<&'static str, String> = BTreeMap::new();
-    vars.insert("event", event.kind_str().to_string());
-    vars.insert("cwd", ctx.cwd.to_string_lossy().into_owned());
-    vars.insert("session_id", ctx.session_id.0.to_string());
-
-    match event {
-        HookEvent::SessionStart { source, .. } => {
-            let label = match source {
-                super::SessionSource::New => "new",
-                super::SessionSource::Resume { .. } => "resume",
-            };
-            vars.insert("session_source", label.to_string());
-        }
-        HookEvent::UserPromptSubmit { content } => {
-            let prompt_text = content
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text(t) => Some(t.text.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            vars.insert("prompt", prompt_text);
-        }
-        HookEvent::PreToolUse { name, args, .. } => {
-            vars.insert("tool", (*name).to_string());
-            vars.insert("tool_input", args.to_string());
-        }
-        HookEvent::PostToolUse { name, fields, .. } => {
-            vars.insert("tool", (*name).to_string());
-            vars.insert(
-                "tool_input",
-                serde_json::to_string(fields).unwrap_or_default(),
-            );
-        }
-        HookEvent::PostToolUseFailure { name, error, .. } => {
-            vars.insert("tool", (*name).to_string());
-            vars.insert("tool_error", (*error).to_string());
-        }
-        _ => {}
-    }
-    vars
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hooks::SessionSource;
     use crate::llm::{
         Capabilities, FeatureSupport, ModelInfo, ProtocolId, ProviderChunk, ProviderError,
         ProviderErrorKind, ProviderInfo, ProviderStream, StopReason, ThinkingEcho,
     };
-    use agent_client_protocol_schema::{SessionId, ToolCallId};
+    use agent_client_protocol_schema::SessionId;
     use futures::stream;
     use std::path::Path;
     use tokio_util::sync::CancellationToken;
@@ -366,8 +298,13 @@ mod test {
         }
     }
 
+    fn after_session_enter_env() -> serde_json::Value {
+        serde_json::json!({"cwd": "/repo", "source": "new"})
+    }
+
+    /// Step 模型：LLM 输出文本 → additional_context verdict。
     #[tokio::test]
-    async fn prompt_handler_appends_text_block() {
+    async fn prompt_step_injects_additional_context() {
         let provider = Arc::new(FakeProvider {
             text: "preload-summary".into(),
         });
@@ -383,19 +320,21 @@ mod test {
         });
         let session_id = SessionId::new("s1");
         let cwd = Path::new("/repo");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        let outcome = h.handle(&ev, ctx(&session_id, cwd)).await.expect("ok");
-        assert_eq!(outcome.append.len(), 1);
+        let verdict = h
+            .handle_step(&after_session_enter_env(), ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        let arr = verdict["additional_context"].as_array().expect("array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0], "preload-summary");
     }
 
+    /// provider 出错 → HandlerFailed。
     #[tokio::test]
-    async fn prompt_handler_propagates_provider_error() {
-        let provider = Arc::new(FailingProvider);
+    async fn prompt_step_propagates_provider_error() {
         let h = PromptHandler::new(PromptSpec {
-            provider,
+            provider: Arc::new(FailingProvider),
             model: None,
             fallback_model: "fake-1".into(),
             system: "x".into(),
@@ -404,76 +343,57 @@ mod test {
         });
         let session_id = SessionId::new("s1");
         let cwd = Path::new("/");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
         let err = h
-            .handle(&ev, ctx(&session_id, cwd))
+            .handle_step(&after_session_enter_env(), ctx(&session_id, cwd))
             .await
             .expect_err("expected error");
         assert!(matches!(err, HookError::HandlerFailed(_)));
     }
 
+    // ----- render_envelope（信封模板渲染）-----
+
     #[test]
-    fn template_replaces_known_keys() {
-        let session_id = SessionId::new("s9");
-        let cwd = Path::new("/repo");
-        let ev = HookEvent::SessionStart {
-            source: SessionSource::New,
-            cwd,
-        };
-        let rendered = render_template(
-            "[event={{event}}] cwd={{cwd}} src={{session_source}}",
-            &ev,
-            &ctx(&session_id, cwd),
+    fn envelope_template_replaces_known_keys() {
+        let env = serde_json::json!({"cwd": "/repo", "source": "new"});
+        let r = render_envelope(
+            &env,
+            &PromptRender::Template {
+                template: "cwd={{cwd}} src={{source}}".into(),
+            },
         );
-        assert_eq!(rendered, "[event=session_start] cwd=/repo src=new");
+        assert_eq!(r, "cwd=/repo src=new");
     }
 
     #[test]
-    fn template_missing_key_becomes_empty() {
-        let session_id = SessionId::new("s9");
-        let cwd = Path::new("/");
-        let ev = HookEvent::UserPromptSubmit { content: &[] };
-        // tool_error 在 UserPromptSubmit 上不存在
-        let rendered = render_template("before/{{tool_error}}/after", &ev, &ctx(&session_id, cwd));
-        assert_eq!(rendered, "before//after");
+    fn envelope_template_missing_key_becomes_empty() {
+        let env = serde_json::json!({"tool": "bash"});
+        let r = render_envelope(
+            &env,
+            &PromptRender::Template {
+                template: "before/{{nonexistent}}/after".into(),
+            },
+        );
+        assert_eq!(r, "before//after");
     }
 
     #[test]
-    fn template_unclosed_passes_literally() {
-        let session_id = SessionId::new("s9");
-        let cwd = Path::new("/");
-        let ev = HookEvent::UserPromptSubmit { content: &[] };
-        let rendered = render_template("hello {{ unclosed", &ev, &ctx(&session_id, cwd));
-        assert_eq!(rendered, "hello {{ unclosed");
+    fn envelope_template_unclosed_passes_literally() {
+        let env = serde_json::json!({});
+        let r = render_envelope(
+            &env,
+            &PromptRender::Template {
+                template: "hello {{ unclosed".into(),
+            },
+        );
+        assert_eq!(r, "hello {{ unclosed");
     }
 
     #[test]
-    fn template_user_prompt_text_extraction() {
-        let session_id = SessionId::new("s9");
-        let cwd = Path::new("/");
-        let blocks = vec![ContentBlock::from("hello "), ContentBlock::from("world")];
-        let ev = HookEvent::UserPromptSubmit { content: &blocks };
-        let rendered = render_template("Q: {{prompt}}", &ev, &ctx(&session_id, cwd));
-        assert_eq!(rendered, "Q: hello world");
-    }
-
-    #[test]
-    fn json_render_matches_envelope() {
-        let session_id = SessionId::new("s1");
-        let cwd = Path::new("/");
-        let id = ToolCallId::new("c1");
-        let args = serde_json::json!({"k": 1});
-        let ev = HookEvent::PreToolUse {
-            id: &id,
-            name: "bash",
-            args: &args,
-            safety: crate::tool::SafetyClass::ReadOnly,
-        };
-        let rendered = render_event(&ev, &ctx(&session_id, cwd), &PromptRender::Json);
-        let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
-        assert_eq!(parsed["type"], "pre_tool_use");
+    fn envelope_json_render_serializes_envelope() {
+        let env = serde_json::json!({"tool": "bash", "args": {"k": 1}});
+        let r = render_envelope(&env, &PromptRender::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&r).expect("valid json");
+        assert_eq!(parsed["tool"], "bash");
     }
 }
+
