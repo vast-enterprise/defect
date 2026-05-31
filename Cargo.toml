@@ -123,9 +123,10 @@ htmd = "0.5"
 # 终端着色（仅 defect-cli 的 `repl` feature 用；只做 ANSI 字符串格式化，零运行时依赖）
 owo-colors = "4"
 
-# 仅 defect-cli 的 `repl` feature 用：termios raw 模式自己做行编辑
-# （保护 prompt、按 unicode char 删除）。已在依赖树里，零额外体积。
-libc = "0.2"
+# 仅 defect-cli 的 `repl` feature 用：跨平台终端 raw 模式 + 结构化按键事件
+# （Linux / macOS / Windows 一致）。default-features=false 去掉 bracketed-paste /
+# derive-more，只留读键(events)与 Windows 后端(windows)。
+crossterm = { version = "0.29", default-features = false, features = ["events", "windows"] }
 
 # 测试基础设施
 wiremock = "0.6"

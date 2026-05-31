@@ -5,17 +5,20 @@
 //! 行为"的便捷入口，不是面向终端用户的正式前端。
 //!
 //! 整个模块由 `repl` feature gate（见 `Cargo.toml`）——关掉 feature 后既
-//! 不编译这里，也不拖入 `owo-colors` / `libc`。
+//! 不编译这里，也不拖入 `owo-colors` / `crossterm`。
 //!
 //! ## 行编辑为何自己做
 //!
 //! 一开始偷懒让终端 canonical（cooked）模式做行编辑，有两个 bug：退格能把
-//! 提示符也擦掉；删中文时按字节删而非按 unicode char 删（取决于 tty 的
-//! `IUTF8` 标志）。所以读行阶段进 raw 模式自己接管（[`read_line`]）：维护一个
-//! `String` 缓冲（`pop()` 天然按 `char` 删），每次按键用「回行首 + 清行 + 重绘
-//! prompt+buffer」重画——提示符是重绘出来的删不掉，CJK 宽字符靠终端按显示
-//! 宽度推进光标也对。raw 模式只在读行时开，turn 期间的事件渲染仍在 cooked
-//! 模式，`\n` 正常。
+//! 提示符也擦掉；删中文时按字节删而非按 unicode char 删。所以读行阶段进 raw
+//! 模式自己接管（[`read_line`]）：维护一个 `String` 缓冲（`pop()` 天然按 `char`
+//! 删），每次按键用「回行首 + 清行 + 重绘 prompt+buffer」重画——提示符是重绘
+//! 出来的删不掉，CJK 宽字符靠终端按显示宽度推进光标也对。raw 模式只在读行时
+//! 开，turn 期间的事件渲染仍在 cooked 模式，`\n` 正常。
+//!
+//! 用 [`crossterm`] 做 raw 模式与按键解析（Linux / macOS / Windows 一致）——
+//! 它的 `event::read()` 返回已解析好的 [`KeyEvent`]（多字节 char 直接给到，
+//! 不必手拼 UTF-8），raw 模式切换也跨平台。
 //!
 //! ## 与 ACP 路径的关系
 //!
@@ -24,11 +27,13 @@
 //! 执行，无委托）。事件流的消费逻辑是 `defect-acp` event pump 的极简版——
 //! 那边翻译成 wire notification，这里翻译成终端文本。
 
-use std::io::{Read, Write as _};
+use std::io::{IsTerminal, Write as _};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_client_protocol_schema::{ContentBlock, SessionId, StopReason, TextContent};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use defect_agent::event::AgentEvent;
 use defect_agent::session::{AgentCore, Frontend, new_session_id};
 use defect_tools::{LocalFsBackend, LocalShellBackend};
@@ -149,21 +154,20 @@ enum ReadOutcome {
 
 /// raw 模式下自己做行编辑，读一行。阻塞，须在 `spawn_blocking` 里调。
 ///
-/// 支持：可打印字符（含多字节 UTF-8）、退格（Backspace / DEL，按 unicode
-/// char 删）、回车提交、Ctrl-C 放弃、Ctrl-D（空缓冲）EOF。不支持光标移动 /
-/// 历史——超出最小 REPL 范畴。
+/// 用 crossterm 读结构化按键事件（跨平台、多字节 char 已解析好）。支持：可打印
+/// 字符、退格（按 unicode char 删）、回车提交、Ctrl-C 放弃、Ctrl-D（空缓冲）EOF。
+/// 不支持光标移动 / 历史——超出最小 REPL 范畴。
 fn read_line(prompt: &str) -> std::io::Result<ReadOutcome> {
-    // stdin 不是 TTY（管道 / 重定向）时没法进 raw 模式，也不需要——直接按
-    // 行读，由上游缓冲做行边界。raw 模式的行编辑只在真终端才有意义。
-    if !stdin_is_tty() {
+    // stdin 不是 TTY（管道 / 重定向）时没法进 raw 模式，也不需要——直接按行读，
+    // 由上游缓冲做行边界。raw 模式的行编辑只在真终端才有意义。
+    if !std::io::stdin().is_terminal() {
         return read_line_cooked(prompt);
     }
     let _raw = RawMode::enable()?; // Drop 时恢复终端
-    let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     let mut buf = String::new();
 
-    // 重绘当前行：回行首、清到行尾、写 prompt + buffer。
+    // 重绘当前行：回行首、清到行尾、写 prompt + buffer。raw 模式下换行要 `\r\n`。
     macro_rules! redraw {
         () => {{
             write!(stdout, "\r\x1b[K{prompt}{buf}")?;
@@ -172,66 +176,54 @@ fn read_line(prompt: &str) -> std::io::Result<ReadOutcome> {
     }
     redraw!();
 
-    let mut byte = [0u8; 1];
     loop {
-        if stdin.read(&mut byte)? == 0 {
-            // stdin EOF。
-            write!(stdout, "\r\n")?;
-            stdout.flush()?;
-            return Ok(ReadOutcome::Eof);
+        // crossterm 的 read() 阻塞到下一个终端事件。只关心按键事件。
+        let event = crossterm::event::read()?;
+        let Event::Key(KeyEvent {
+            code,
+            modifiers,
+            kind,
+            ..
+        }) = event
+        else {
+            continue; // resize / focus / paste / 鼠标等——忽略
+        };
+        // Windows 会同时上报 Press 与 Release；只认 Press（与 Release==默认 Press 的
+        // unix 行为对齐），否则每个键会被处理两次。
+        if kind == KeyEventKind::Release {
+            continue;
         }
-        match byte[0] {
-            b'\r' | b'\n' => {
+        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+        match code {
+            KeyCode::Enter => {
                 write!(stdout, "\r\n")?;
                 stdout.flush()?;
                 return Ok(ReadOutcome::Line(buf));
             }
-            0x03 => {
-                // Ctrl-C：放弃当前行。
+            KeyCode::Char('c') if ctrl => {
                 write!(stdout, "^C\r\n")?;
                 stdout.flush()?;
                 return Ok(ReadOutcome::Interrupted);
             }
-            0x04 => {
-                // Ctrl-D：仅空缓冲时作 EOF；否则忽略（不支持删字符语义）。
-                if buf.is_empty() {
-                    write!(stdout, "\r\n")?;
-                    stdout.flush()?;
-                    return Ok(ReadOutcome::Eof);
-                }
+            // Ctrl-D：仅空缓冲时作 EOF；非空时落到 `_ => {}` 被忽略。
+            KeyCode::Char('d') if ctrl && buf.is_empty() => {
+                write!(stdout, "\r\n")?;
+                stdout.flush()?;
+                return Ok(ReadOutcome::Eof);
             }
-            0x7f | 0x08 => {
-                // Backspace / DEL：删最后一个 unicode char，重绘。
-                if buf.pop().is_some() {
-                    redraw!();
-                }
+            // 删最后一个 unicode char（pop 天然按 char）；空缓冲时 pop 返回 None、不重绘。
+            KeyCode::Backspace if buf.pop().is_some() => {
+                redraw!();
             }
-            b if b < 0x20 => {
-                // 其余控制字符（含未支持的转义序列引导符 ESC=0x1b）忽略。
-                // ESC 后续字节会被当作普通输入读到——最小 REPL 不解析方向键等，
-                // 把 ESC 整段吞掉以免污染缓冲。
-                if b == 0x1b {
-                    drain_escape(&mut stdin)?;
-                }
+            KeyCode::Char(c) if !ctrl => {
+                // 可打印字符（crossterm 已把多字节解析成一个 char）。
+                buf.push(c);
+                redraw!();
             }
-            b => {
-                // 可打印 / UTF-8 起始字节：按 UTF-8 多字节读全，push 进缓冲。
-                let mut bytes = vec![b];
-                bytes.extend(read_utf8_continuation(&mut stdin, b)?);
-                if let Ok(s) = std::str::from_utf8(&bytes) {
-                    buf.push_str(s);
-                    redraw!();
-                }
-                // 非法 UTF-8 直接丢弃。
-            }
+            // 方向键 / Tab / 其它控制键：最小 REPL 不处理，忽略。
+            _ => {}
         }
     }
-}
-
-/// stdin 是否连到终端。非 TTY（管道 / 文件重定向）时 raw 模式无意义。
-fn stdin_is_tty() -> bool {
-    // SAFETY: isatty 只读 fd 状态，无副作用。
-    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
 }
 
 /// 非 TTY 的降级读行：按行读，不做 raw 行编辑。空行（EOF）返回 [`ReadOutcome::Eof`]。
@@ -248,83 +240,21 @@ fn read_line_cooked(prompt: &str) -> std::io::Result<ReadOutcome> {
     Ok(ReadOutcome::Line(trimmed.to_owned()))
 }
 
-/// 按 UTF-8 起始字节判断还需读几个续延字节，读回它们。
-fn read_utf8_continuation(
-    stdin: &mut impl Read,
-    lead: u8,
-) -> std::io::Result<Vec<u8>> {
-    let extra = match lead {
-        0xC0..=0xDF => 1,
-        0xE0..=0xEF => 2,
-        0xF0..=0xF7 => 3,
-        _ => 0,
-    };
-    let mut rest = vec![0u8; extra];
-    if extra > 0 {
-        stdin.read_exact(&mut rest)?;
-    }
-    Ok(rest)
-}
-
-/// 吞掉一个 ANSI 转义序列（ESC 已被读走）。只为防止方向键等把后续字节当
-/// 普通字符塞进缓冲——不解释序列含义。读到终结字节（字母 / `~`）即停。
-fn drain_escape(stdin: &mut impl Read) -> std::io::Result<()> {
-    let mut byte = [0u8; 1];
-    // CSI 序列形如 `ESC [ ... <final>`；只在 `[` / `O` 引导时才继续吞。
-    if stdin.read(&mut byte)? == 0 || !matches!(byte[0], b'[' | b'O') {
-        return Ok(());
-    }
-    loop {
-        if stdin.read(&mut byte)? == 0 {
-            return Ok(());
-        }
-        // 参数 / 中间字节是 0x20..=0x3f；终结字节是 0x40..=0x7e。
-        if byte[0] >= 0x40 {
-            return Ok(());
-        }
-    }
-}
-
-/// 终端 raw 模式 RAII guard：构造时切 raw、Drop 时恢复原 termios。
-///
-/// 只关 canonical（行缓冲）与 echo、信号生成与软流控，让我们逐字节读、
-/// 自己回显、自己处理 Ctrl-C/D；输出处理（OPOST）保持不变。
-struct RawMode {
-    fd: i32,
-    original: libc::termios,
-}
+/// 终端 raw 模式 RAII guard：构造时进 raw、Drop 时恢复。跨平台由 crossterm 负责
+/// （unix 是 termios、Windows 是 console mode），我们不直接碰平台 API。
+struct RawMode;
 
 impl RawMode {
     fn enable() -> std::io::Result<Self> {
-        let fd = libc::STDIN_FILENO;
-        // SAFETY: 标准 termios FFI；termios 结构由 tcgetattr 填充后才使用。
-        unsafe {
-            let mut original: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(fd, &mut original) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let mut raw = original;
-            // 关行规程：ICANON(行缓冲)、ECHO(回显)、ISIG(信号)、IEXTEN(扩展)。
-            raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG | libc::IEXTEN);
-            // 关输入软流控与 CR→NL 转换，让 Ctrl-S/Q、回车按原字节到达。
-            raw.c_iflag &= !(libc::IXON | libc::ICRNL);
-            // 每次至少读 1 字节、无超时。
-            raw.c_cc[libc::VMIN] = 1;
-            raw.c_cc[libc::VTIME] = 0;
-            if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(Self { fd, original })
-        }
+        enable_raw_mode()?;
+        Ok(Self)
     }
 }
 
 impl Drop for RawMode {
     fn drop(&mut self) {
-        // SAFETY: 用构造时保存的原 termios 恢复；失败也无从处理，尽力而为。
-        unsafe {
-            libc::tcsetattr(self.fd, libc::TCSANOW, &self.original);
-        }
+        // 失败也无从处理，尽力而为（与终端状态恢复同语义）。
+        let _ = disable_raw_mode();
     }
 }
 
