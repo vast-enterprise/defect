@@ -158,7 +158,6 @@ impl Default for PromptConfig {
         }
     }
 }
-
 /// turn 一次执行的全部依赖与累计状态。
 ///
 /// 本 struct 由 [`crate::session::DefaultSession`] 在每次 `run_turn` 时构造，
@@ -243,7 +242,6 @@ impl<'a> TurnRunner<'a> {
 
     async fn run_inner(&self) -> Result<TurnOutcome, TurnError> {
         let mut state = TurnState::new(self.config.request_limit);
-
         loop {
             if self.cancel.is_cancelled() {
                 return Ok(turn_outcome(&state, AcpStopReason::Cancelled));

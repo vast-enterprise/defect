@@ -29,7 +29,8 @@
 | internal | LSP 语义理解（诊断注入、跳转定义、查找引用；P1 可用 hook 跑 linter 过渡） | `docs/report/lsp-integration-survey.md`（调研报告，待转设计） | P2 | 🕒 未开始 |
 | internal | 用 `schemars` 从 args struct 生成 Tool 参数 schema（替代手写 `json!`） | `docs/proposals/tool-schema-via-schemars.md` | P2 | 🕒 未开始（提案） |
 | internal | 任务编排（task arrange）                                       | `docs/proposals/task-arrange.md`（仅占位标题，内容待写）                | P2     | 🕒 未开始 |
-| internal | Hook async/observe 事件接入（核心 gap=投影器缺失；数据源 6/8 就绪，详见下方说明） | `docs/internal/hooks.md` §7.2 / §11 | P2 | 🕒 未开始（仅 enum 占位） |
+| internal | 同步 Hook 统一控制模型（hook = 改 ctx + `ControlFlow<TurnEnd>`；Stop/turn-end 续命、PreCompact 否决、PostToolBatch、替换旧 `HookOutcome`） | `docs/proposals/sync-hook-control-model.md` | P1 | 🕒 未开始（设计已定稿） |
+| internal | Hook async/observe 事件接入（核心 gap=投影器缺失；数据源 6/8 就绪，详见下方说明。注：`TurnEnd`/`PreCompact` 已按 sync-hook 提案迁回同步，不在 observe 范围） | `docs/internal/hooks.md` §7.2 / §11 | P2 | 🕒 未开始（仅 enum 占位） |
 
 ---
 
@@ -53,24 +54,25 @@
 
 ## 备注：Hook async/observe 事件的真实缺口
 
-8 个 observe 事件（`SessionEnd` / `TurnStart` / `TurnEnd` / `PreLlmCall` /
-`PostLlmCall` / `PreCompact` / `PostCompact` / `PermissionAsk`）仅 enum 占位、未落地。
+6 个 observe 事件（`SessionEnd` / `TurnStart` / `PreLlmCall` / `PostLlmCall` /
+`PostCompact` / `PermissionAsk`）仅 enum 占位、未落地。
+（原 8 件里的 `TurnEnd` / `PreCompact` 已按 [sync-hook 提案](docs/proposals/sync-hook-control-model.md)
+迁回同步拦截，不再属于 observe。）
 **最大的 gap 是「AgentEvent → HookEvent 投影器」缺失**，不是缺数据：
 
 - `DefaultHookEngine::observe()`（`crates/agent/src/hooks.rs`）是空函数、**无调用方**；
   没有 task 订阅 `AgentEvent` 流把它投影成 `HookEvent` 再调 `observe()`。fan-out
   基础设施（`EventEmitter` / `Session::subscribe` / `SessionObserver`）全现成，
   storage / tracing 已在同一根管子上消费。
-- **数据源 6/8 已就绪**，可直接投影：`TurnStart`←`TurnStarted`、`TurnEnd`←`TurnEnded`、
-  `PreLlmCall`←`LlmCallStarted`、`PostLlmCall`←`LlmCallFinished`、
-  `PostCompact`←`ContextCompressed`、`PermissionAsk`←`PolicyDecision{Ask}`。
-- **2 个要先补源**：`PreCompact`（只有压缩后的 `ContextCompressed`，缺压缩前事件 →
-  turn loop 加 emit 点）、`SessionEnd`（`AgentEvent` 无 session 终结事件 →
+- **数据源 5/6 已就绪**，可直接投影：`TurnStart`←`TurnStarted`、`PreLlmCall`←`LlmCallStarted`、
+  `PostLlmCall`←`LlmCallFinished`、`PostCompact`←`ContextCompressed`、
+  `PermissionAsk`←`PolicyDecision{Ask}`。
+- **1 个要先补源**：`SessionEnd`（`AgentEvent` 无 session 终结事件 →
   session 生命周期造终结信号）。
 - **config**：`HooksSection` / `HookEventTag` 还没有 async 事件桶。
 
-落地顺序（详见 `docs/internal/hooks.md` §11.3）：① 投影 task + `observe()` 派发（先接 6 件）
-② config 加 async 桶 ③ 补 `PreCompact` / `SessionEnd` 两个数据源。
+落地顺序（详见 `docs/internal/hooks.md` §11.3）：① 投影 task + `observe()` 派发（先接 5 件）
+② config 加 async 桶 ③ 补 `SessionEnd` 数据源。
 
 **附带必修**：`HooksSection` 没有 `deny_unknown_fields`——用户现在写
 `[[hooks.turn_start]]` 之类**超前/拼错的事件键会被 serde 静默丢弃**，hook 永不触发
