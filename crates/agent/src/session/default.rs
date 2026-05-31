@@ -317,7 +317,9 @@ impl AgentCore for DefaultAgentCore {
                 step.additional_context
             };
 
-            let session = Arc::new(DefaultSession {
+            // session 级取消令牌：driver loop 退出信号 + 后台任务取消令牌来源（同一个）。
+            let session_cancel = CancellationToken::new();
+            let concrete = Arc::new(DefaultSession {
                 id: id.clone(),
                 cwd,
                 history: Box::new(VecHistory::new()) as Box<dyn History>,
@@ -328,6 +330,9 @@ impl AgentCore for DefaultAgentCore {
                 events: Arc::new(EventEmitter::new()),
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
+                background: crate::session::BackgroundTasks::new(session_cancel.clone()),
+                turn_freed: Arc::new(tokio::sync::Notify::new()),
+                session_cancel,
                 config: RwLock::new(
                     self.config
                         .read()
@@ -341,7 +346,11 @@ impl AgentCore for DefaultAgentCore {
                 hook_engine: self.hook_engine.clone(),
                 session_start_append,
                 request_audit: RequestAuditTracker::new(),
-            }) as Arc<dyn Session>;
+            });
+            // 起 session driver（主动续转）。driver 持 Weak 自引——session 外部
+            // 强引用清零时它 upgrade 失败而退出，不让 session 永生。
+            tokio::spawn(DefaultSession::drive(Arc::downgrade(&concrete)));
+            let session = concrete as Arc<dyn Session>;
 
             let session_info = SessionCreateInfo {
                 id: id.clone(),
@@ -401,7 +410,8 @@ impl AgentCore for DefaultAgentCore {
                 step.additional_context
             };
 
-            let session = Arc::new(DefaultSession {
+            let session_cancel = CancellationToken::new();
+            let concrete = Arc::new(DefaultSession {
                 id: loaded.info.id.clone(),
                 cwd: loaded.info.cwd.clone(),
                 history: Box::new(VecHistory::from_messages(loaded.history)),
@@ -415,6 +425,9 @@ impl AgentCore for DefaultAgentCore {
                 events: Arc::new(EventEmitter::new()),
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
+                background: crate::session::BackgroundTasks::new(session_cancel.clone()),
+                turn_freed: Arc::new(tokio::sync::Notify::new()),
+                session_cancel,
                 config: RwLock::new(
                     self.config
                         .read()
@@ -428,7 +441,9 @@ impl AgentCore for DefaultAgentCore {
                 hook_engine: self.hook_engine.clone(),
                 session_start_append,
                 request_audit: RequestAuditTracker::new(),
-            }) as Arc<dyn Session>;
+            });
+            tokio::spawn(DefaultSession::drive(Arc::downgrade(&concrete)));
+            let session = concrete as Arc<dyn Session>;
 
             let session_info = loaded.info;
             for observer in &self.observers {
@@ -507,6 +522,18 @@ pub struct DefaultSession {
     /// 单 turn 互斥 + cancel 通道。`Some(token)` 表示有 turn 在跑；
     /// `None` 表示空闲。`std::sync::Mutex` 仅短暂持锁、不跨 await。
     turn_state: Mutex<TurnSlot>,
+    /// session 级后台任务表（`run_in_background` 落点）。持有任务 `JoinHandle`
+    /// 使其活过发起它的 turn；内部 cancel token 独立于 turn 子 token。`run_turn`
+    /// 把 clone 经 `TurnRunner` → `ToolContext` 注入给工具。详见
+    /// `docs/proposals/task-arrange.md` §3.1。
+    background: crate::session::BackgroundTasks,
+    /// turn slot 释放通知。`TurnGuard::drop` 时 `notify_one`——session driver 在
+    /// 撞上 `TurnInProgress` 后等它，待当前 turn 结束再起自主续转 turn（主动续转的
+    /// 活性保证）。详见 `docs/proposals/task-arrange.md` §3.2。
+    turn_freed: Arc<tokio::sync::Notify>,
+    /// session 级取消令牌——session 终结时 cancel，driver loop 据此退出。也是
+    /// `background` 内任务取消令牌的来源（同一个 token）。
+    session_cancel: CancellationToken,
     config: RwLock<TurnConfig>,
     /// session 级 fs 后端。由 [`AgentCore::create_session`] 注入；
     /// `TurnRunner` 把 `&dyn FsBackend` 借到 [`crate::tool::ToolContext`] 传给工具。
@@ -551,6 +578,186 @@ impl DefaultSession {
             .expect("DefaultSession provider_state rwlock poisoned")
             .hosted_capabilities
     }
+
+    /// 一次 turn 的执行核心——用户 turn 与自主续转 turn 共用。
+    ///
+    /// `prompt` 是外部输入（用户 turn）或空（自主续转 turn）。两种情况都会把已完成的
+    /// 后台结果作为 prompt **前缀块**带入；空 prompt + 无后台结果时不起 turn（返回
+    /// `EndTurn`，避免空转）。turn slot 互斥仍由本函数顶部把守。
+    async fn run_turn_core(
+        &self,
+        prompt: Vec<ContentBlock>,
+        ingest_source: crate::hooks::step::IngestSource,
+    ) -> Result<StopReason, TurnError> {
+        let span = tracing::info_span!(
+            "turn",
+            session_id = %short_id(self.id.0.as_ref()),
+            model = %self.current_model(),
+        );
+        async move {
+            let cancel = {
+                let mut slot = self
+                    .turn_state
+                    .lock()
+                    .expect("DefaultSession turn_state mutex poisoned");
+                if slot.cancel.is_some() {
+                    return Err(TurnError::TurnInProgress);
+                }
+                let cancel = CancellationToken::new();
+                slot.cancel = Some(cancel.clone());
+                cancel
+            };
+
+            // RAII：函数任意路径退出（含 await 内 panic）都释放 slot + 唤醒 driver。
+            let _guard = TurnGuard {
+                state: &self.turn_state,
+                freed: &self.turn_freed,
+            };
+
+            // 把已完成的后台任务结果作为本轮 prompt 的**前缀块**带入。
+            // 详见 docs/proposals/task-arrange.md §3.1 / §5.1。
+            let prompt = {
+                let outcomes = self.background.drain_completed();
+                if outcomes.is_empty() {
+                    prompt
+                } else {
+                    let mut blocks: Vec<ContentBlock> = outcomes
+                        .iter()
+                        .map(|o| {
+                            ContentBlock::from(
+                                crate::session::format_background_outcome(o).as_str(),
+                            )
+                        })
+                        .collect();
+                    blocks.extend(prompt);
+                    blocks
+                }
+            };
+
+            // 空 prompt（自主 turn 却无任何后台结果可消化）——不起 turn，避免空转。
+            if prompt.is_empty() {
+                return Ok(StopReason::EndTurn);
+            }
+
+            let config = self
+                .config
+                .read()
+                .expect("DefaultSession config rwlock poisoned")
+                .clone();
+            // turn 在启动时拍一次 (provider, hosted) 快照——同一 turn 内即使有并发的
+            // set_model 请求，本 turn 仍走选定的 provider；下一 turn 才生效。
+            let provider = self.current_provider();
+            let hosted = self.current_hosted();
+            let running_ctx = RunningContext::new(self.frontend, &self.cwd);
+            let system_prompt = resolve_system_prompt(
+                &running_ctx,
+                &provider.info().vendor,
+                &config.model,
+                &config.base_prompt,
+                &config.prompt,
+                config.system_prompt.as_deref(),
+            )
+            .map_err(|err| TurnError::Internal(BoxError::new(err)))?;
+            let runner = TurnRunner {
+                history: self.history.as_ref(),
+                tools: self.tools.as_ref(),
+                provider: provider.as_ref(),
+                policy: self.policy.as_ref(),
+                events: self.events.clone(),
+                permissions: self.permissions.as_ref(),
+                cancel,
+                config: &config,
+                system_prompt: system_prompt.map(Arc::from),
+                cwd: &self.cwd,
+                fs: self.fs.clone(),
+                shell: self.shell.clone(),
+                http: self.http.clone(),
+                hosted_capabilities: hosted,
+                hooks: self.hook_engine.as_ref(),
+                session_id: &self.id,
+                request_audit: &self.request_audit,
+                // 顶层 turn 注入 session 级后台任务句柄——工具的 run_in_background
+                // 能力由此开启。嵌套子 agent turn 不注入（见 spawn_agent）。
+                background: Some(self.background.clone()),
+                ingest_source,
+            };
+
+            runner.run(prompt).await
+        }
+        .instrument(span)
+        .await
+    }
+
+    /// Session driver loop（主动续转）：常驻 task，在后台任务完成时起一个自主 turn
+    /// 消化结果。`create_session` / `load_session` 时 spawn。
+    ///
+    /// 持 `Weak<Self>` 而非 `Arc`：driver 不能让 session 永生。每轮先 `upgrade`——
+    /// 外部强引用（`AgentCore.sessions` DashMap）全没了时 upgrade 失败、driver 退出。
+    /// `session_cancel` 是显式退出信号（process shutdown / 未来的 session evict）。
+    ///
+    /// 形态见 `docs/proposals/task-arrange.md` §3.2。两条等待腿：
+    /// - `background.wait_for_completion()`：有任务完成 → 准备起自主 turn；
+    /// - `session_cancel.cancelled()`：session 终结 → 退出 loop。
+    ///
+    /// 起 turn 前若撞上 `TurnInProgress`（用户 turn 正在跑），等 `turn_freed`
+    /// 再重试——这正是"用户输入与后台结果竞争同一个 turn slot"的落点：用户 turn
+    /// 先到就先跑，后台结果搭它的车（run_turn_core 的 drain）或等它结束再单独起。
+    async fn drive(weak: std::sync::Weak<Self>) {
+        loop {
+            let Some(this) = weak.upgrade() else { break };
+            if this.session_cancel.is_cancelled() {
+                break;
+            }
+            // 先拿 notified() future 再检查队列——避免漏掉两步之间到达的完成通知。
+            let completion = this.background.wait_for_completion();
+            if this.background.has_completed() {
+                this.run_autonomous_turn_with_retry().await;
+                continue;
+            }
+            tokio::select! {
+                () = completion => {
+                    this.run_autonomous_turn_with_retry().await;
+                }
+                () = this.session_cancel.cancelled() => break,
+            }
+        }
+    }
+
+    /// 起一个自主续转 turn；若 turn slot 被占（用户 turn 在跑），等它释放再试，
+    /// 最多重试到结果被消化。`session_cancel` 触发时放弃。
+    async fn run_autonomous_turn_with_retry(self: &Arc<Self>) {
+        loop {
+            if self.session_cancel.is_cancelled() {
+                return;
+            }
+            match self
+                .run_turn_core(Vec::new(), crate::hooks::step::IngestSource::Background)
+                .await
+            {
+                Err(TurnError::TurnInProgress) => {
+                    // 用户 turn 正在跑。等它结束——它的 run_turn_core 会 drain 掉我们的
+                    // 后台结果（搭车），那样这里 has_completed 就空了、自然退出。
+                    tokio::select! {
+                        () = self.turn_freed.notified() => {}
+                        () = self.session_cancel.cancelled() => return,
+                    }
+                    if !self.background.has_completed() {
+                        // 被在跑的用户 turn 搭车消化了——无需再起自主 turn。
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+    }
+}
+
+impl Drop for DefaultSession {
+    fn drop(&mut self) {
+        // session 析构 → 取消 session_cancel：掐掉所有在途后台任务，并让 driver loop
+        // 的 `session_cancel.cancelled()` 腿醒来退出（driver 持 Weak，此时 upgrade 也已失败）。
+        self.session_cancel.cancel();
+    }
 }
 
 #[derive(Default)]
@@ -561,6 +768,8 @@ struct TurnSlot {
 /// `run_turn` 的"占位 / 释放" guard：构造时占用 turn slot、drop 时释放。
 struct TurnGuard<'a> {
     state: &'a Mutex<TurnSlot>,
+    /// turn 释放时唤醒 session driver（主动续转的活性保证）。
+    freed: &'a tokio::sync::Notify,
 }
 
 impl<'a> Drop for TurnGuard<'a> {
@@ -568,6 +777,8 @@ impl<'a> Drop for TurnGuard<'a> {
         if let Ok(mut slot) = self.state.lock() {
             slot.cancel = None;
         }
+        // turn slot 已空——唤醒可能等着起自主续转 turn 的 driver。
+        self.freed.notify_one();
     }
 }
 
@@ -698,78 +909,9 @@ impl Session for DefaultSession {
     }
 
     fn run_turn(&self, prompt: Vec<ContentBlock>) -> BoxFuture<'_, Result<StopReason, TurnError>> {
-        // 整个 turn 包在一个 span 里——LLM 调用 / 工具调用 / 权限请求 都
-        // 自动挂成子 span，排障时一棵 trace 走到底。session_id 截短，避免
-        // 输出整段 uuid 噪音。详见 docs/outbound/tracing.md §2.2。
-        let span = tracing::info_span!(
-            "turn",
-            session_id = %short_id(self.id.0.as_ref()),
-            model = %self.current_model(),
-        );
-        Box::pin(
-            async move {
-                let cancel = {
-                    let mut slot = self
-                        .turn_state
-                        .lock()
-                        .expect("DefaultSession turn_state mutex poisoned");
-                    if slot.cancel.is_some() {
-                        return Err(TurnError::TurnInProgress);
-                    }
-                    let cancel = CancellationToken::new();
-                    slot.cancel = Some(cancel.clone());
-                    cancel
-                };
-
-                // RAII：函数任意路径退出（含 await 内 panic）都释放 slot
-                let _guard = TurnGuard {
-                    state: &self.turn_state,
-                };
-
-                let config = self
-                    .config
-                    .read()
-                    .expect("DefaultSession config rwlock poisoned")
-                    .clone();
-                // turn 在启动时拍一次 (provider, hosted) 快照——同一 turn
-                // 内即使有并发的 set_model 请求，本 turn 仍走选定的
-                // provider；下一 turn 才生效。
-                let provider = self.current_provider();
-                let hosted = self.current_hosted();
-                let running_ctx = RunningContext::new(self.frontend, &self.cwd);
-                let system_prompt = resolve_system_prompt(
-                    &running_ctx,
-                    &provider.info().vendor,
-                    &config.model,
-                    &config.base_prompt,
-                    &config.prompt,
-                    config.system_prompt.as_deref(),
-                )
-                .map_err(|err| TurnError::Internal(BoxError::new(err)))?;
-                let runner = TurnRunner {
-                    history: self.history.as_ref(),
-                    tools: self.tools.as_ref(),
-                    provider: provider.as_ref(),
-                    policy: self.policy.as_ref(),
-                    events: self.events.clone(),
-                    permissions: self.permissions.as_ref(),
-                    cancel,
-                    config: &config,
-                    system_prompt: system_prompt.map(Arc::from),
-                    cwd: &self.cwd,
-                    fs: self.fs.clone(),
-                    shell: self.shell.clone(),
-                    http: self.http.clone(),
-                    hosted_capabilities: hosted,
-                    hooks: self.hook_engine.as_ref(),
-                    session_id: &self.id,
-                    request_audit: &self.request_audit,
-                };
-
-                runner.run(prompt).await
-            }
-            .instrument(span),
-        )
+        // 用户驱动的 turn：把已完成的后台结果作为 prompt 前缀**搭车**带入
+        // （被动回流，与主动续转互补——主动续转管空闲态，搭车管"恰好用户也开口了"）。
+        Box::pin(self.run_turn_core(prompt, crate::hooks::step::IngestSource::User))
     }
 
     fn cancel_turn(&self) {

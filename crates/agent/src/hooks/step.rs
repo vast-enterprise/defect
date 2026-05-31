@@ -457,6 +457,9 @@ pub enum IngestSource {
     User,
     /// 续命轮：before turn-end 注入的反馈。
     Continuation,
+    /// 后台任务回流：`run_in_background` 子任务完成后由 session driver 起的自主续转 turn，
+    /// 其输入是延迟的工具结果而非用户发言。详见 `docs/proposals/task-arrange.md` §5.1。
+    Background,
 }
 
 /// `before Ingest`：摄入本轮输入之前。可改写整条待摄入输入 / `Break` 拒该 turn。
@@ -486,7 +489,11 @@ impl HookStep for BeforeIngest {
             .collect::<Vec<_>>()
             .join("");
         json!({
-            "source": match self.source { IngestSource::User => "user", IngestSource::Continuation => "continuation" },
+            "source": match self.source {
+                IngestSource::User => "user",
+                IngestSource::Continuation => "continuation",
+                IngestSource::Background => "background",
+            },
             "input": text,
             "input_len": self.input.len(),
         })

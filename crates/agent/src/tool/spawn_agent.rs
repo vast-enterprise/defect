@@ -154,6 +154,15 @@ fn build_schema(profiles: &BTreeMap<String, SubagentProfile>) -> ToolSchema {
                                     the profile's configured model is used, falling back to the \
                                     parent session's current model. Only set this when a task \
                                     needs a specifically more or less capable model than the default."
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "When true, spawn the subagent asynchronously and return \
+                                    immediately with a task id, without waiting for it to finish. \
+                                    The subagent's result is delivered back to you later, on a \
+                                    subsequent turn, so you can keep working in the meantime. \
+                                    Leave false (the default) when the next step depends on this \
+                                    subagent's result — then the call blocks until it completes."
                 }
             },
             "required": ["profile", "task"]
@@ -168,6 +177,10 @@ struct SpawnArgs {
     /// 可选 per-call model 覆盖。优先级最高（高于 profile.model 与父 model）。
     #[serde(default)]
     model: Option<String>,
+    /// 后台执行开关。`true` 且上下文支持（`ToolContext::background` 为 `Some`）时，
+    /// spawn 后立即返回任务 id，不等子 agent 跑完。默认 `false`（同步阻塞）。
+    #[serde(default)]
+    run_in_background: bool,
 }
 
 impl Tool for SpawnAgentTool {
@@ -205,28 +218,97 @@ impl Tool for SpawnAgentTool {
         let base_prompt = self.base_prompt.clone();
 
         let cwd = ctx.cwd.to_path_buf();
-        let cancel = ctx.cancel.child_token();
         let fs = ctx.fs.clone();
         let shell = ctx.shell.clone();
         let http = ctx.http.clone();
         let parent_model = ctx.current_model.to_string();
+        let background = ctx.background.clone();
+        // 同步路径用 turn 子 token（turn 结束即取消）；后台路径不用它，改用
+        // BackgroundTasks 在 spawn 时 mint 的 session 级子 token（见下）。
+        let turn_cancel = ctx.cancel.child_token();
+
+        // 先解析出 run_in_background 与 profile 名，决定走同步还是后台。解析失败
+        // 在两条路径里都按 InvalidArgs 处理。
+        let parsed: Result<SpawnArgs, _> = serde_json::from_value(args.clone());
 
         let fut = async move {
-            run_subagent(
-                args,
+            let parsed = match parsed {
+                Ok(p) => p,
+                Err(err) => return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(err))),
+            };
+
+            // 后台路径：需要 ctx 支持后台（顶层 turn 才注入），且 run_in_background=true。
+            if parsed.run_in_background {
+                let Some(bg) = background else {
+                    // 上下文不支持后台（子 agent 嵌套 / 测试）——fail loud，不静默降级成同步，
+                    // 否则模型以为是后台、实际阻塞，行为与声明不符。
+                    return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(
+                        "run_in_background is not available in this context (nested subagents \
+                         cannot spawn background tasks)"
+                            .to_string(),
+                    ))));
+                };
+                let label = parsed.profile.clone();
+                let deps = SubagentDeps {
+                    profiles,
+                    registry,
+                    policy,
+                    process_tools,
+                    base_prompt,
+                    cwd,
+                    fs,
+                    shell,
+                    http,
+                    parent_model,
+                };
+                // spawn 给任务 mint 一个 session 级子 token——任务的取消生命周期独立于
+                // 发起它的 turn，turn 结束不会杀掉它。
+                let task_id = bg.spawn(label, move |task_cancel| async move {
+                    match run_subagent_core(parsed, deps, task_cancel).await {
+                        Ok(answer) => crate::session::BackgroundResult::Completed(answer),
+                        Err(err) => crate::session::BackgroundResult::Failed(err.to_string()),
+                    }
+                });
+                // 当场同步返回"已启动 id=X"——满足 tool_use↔tool_result 配对契约
+                // （docs/proposals/task-arrange.md §2.1）。
+                let msg = format!(
+                    "Started background subagent `{}`, task id `{}`. Its result will arrive on a \
+                     later turn.",
+                    parsed_profile_for_msg(&args),
+                    task_id
+                );
+                let mut fields = ToolCallUpdateFields::default();
+                fields.content = Some(vec![ToolCallContent::Content(Content::new(
+                    ContentBlock::Text(TextContent::new(msg.clone())),
+                ))]);
+                fields.raw_output = Some(serde_json::Value::String(msg));
+                return ToolEvent::Completed(fields);
+            }
+
+            // 同步路径：原行为——阻塞到子 turn 跑完，把最终文本作为结果。
+            let deps = SubagentDeps {
                 profiles,
                 registry,
                 policy,
                 process_tools,
                 base_prompt,
                 cwd,
-                cancel,
                 fs,
                 shell,
                 http,
                 parent_model,
-            )
-            .await
+            };
+            match run_subagent_core(parsed, deps, turn_cancel).await {
+                Ok(answer) => {
+                    let mut fields = ToolCallUpdateFields::default();
+                    fields.content = Some(vec![ToolCallContent::Content(Content::new(
+                        ContentBlock::Text(TextContent::new(answer.clone())),
+                    ))]);
+                    fields.raw_output = Some(serde_json::Value::String(answer));
+                    ToolEvent::Completed(fields)
+                }
+                Err(err) => ToolEvent::Failed(err),
+            }
         };
         let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
             Box::pin(futures::stream::once(fut));
@@ -234,28 +316,54 @@ impl Tool for SpawnAgentTool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_subagent(
-    args: serde_json::Value,
+/// `run_subagent_core` 的依赖打包——避免十几个位置参数。构造期 + ctx 句柄都搬进来，
+/// 全 owned，可跨 await / 进后台 task。
+struct SubagentDeps {
     profiles: Arc<BTreeMap<String, SubagentProfile>>,
     registry: Arc<ProviderRegistry>,
     policy: Arc<dyn SandboxPolicy>,
     process_tools: Arc<dyn ToolRegistry>,
     base_prompt: Option<String>,
     cwd: std::path::PathBuf,
-    cancel: tokio_util::sync::CancellationToken,
     fs: Arc<dyn crate::fs::FsBackend>,
     shell: Arc<dyn crate::shell::ShellBackend>,
     http: Arc<dyn crate::http::HttpClient>,
     parent_model: String,
-) -> ToolEvent {
-    let parsed: SpawnArgs = match serde_json::from_value(args) {
-        Ok(v) => v,
-        Err(err) => return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(err))),
-    };
+}
+
+/// 从原始 args 里尽力取 profile 名（仅供后台启动确认消息用，失败回退占位符）。
+fn parsed_profile_for_msg(args: &serde_json::Value) -> String {
+    args.get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?")
+        .to_string()
+}
+
+/// 跑一个子 agent turn，返回最终文本（`Ok`）或错误描述（`Err`）。
+///
+/// 同步与后台两条路径共用本核心：同步路径把 `Ok/Err` 包成 `ToolEvent::Completed/Failed`，
+/// 后台路径包成 `BackgroundResult::Completed/Failed`。`cancel` 由调用方决定生命周期——
+/// 同步路径传 turn 子 token，后台路径传 session 级子 token。
+async fn run_subagent_core(
+    parsed: SpawnArgs,
+    deps: SubagentDeps,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<String, ToolError> {
+    let SubagentDeps {
+        profiles,
+        registry,
+        policy,
+        process_tools,
+        base_prompt,
+        cwd,
+        fs,
+        shell,
+        http,
+        parent_model,
+    } = deps;
 
     let Some(profile) = profiles.get(&parsed.profile) else {
-        return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(format!(
+        return Err(ToolError::InvalidArgs(BoxError::new(io_err(format!(
             "unknown profile `{}`; available: {}",
             parsed.profile,
             profiles.keys().cloned().collect::<Vec<_>>().join(", ")
@@ -269,7 +377,7 @@ async fn run_subagent(
         .or_else(|| profile.model.clone())
         .unwrap_or(parent_model);
     let Some(entry) = registry.entry_for_model(&model) else {
-        return ToolEvent::Failed(ToolError::Execution(BoxError::new(io_err(format!(
+        return Err(ToolError::Execution(BoxError::new(io_err(format!(
             "subagent model `{model}` is not declared by any provider entry"
         )))));
     };
@@ -286,7 +394,7 @@ async fn run_subagent(
         match process_tools.get(name) {
             Some(tool) => builder = builder.insert(tool),
             None => {
-                return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(format!(
+                return Err(ToolError::InvalidArgs(BoxError::new(io_err(format!(
                     "profile `{}` allows unknown tool `{name}`",
                     parsed.profile
                 )))));
@@ -344,25 +452,22 @@ async fn run_subagent(
         hooks: &hooks,
         session_id: &session_id,
         request_audit: &audit,
+        // 子 agent turn 不携后台句柄：结构性禁止后台任务自我繁殖
+        // （与"白名单永不含 spawn_agent 自己"同一道防递归思路）。
+        background: None,
+        // 子 agent 的 task 是它的"用户输入"。
+        ingest_source: crate::hooks::step::IngestSource::User,
     };
 
     let prompt = vec![ContentBlock::Text(TextContent::new(parsed.task))];
     if let Err(err) = runner.run(prompt).await {
-        return ToolEvent::Failed(ToolError::Execution(BoxError::new(io_err(format!(
+        return Err(ToolError::Execution(BoxError::new(io_err(format!(
             "subagent turn failed: {err}"
         )))));
     }
 
     // 取最后一条 assistant 消息的文本作为结果。
-    let answer = last_assistant_text(&history.snapshot());
-
-    let mut fields = ToolCallUpdateFields::default();
-    fields.content = Some(vec![ToolCallContent::Content(Content::new(
-        ContentBlock::Text(TextContent::new(answer.clone())),
-    ))]);
-    // raw_output 给遥测（langfuse projector 只读 raw_output 作 observation output）。
-    fields.raw_output = Some(serde_json::Value::String(answer));
-    ToolEvent::Completed(fields)
+    Ok(last_assistant_text(&history.snapshot()))
 }
 
 /// 从历史里取**最后一条** [`Role::Assistant`] 消息，拼接其所有 `Text` 片段

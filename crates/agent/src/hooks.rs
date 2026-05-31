@@ -334,9 +334,9 @@ impl HookEngine for DefaultHookEngine {
             }
 
             // matcher 用工具名 / safety 过滤——从 step 信封里取（仅 *ToolApply* step 带这些字段）。
-            let envelope0 = with_common_header(step.to_envelope(), step.event_name(), &ctx);
-            let tool = envelope0.get("tool").and_then(Value::as_str);
-            let safety = envelope0
+            let envelope_json = with_common_header(step.to_envelope(), step.event_name(), &ctx);
+            let tool = envelope_json.get("tool").and_then(Value::as_str);
+            let safety = envelope_json
                 .get("safety")
                 .and_then(Value::as_str)
                 .and_then(parse_safety);

@@ -1103,3 +1103,213 @@ async fn turn_end_hook_continue_makes_turn_loop() {
     // 1 初始 + 2 次续命 = 3 次 LLM 调用。证明 turn-end hook 让循环多转了两轮。
     assert_eq!(calls.load(Ordering::SeqCst), 3, "turn should loop 2 extra rounds");
 }
+
+// ---------------------------------------------------------------------------
+// 端到端：run_in_background 后台任务 + 被动回流（阶段一）
+// ---------------------------------------------------------------------------
+
+/// provider：第 1 次调用发一个 tool_use（调 bg_tool）后 Stop=ToolUse；之后每次都 EndTurn。
+struct BgScriptedProvider {
+    calls: Mutex<u32>,
+}
+
+impl LlmProvider for BgScriptedProvider {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo {
+            vendor: "bg".to_string(),
+            protocol: ProtocolId::AnthropicMessages,
+            display_name: "Background Test Provider".to_string(),
+        }
+    }
+    fn capabilities(&self) -> Capabilities {
+        unsupported_caps()
+    }
+    fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn model_info(&self, _: &str) -> Option<ModelInfo> {
+        None
+    }
+    fn complete(
+        &self,
+        _: CompletionRequest,
+        _: CancellationToken,
+    ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
+        let mut calls = self.calls.lock().expect("calls poisoned");
+        *calls += 1;
+        let nth = *calls;
+        Box::pin(async move {
+            let chunks: Vec<Result<ProviderChunk, ProviderError>> = if nth == 1 {
+                vec![
+                    Ok(ProviderChunk::MessageStart {
+                        id: "m1".to_string(),
+                        model: "bg-001".to_string(),
+                    }),
+                    Ok(ProviderChunk::ToolUseStart {
+                        id: "tu-1".to_string(),
+                        name: "bg_tool".to_string(),
+                    }),
+                    Ok(ProviderChunk::ToolUseArgsDelta {
+                        id: "tu-1".to_string(),
+                        fragment: "{}".to_string(),
+                    }),
+                    Ok(ProviderChunk::ToolUseEnd {
+                        id: "tu-1".to_string(),
+                    }),
+                    Ok(ProviderChunk::Stop {
+                        reason: LlmStopReason::ToolUse,
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(ProviderChunk::MessageStart {
+                        id: "m2".to_string(),
+                        model: "bg-001".to_string(),
+                    }),
+                    Ok(ProviderChunk::Stop {
+                        reason: LlmStopReason::EndTurn,
+                    }),
+                ]
+            };
+            let s: Pin<
+                Box<dyn futures::Stream<Item = Result<ProviderChunk, ProviderError>> + Send>,
+            > = Box::pin(stream::iter(chunks));
+            Ok(s)
+        })
+    }
+}
+
+/// 一个 fire-and-forget 工具：若 ctx 带 background 句柄，就 spawn 一个后台任务
+/// （立即完成），并**立刻**返回"已启动"。证明工具不阻塞等任务。
+struct BgSpawnTool {
+    schema: ToolSchema,
+}
+
+impl Tool for BgSpawnTool {
+    fn schema(&self) -> &ToolSchema {
+        &self.schema
+    }
+    fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
+        SafetyClass::ReadOnly
+    }
+    fn describe<'a>(
+        &'a self,
+        _args: &'a serde_json::Value,
+        _ctx: ToolContext<'a>,
+    ) -> BoxFuture<'a, ToolCallDescription> {
+        Box::pin(async {
+            ToolCallDescription {
+                fields: ToolCallUpdateFields::default(),
+            }
+        })
+    }
+    fn execute(&self, _args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream {
+        let bg = ctx.background.clone();
+        let fut = async move {
+            let mut fields = ToolCallUpdateFields::default();
+            let text = match bg {
+                Some(bg) => {
+                    let id = bg.spawn("worker".to_string(), |_cancel| async move {
+                        defect_agent::session::BackgroundResult::Completed(
+                            "THE-BACKGROUND-ANSWER".to_string(),
+                        )
+                    });
+                    format!("started {id}")
+                }
+                None => "no background available".to_string(),
+            };
+            fields.content = Some(vec![
+                agent_client_protocol_schema::ToolCallContent::Content(
+                    agent_client_protocol_schema::Content::new(text),
+                ),
+            ]);
+            ToolEvent::Completed(fields)
+        };
+        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
+            Box::pin(stream::once(fut));
+        s
+    }
+}
+
+/// 全链路（主动续转）：turn 1 调 bg_tool 后台 spawn 一个任务 → turn 1 不阻塞、
+/// 正常结束；后台任务完成后 **session driver 自发**起一个自主 turn 消化结果，
+/// 无需第二次用户输入。断言该自主 turn 的 UserPromptCommitted 携带后台答案文本。
+#[tokio::test]
+async fn run_in_background_result_actively_reflows() {
+    let provider = Arc::new(BgScriptedProvider {
+        calls: Mutex::new(0),
+    }) as Arc<dyn LlmProvider>;
+    let tools: Arc<dyn ToolRegistry> = Arc::new(
+        StaticToolRegistry::builder()
+            .insert(Arc::new(BgSpawnTool {
+                schema: ToolSchema {
+                    name: "bg_tool".to_string(),
+                    description: "spawn a background task".to_string(),
+                    input_schema: json!({"type":"object"}),
+                },
+            }))
+            .build(),
+    );
+    let core = DefaultAgentCore::builder()
+        .provider(provider)
+        .process_tools(tools)
+        .policy(Arc::new(OpenPolicy) as Arc<dyn SandboxPolicy>)
+        .config(TurnConfig {
+            model: "bg-001".to_string(),
+            ..TurnConfig::default()
+        })
+        .build();
+    let cwd = std::env::current_dir().expect("cwd");
+    let session = core
+        .create_session(
+            SessionId::new(new_session_id()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+            Arc::new(NoopShellBackend) as Arc<dyn ShellBackend>,
+            Frontend::Headless,
+        )
+        .await
+        .expect("session");
+
+    // 订阅事件——必须在后台任务完成前订阅，才能接到 driver 起的自主续转 turn。
+    let mut events = session.subscribe();
+
+    // turn 1：调 bg_tool，spawn 后台任务，不阻塞。
+    let stop1 = session
+        .run_turn(vec![ContentBlock::Text(TextContent::new("kick off"))])
+        .await
+        .expect("turn 1");
+    assert!(matches!(stop1, StopReason::EndTurn));
+
+    // 主动续转：driver 在后台任务完成时**自发**起一个自主 turn 消化结果——
+    // 不需要第二次用户输入。断言该自主 turn 的 UserPromptCommitted 携带后台答案。
+    // 用超时兜底避免 driver 万一不起 turn 时挂死。
+    let saw_active_reflow = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(ev) = events.next().await {
+            if let AgentEvent::UserPromptCommitted { content } = &ev {
+                let joined: String = content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                // 这条 UserPromptCommitted 来自 driver 自发的续转 turn（非用户输入），
+                // 内容就是后台答案——证明主动 re-invoke 成立。
+                if joined.contains("THE-BACKGROUND-ANSWER") {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        saw_active_reflow,
+        "driver should autonomously start a turn carrying the background result (active re-invoke)"
+    );
+}

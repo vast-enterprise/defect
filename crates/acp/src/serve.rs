@@ -13,7 +13,6 @@ use agent_client_protocol::schema::{
     ModelInfo as AcpModelInfo, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
     SessionModelState, SetSessionModelRequest, SetSessionModelResponse,
-    StopReason as AcpStopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
@@ -453,6 +452,9 @@ impl ServeState {
         {
             Ok(session) => {
                 let models = session_model_state(session.as_ref()).await;
+                // 起持久 event pump：把本 session 全生命周期的事件（含 driver 自主续转
+                // turn）转成 session/update。§5.3。
+                spawn_session_pump(session.clone(), session.id().clone(), cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
                     cwd = %cwd_for_log.display(),
@@ -491,6 +493,8 @@ impl ServeState {
                         tracing::warn!(?err, "failed to replay loaded session transcript");
                     }
                 }
+                // 起持久 event pump（同 session/new）——replay 之后，新事件由它接力。
+                spawn_session_pump(session.clone(), session_id.clone(), cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
                     cwd = %cwd_for_log.display(),
@@ -557,11 +561,10 @@ impl ServeState {
         };
         // 把 turn 的执行扔到 spawn 任务里，handler 立即返回，
         // 让 dispatch loop 不被阻塞——这样后续 cancel / resolve
-        // 等消息能在 turn 跑的同时被处理。
-        cx.spawn({
-            let cx = cx.clone();
-            async move { run_prompt_turn(session, session_id, req.prompt, cx, responder).await }
-        })
+        // 等消息能在 turn 跑的同时被处理。事件投射不在这里做：由 session 级
+        // 持久 event pump（session/new · load 时起）统一转发，含 driver 自发的
+        // 自主续转 turn。详见 docs/proposals/task-arrange.md §5.3。
+        cx.spawn(async move { run_prompt_turn(session, req.prompt, responder).await })
     }
 
     async fn on_cancel(
@@ -661,99 +664,74 @@ where
     Ok(())
 }
 
-/// 一次 `session/prompt` 的完整 turn：订阅事件、跑 turn、把事件投射到 wire、
-/// 在 turn 结束时 respond `PromptResponse`。
-#[tracing::instrument(
-    name = "acp_prompt_turn",
-    skip_all,
-    fields(session_id = %short_session_id(&session_id))
-)]
+/// 一次 `session/prompt`：跑 turn、按 run_turn 返回值 respond `PromptResponse`。
+///
+/// **不**在这里订阅 / 投射事件——`session/update` 通知由 session 级**持久 event pump**
+/// （[`spawn_session_pump`]，session/new · load 时起）统一转发，含 driver 自发的自主续转
+/// turn。本函数只负责把这一条 prompt 的 turn 结果回成 JSON-RPC 响应。
+///
+/// **排队（§5.2）**：撞上 `TurnInProgress`（driver 的自主续转 turn 恰在跑，或并发 prompt）
+/// 时不立刻报错，短暂退避重试，让这条 prompt 排队等到 slot 空出——`session/prompt` 在
+/// 协议语义上期望被处理。
+#[tracing::instrument(name = "acp_prompt_turn", skip_all)]
 async fn run_prompt_turn(
     session: Arc<dyn Session>,
-    session_id: SessionId,
     prompt: Vec<agent_client_protocol::schema::ContentBlock>,
-    cx: ConnectionTo<Client>,
     responder: agent_client_protocol::Responder<PromptResponse>,
 ) -> Result<(), agent_client_protocol::Error> {
-    // 必须在 run_turn 启动前订阅，否则事件先到没人接。
-    let mut events = session.subscribe();
+    // 排队重试：自主续转 turn 通常很短，退避几次即可拿到 slot。退避上限兜底防止
+    // 卡死（极端情况下退化为报错，让客户端重发）。
+    const MAX_RETRIES: u32 = 100;
+    const BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
 
-    // 把 turn future spawn 到独立任务，stop_reason 通过 oneshot 回流。
-    let (turn_tx, mut turn_rx) =
-        tokio::sync::oneshot::channel::<Result<AcpStopReason, TurnError>>();
-    let session_for_turn = session.clone();
-    tokio::spawn(async move {
-        let result = session_for_turn.run_turn(prompt).await;
-        let _ = turn_tx.send(result);
-    });
-
-    let mut stop_reason: Option<AcpStopReason> = None;
-    loop {
-        tokio::select! {
-            biased;
-            next = events.next() => {
-                match next {
-                    Some(event) => {
-                        if matches!(event, AgentEvent::TurnEnded { .. }) {
-                            // 取出 reason 后 break——run_turn 返回值才是权威。
-                            if let AgentEvent::TurnEnded { reason, .. } = event {
-                                stop_reason.get_or_insert(reason);
-                            }
-                            break;
-                        }
-                        if let Err(err) = handle_event(&session, &session_id, event, &cx) {
-                            tracing::warn!(?err, "failed to project agent event");
-                        }
-                    }
-                    None => break,
-                }
+    let mut attempt = 0;
+    let result = loop {
+        match session.run_turn(prompt.clone()).await {
+            Err(TurnError::TurnInProgress) if attempt < MAX_RETRIES => {
+                attempt += 1;
+                tokio::time::sleep(BACKOFF).await;
             }
-            run_result = &mut turn_rx => {
-                match run_result {
-                    Ok(Ok(reason)) => {
-                        stop_reason.get_or_insert(reason);
-                    }
-                    Ok(Err(err)) => {
-                        let acp_err = AcpError::Turn(err);
-                        tracing::warn!(error = %acp_err, "turn failed; responding with wire error");
-                        return responder
-                            .respond_with_error(acp_err.into_wire_error());
-                    }
-                    Err(_) => {
-                        tracing::warn!("turn task dropped; responding with wire error");
-                        return responder
-                            .respond_with_error(AcpError::TurnDropped.into_wire_error());
-                    }
-                }
-                // turn 已结束，drain 剩余事件，确保 ToolCallFinished 等都上 wire。
-                while let Some(event) = events.next().await {
-                    if matches!(event, AgentEvent::TurnEnded { .. }) {
-                        break;
-                    }
-                    if let Err(err) = handle_event(&session, &session_id, event, &cx) {
-                        tracing::warn!(?err, "failed to project trailing event");
-                    }
-                }
-                break;
-            }
+            other => break other,
         }
-    }
-
-    // turn 已结束（或事件流提前关闭），等待 turn future 给出权威 stop_reason。
-    let stop = match stop_reason {
-        Some(r) => r,
-        None => match (&mut turn_rx).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(err)) => {
-                let acp_err = AcpError::Turn(err);
-                tracing::warn!(error = %acp_err, "turn failed; responding with wire error");
-                return responder.respond_with_error(acp_err.into_wire_error());
-            }
-            Err(_) => AcpStopReason::Cancelled,
-        },
     };
 
-    responder.respond(PromptResponse::new(stop))
+    match result {
+        Ok(stop) => responder.respond(PromptResponse::new(stop)),
+        Err(err) => {
+            let acp_err = AcpError::Turn(err);
+            tracing::warn!(error = %acp_err, "turn failed; responding with wire error");
+            responder.respond_with_error(acp_err.into_wire_error())
+        }
+    }
+}
+
+/// Session 级**持久 event pump**：订阅一次该 session 的事件流，把每个事件投射到 wire，
+/// 跨所有 turn 存活（含 driver 自发的自主续转 turn）。session/new · load 时 spawn。
+///
+/// 这是阶段二补齐的关键一环：原先事件只在一次 `session/prompt` 期间被订阅转发，自主续转
+/// turn 的事件无人接收。详见 docs/proposals/task-arrange.md §5.3。
+///
+/// 生命周期：`session.subscribe()` 的事件流在 session drop（EventEmitter 析构）时结束，
+/// `events.next()` 返回 `None`，pump 自然退出。pump 持 `Arc<dyn Session>`，与 AgentCore
+/// 的 sessions 表同样强引用——v0 session 随进程存活，pump 亦然。
+fn spawn_session_pump(
+    session: Arc<dyn Session>,
+    session_id: SessionId,
+    cx: ConnectionTo<Client>,
+) {
+    let mut events = session.subscribe();
+    let cx_for_pump = cx.clone();
+    let _ = cx.spawn(async move {
+        while let Some(event) = events.next().await {
+            // TurnStarted / TurnEnded 是 turn 边界标记，wire 上由 PromptResponse 表达，
+            // 不投射成 session/update（project 已把它们归到 EndTurn/Ignore）。
+            if let Err(err) = handle_event(&session, &session_id, event, &cx_for_pump) {
+                tracing::warn!(?err, "session pump failed to project agent event");
+            }
+        }
+        tracing::debug!("session event pump exited (stream closed)");
+        Ok(())
+    });
 }
 
 fn handle_event(

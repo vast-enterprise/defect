@@ -165,6 +165,15 @@ pub struct ToolContext<'a> {
     /// 自己捕获的 registry 上 `entry_for_model` 解析出父此刻用的 provider。
     /// 由 [`crate::session::turn::TurnRunner`] 构造 ctx 时填入 `config.model`。
     pub current_model: &'a str,
+    /// session 级后台任务句柄。`Some` 时工具可 fire-and-forget 地 spawn 一个
+    /// 活过当前 turn 的任务（首要场景：`spawn_agent { run_in_background: true }`）；
+    /// `None` 表示本上下文不支持后台（子 agent 嵌套 turn / 测试），工具应回退到
+    /// 同步执行。
+    ///
+    /// 用 owned [`Arc`]-backed 句柄而非借用：`Tool::execute` 返回 `'static`
+    /// future，借用无法跨过 await。由顶层 [`crate::session::turn::TurnRunner`]
+    /// 在构造 ctx 时注入；嵌套子 agent turn 不注入（结构性禁止后台任务自我繁殖）。
+    pub background: Option<crate::session::BackgroundTasks>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -186,7 +195,16 @@ impl<'a> ToolContext<'a> {
             shell,
             http,
             current_model,
+            background: None,
         }
+    }
+
+    /// 注入 session 级后台任务句柄。顶层 turn 的工具驱动用它开启 `run_in_background`
+    /// 能力；不调用则 `background` 为 `None`（子 agent / 测试的默认），工具回退同步执行。
+    #[must_use]
+    pub fn with_background(mut self, background: crate::session::BackgroundTasks) -> Self {
+        self.background = Some(background);
+        self
     }
 }
 

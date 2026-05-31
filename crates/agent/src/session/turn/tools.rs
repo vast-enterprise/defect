@@ -247,6 +247,7 @@ impl TurnRunner<'_> {
                     let shell = self.shell.clone();
                     let http = self.http.clone();
                     let model = self.config.model.clone();
+                    let background = self.background.clone();
                     let name = tool.schema().name.clone();
                     let span = tracing::info_span!(
                         "tool_call",
@@ -276,6 +277,7 @@ impl TurnRunner<'_> {
                                 shell,
                                 http,
                                 model,
+                                background,
                             )
                             .await
                         }
@@ -506,8 +508,9 @@ async fn drive_tool_stream(
     shell: Arc<dyn ShellBackend>,
     http: Arc<dyn HttpClient>,
     model: String,
+    background: Option<crate::session::BackgroundTasks>,
 ) -> ToolResult {
-    let ctx = ToolContext::new(
+    let mut ctx = ToolContext::new(
         &cwd,
         cancel.clone(),
         fs.clone(),
@@ -515,6 +518,9 @@ async fn drive_tool_stream(
         http.clone(),
         &model,
     );
+    if let Some(bg) = background {
+        ctx = ctx.with_background(bg);
+    }
     let mut stream = tool.execute(args, ctx);
 
     let mut last_body: Option<ToolResultBody> = None;

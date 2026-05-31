@@ -190,6 +190,13 @@ pub struct TurnRunner<'a> {
     pub hooks: &'a dyn HookEngine,
     /// 当前 session id。`HookCtx` 注入用——hook handler 按 session 维度路由 / 审计。
     pub session_id: &'a SessionId,
+    /// session 级后台任务句柄。`Some` 时工具的 `run_in_background` 能力开启
+    /// （经 [`crate::tool::ToolContext::background`] 注入给工具）；嵌套子 agent
+    /// turn 传 `None`，结构性禁止后台任务自我繁殖。详见 `docs/proposals/task-arrange.md`。
+    pub background: Option<crate::session::BackgroundTasks>,
+    /// 本 turn 输入的摄入来源——决定 `before_ingest` step 信封的 `source` 字段。
+    /// 用户 turn = `User`；session driver 起的后台续转 turn = `Background`（§5.1）。
+    pub ingest_source: crate::hooks::step::IngestSource,
     /// 请求稳定性诊断：对比相邻两次实际发给 provider 的请求快照，
     /// 帮助定位 prompt cache 低命中率的高波动来源。
     pub(crate) request_audit: &'a RequestAuditTracker,

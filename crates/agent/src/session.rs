@@ -26,6 +26,7 @@ use crate::llm::{Message, ModelCandidate, ModelInfo, ProviderError, ProviderInfo
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolSchema};
 
+mod background;
 mod capabilities;
 mod context;
 mod default;
@@ -36,6 +37,9 @@ mod prompt;
 mod tool_registry;
 mod turn;
 
+pub use background::{
+    BackgroundOutcome, BackgroundResult, BackgroundTasks, format_background_outcome,
+};
 pub use capabilities::{
     ResolvedSessionCapabilities, SessionCapabilitiesConfig, WebSearchCapabilityConfig,
     WebSearchCapabilityMode,
