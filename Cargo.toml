@@ -120,6 +120,13 @@ serde_yaml = "0.9"
 # HTML → Markdown for fetch tool
 htmd = "0.5"
 
+# 终端着色（仅 defect-cli 的 `repl` feature 用；只做 ANSI 字符串格式化，零运行时依赖）
+owo-colors = "4"
+
+# 仅 defect-cli 的 `repl` feature 用：termios raw 模式自己做行编辑
+# （保护 prompt、按 unicode char 删除）。已在依赖树里，零额外体积。
+libc = "0.2"
+
 # 测试基础设施
 wiremock = "0.6"
 tempfile = "3"

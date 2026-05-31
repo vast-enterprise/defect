@@ -35,6 +35,12 @@ pub struct CliArgs {
     /// Additional dotted-path config overrides. May be repeated.
     #[arg(long = "config", value_name = "KEY=VALUE")]
     pub config_override: Vec<String>,
+
+    /// Run a minimal in-process REPL on stdin/stdout instead of the ACP
+    /// server. Requires the `repl` build feature (on by default); a binary
+    /// built with `--no-default-features` rejects this flag at runtime.
+    #[arg(long)]
+    pub repl: bool,
 }
 
 impl CliArgs {

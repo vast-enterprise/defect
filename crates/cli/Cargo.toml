@@ -33,7 +33,13 @@ default = [
     "provider-openai",
     "provider-deepseek",
     "yaml",
+    "repl",
 ]
+
+# `--repl`：进程内最小交互 REPL（tokio stdin/stdout + owo-colors 着色），
+# 不走 ACP。可裁剪：`--no-default-features` 时不编译 repl 模块也不拖入
+# owo-colors，`--repl` flag 在运行期报错提示重新带 feature 编译。
+repl = ["dep:owo-colors", "dep:libc"]
 
 # 转发给 defect-llm 的同名 feature。
 provider-anthropic = ["defect-llm/provider-anthropic"]
@@ -65,6 +71,7 @@ defect-mcp.workspace = true
 defect-obs.workspace = true
 defect-storage.workspace = true
 defect-tools.workspace = true
+futures.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -73,6 +80,10 @@ anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+# 仅 `repl` feature：终端着色 + termios raw 行编辑。可裁剪，不影响 ACP 主路径。
+owo-colors = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
 
 # 仅在 `__test-servers` feature 下启用：拖入完整 rmcp server + axum 用于
 # 跑 stdio / streamable-http MCP server 测试桩。

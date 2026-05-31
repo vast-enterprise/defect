@@ -31,6 +31,8 @@ pub mod observability;
 pub mod paths;
 pub mod policy;
 pub mod providers;
+#[cfg(feature = "repl")]
+pub mod repl;
 pub mod tools;
 
 #[cfg(test)]

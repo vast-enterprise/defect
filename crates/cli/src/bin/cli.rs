@@ -66,7 +66,17 @@ async fn main() -> anyhow::Result<()> {
 
     // 2) 装 provider registry / HTTP 栈 / 工具集合 / 存储 / hook 引擎
     let (registry, mut turn_config) = build_registry(&config).await?;
-    let policy = build_policy(config.effective.sandbox.mode);
+    // REPL 全放行：REPL 是开发期手搓 prompt 的便捷入口，没有 ACP 客户端那样的
+    // 权限弹窗 UI，也不在终端做交互式确认。默认 AskWrites 会让 Mutating 工具
+    // （spawn_agent / write_file / bash 等）停在 PermissionGate 等一个永远不会
+    // 来的应答 → turn 卡死。故 REPL 强制 Open，让 policy 直接放行。安全裁剪请走
+    // ACP（有权限弹窗）或显式 sandbox 配置。
+    let sandbox_mode = if cli.repl {
+        defect_config::SandboxMode::Open
+    } else {
+        config.effective.sandbox.mode
+    };
+    let policy = build_policy(sandbox_mode);
 
     // 继承给子 agent 的 base_prompt 文本（"你是会用工具的 agent"那段底座）。
     let base_prompt_text = resolve_base_prompt_text(&config)?;
@@ -91,7 +101,9 @@ async fn main() -> anyhow::Result<()> {
         provider = %registry.default_entry().provider().info().vendor,
         model = %turn_config.model,
         profile = cli.profile.as_deref().unwrap_or("<none>"),
-        "starting defect ACP server on stdio"
+        sandbox = ?sandbox_mode,
+        "starting defect {}",
+        if cli.repl { "repl on stdio" } else { "ACP server on stdio" }
     );
 
     let http_client =
@@ -168,9 +180,31 @@ async fn main() -> anyhow::Result<()> {
         builder = builder.observe_session(langfuse);
     }
     let agent = builder.build();
+    let agent = Arc::new(agent) as Arc<dyn AgentCore>;
 
-    defect_acp::serve(Arc::new(agent) as Arc<dyn AgentCore>).await?;
+    // `--repl`：进程内最小交互 REPL（feature-gated）。否则走 stdio ACP server。
+    if cli.repl {
+        run_repl(agent).await?;
+    } else {
+        defect_acp::serve(agent).await?;
+    }
     Ok(())
+}
+
+/// 启动 REPL。`repl` feature 开启时跑真正的 REPL；裁掉时这个 flag 仍能
+/// 解析，但运行期 hard fail 提示重新带 feature 编译——不静默退化成 ACP。
+#[cfg(feature = "repl")]
+async fn run_repl(agent: Arc<dyn AgentCore>) -> anyhow::Result<()> {
+    let cwd = env::current_dir()?;
+    defect_cli::repl::run(agent, cwd).await
+}
+
+#[cfg(not(feature = "repl"))]
+async fn run_repl(_agent: Arc<dyn AgentCore>) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "this binary was built without the `repl` feature; \
+         rebuild with `--features repl` (on by default) to use --repl"
+    )
 }
 
 /// 解析继承给 subagent 的 base_prompt 文本：`[base_prompt] file` 读文件 +
