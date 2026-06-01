@@ -621,7 +621,7 @@ fn foreground_subagent_nests_under_open_tool_span() {
             inner: Box::new(AgentEvent::LlmCallStarted {
                 model: "m".into(),
                 attempt: 1,
-                request: snapshot(None, "do it"),
+                request: snapshot(Some("sub system"), "do it"),
             }),
         },
         &mut ids,
@@ -638,6 +638,12 @@ fn foreground_subagent_nests_under_open_tool_span() {
     // 子 generation 挂在 subagent span 下（不是直接挂工具 span）。
     assert_eq!(out[1]["body"]["parentObservationId"], subagent_span_id);
     assert_eq!(out[1]["body"]["traceId"], "id-1");
+    // 子 generation 的 input 必须还原成 chat messages（system + user）——
+    // 回归保护：此前 `{ .., }` 丢掉 request 导致 subagent input 缺失。
+    assert_eq!(out[1]["body"]["input"][0]["role"], "system");
+    assert_eq!(out[1]["body"]["input"][0]["content"], "sub system");
+    assert_eq!(out[1]["body"]["input"][1]["role"], "user");
+    assert_eq!(out[1]["body"]["input"][1]["content"], "do it");
 }
 
 /// 后台 subagent：spawn_agent 工具 span 先正常关闭、发起 turn 也 TurnEnded，**之后**
@@ -702,21 +708,50 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
     assert_eq!(out[0]["body"]["traceId"], "id-1");
     assert_eq!(out[1]["type"], "generation-create");
     assert_eq!(out[1]["body"]["parentObservationId"], "id-1-sub-sa-9");
+    let gen_id = out[1]["body"]["id"].as_str().unwrap().to_string();
 
-    // 子 turn 结束 → 关闭 subagent span。
-    let closed = project_json(
-        &mut proj,
-        AgentEvent::Subagent {
-            parent_tool_call_id: ToolCallId::new("sa-9"),
-            agent_type: "worker".into(),
-            inner: Box::new(AgentEvent::TurnEnded {
-                reason: StopReason::EndTurn,
-                usage: Usage::default(),
-            }),
+    // 子 turn 的流式输出：output 正文 + thinking。
+    let sub_event = |inner: AgentEvent| AgentEvent::Subagent {
+        parent_tool_call_id: ToolCallId::new("sa-9"),
+        agent_type: "worker".into(),
+        inner: Box::new(inner),
+    };
+    project_json(&mut proj, sub_event(AgentEvent::AssistantText {
+        content: text_block("bg answer"),
+    }), &mut ids);
+    project_json(&mut proj, sub_event(AgentEvent::AssistantThought {
+        content: text_block("bg reasoning"),
+    }), &mut ids);
+    // 本次调用的 usage（流 drain 后到达）。
+    project_json(&mut proj, sub_event(AgentEvent::LlmCallFinished {
+        model: "m".into(),
+        attempt: 1,
+        usage: Usage {
+            input_tokens: Some(11),
+            output_tokens: Some(7),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         },
-        &mut ids,
-    );
-    // generation-update（收尾 gen）+ subagent span-update（end_time）。
+        error: None,
+    }), &mut ids);
+
+    // 子 turn 结束 → flush 子 generation（带 output/thinking/usage）+ 关闭 subagent span。
+    let closed = project_json(&mut proj, sub_event(AgentEvent::TurnEnded {
+        reason: StopReason::EndTurn,
+        usage: Usage::default(),
+    }), &mut ids);
+
+    // 子 generation-update：output / reasoning / usageDetails 都写到位（与父 turn 同形）。
+    let gen_update = closed
+        .iter()
+        .find(|e| e["type"] == "generation-update" && e["body"]["id"] == gen_id)
+        .expect("subagent generation-update present");
+    assert_eq!(gen_update["body"]["output"], "bg answer");
+    assert_eq!(gen_update["body"]["metadata"]["reasoning"], "bg reasoning");
+    assert_eq!(gen_update["body"]["usageDetails"]["input"], 11);
+    assert_eq!(gen_update["body"]["usageDetails"]["output"], 7);
+
+    // subagent span 收尾（end_time）。
     assert!(closed.iter().any(|e| e["type"] == "span-update"
         && e["body"]["id"] == "id-1-sub-sa-9"
         && e["body"]["endTime"].is_string()));

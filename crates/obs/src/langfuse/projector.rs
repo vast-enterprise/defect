@@ -615,7 +615,11 @@ impl TraceProjector {
             .expect("subagent state just ensured");
 
         match inner {
-            AgentEvent::LlmCallStarted { model, attempt, .. } => {
+            AgentEvent::LlmCallStarted {
+                model,
+                attempt,
+                request,
+            } => {
                 events.extend(flush_sub_generation(&trace_id, sub, now, new_id));
                 sub.call_seq += 1;
                 let gen_id = format!("{trace_id}-sub-{parent_tool_call_id}-gen-{}", sub.call_seq);
@@ -636,6 +640,9 @@ impl TraceProjector {
                     name: Some(GENERATION_NAME.into()),
                     model: Some(model),
                     start_time: Some(now.to_string()),
+                    // 与父 turn 的 generation 一致：把请求快照还原成 chat messages 数组写进
+                    // input。此前用 `{ .., }` 丢掉了 request，导致 subagent generation 无 input。
+                    input: Some(request_to_input(request.as_ref())),
                     metadata: Some(serde_json::Value::Object(meta)),
                     environment: Some(DEFAULT_ENVIRONMENT.into()),
                     ..Default::default()
