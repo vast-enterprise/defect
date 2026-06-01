@@ -41,6 +41,10 @@ use super::model::{EventKind, IngestionEvent, ObservationBody, ObservationLevel,
 
 /// 部署环境标签（写进 trace / observation 的 `environment`）。
 const DEFAULT_ENVIRONMENT: &str = "production";
+/// 每个 agent turn 对应的 Langfuse trace 名称。
+const TRACE_NAME: &str = "turn";
+/// LLM 调用对应的 Langfuse generation 名称。
+const GENERATION_NAME: &str = "llm_call";
 
 /// 逐 session 的投影状态。
 pub struct TraceProjector {
@@ -222,7 +226,7 @@ impl TraceProjector {
         state.input = self.pending_input.take();
         let body = TraceBody {
             id: trace_id,
-            name: Some("turn".into()),
+            name: Some(TRACE_NAME.into()),
             session_id: Some(self.session_id.clone()),
             // trace-create 时就带上 input，UI 立刻能看到用户输入（不必等 TurnEnded）。
             input: state.input.clone().map(serde_json::Value::String),
@@ -280,7 +284,7 @@ impl TraceProjector {
         let body = ObservationBody {
             id: gen_id,
             trace_id: turn.trace_id.clone(),
-            name: Some("llm_call".into()),
+            name: Some(GENERATION_NAME.into()),
             model: Some(model),
             start_time: Some(now.to_string()),
             // input = 标准 chat messages 数组（system 作为第一条 {role:"system"}）。
@@ -359,6 +363,7 @@ impl TraceProjector {
         let body = ObservationBody {
             id: pg.id,
             trace_id: turn.trace_id.clone(),
+            name: Some(GENERATION_NAME.into()),
             model: Some(pg.model),
             end_time: Some(now.to_string()),
             output: (!pg.output.is_empty()).then_some(serde_json::Value::String(pg.output)),
@@ -496,6 +501,7 @@ impl TraceProjector {
 
         let body = TraceBody {
             id: turn.trace_id,
+            name: Some(TRACE_NAME.into()),
             session_id: Some(self.session_id.clone()),
             input: turn.input.map(serde_json::Value::String),
             output: (!turn.final_output.is_empty())
@@ -564,7 +570,7 @@ impl TraceProjector {
                     id: gen_id,
                     trace_id,
                     parent_observation_id: Some(sub.parent_span_id.clone()),
-                    name: Some("llm_call".into()),
+                    name: Some(GENERATION_NAME.into()),
                     model: Some(model),
                     start_time: Some(now.to_string()),
                     metadata: Some(serde_json::Value::Object(meta)),
@@ -675,6 +681,7 @@ fn flush_sub_generation(
         id: pg.id,
         trace_id: trace_id.to_string(),
         parent_observation_id: Some(sub.parent_span_id.clone()),
+        name: Some(GENERATION_NAME.into()),
         model: Some(pg.model),
         end_time: Some(now.to_string()),
         output: (!pg.output.is_empty()).then_some(serde_json::Value::String(pg.output)),

@@ -119,6 +119,83 @@ fn allow_omitted_defaults_to_read_only_set() {
 }
 
 #[test]
+fn hooks_omitted_yields_empty() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "plain",
+        "description = \"no hooks\"\n",
+        Some("prompt"),
+    );
+
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    assert!(profiles["plain"].hooks.is_empty());
+}
+
+#[test]
+fn profile_hooks_parsed_with_name_and_source() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "guard",
+        "description = \"hooked\"\n\
+         [[hooks.before_tool_apply]]\n\
+         name = \"redact\"\n\
+         match = { tool = \"bash\" }\n\
+         handler = { type = \"builtin\", name = \"redact-secrets\" }\n",
+        Some("prompt"),
+    );
+
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    let entries = profiles["guard"].hooks.get("before_tool_apply");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name.as_deref(), Some("redact"));
+    assert_eq!(entries[0].matcher.tool.as_deref(), Some("bash"));
+    // 项目层发现 ⇒ source = Project。
+    assert_eq!(entries[0].source, crate::types::ConfigSource::Project);
+}
+
+#[test]
+fn profile_hooks_unknown_event_is_hard_error() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "typo",
+        "description = \"bad event\"\n\
+         [[hooks.before_tool_aply]]\n\
+         handler = { type = \"builtin\", name = \"redact-secrets\" }\n",
+        Some("prompt"),
+    );
+
+    let err = discover_profiles(&opts_with(&tmp, &repo_root)).expect_err("must fail");
+    assert!(matches!(err, ConfigError::Invalid { .. }));
+}
+
+#[test]
+fn single_file_profile_hooks_parsed() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_single_file(
+        &repo_root.join(".defect/agents"),
+        "inline",
+        "+++\n\
+         description = \"inline hooked\"\n\
+         [[hooks.after_session_enter]]\n\
+         handler = { type = \"builtin\", name = \"skill-manifest\" }\n\
+         +++\nyou are inline\n",
+    );
+
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    let entries = profiles["inline"].hooks.get("after_session_enter");
+    assert_eq!(entries.len(), 1);
+    // 单文件版无 name ⇒ None（装配期回退匿名）。
+    assert_eq!(entries[0].name, None);
+}
+
+#[test]
 fn unknown_key_is_hard_error() {
     let tmp = TempDir::new().expect("tmp");
     let repo_root = repo(&tmp);

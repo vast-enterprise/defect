@@ -9,12 +9,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use defect_agent::hooks::HookEngine;
+use defect_agent::hooks::builtin::BuiltinRegistry;
 use defect_agent::llm::ProviderRegistry;
 use defect_agent::policy::SandboxPolicy;
 use defect_agent::session::{CompositeRegistry, StaticToolRegistry, ToolRegistry};
 use defect_agent::tool::{SkillEntry, SkillTool, SpawnAgentTool, SubagentProfile};
 use defect_config::{LoadedConfig, ProfileSpec, SkillSpec};
 use defect_tools::{BashTool, EditFileTool, FetchTool, ReadFileTool, SearchTool, WriteFileTool};
+
+use crate::hooks::{HookEngineBuildError, HookEngineCtx, build_engine_arc};
 
 /// 按 `[tools]` 段装配 `process_tools` 工具集合（随 `AgentCore` 实例、跨该 core
 /// 的 session 共享）。
@@ -67,15 +71,38 @@ pub fn filter_tools_by_allowlist(
     Ok(Arc::new(builder.build()))
 }
 
-/// 把 `defect-config` 的 [`ProfileSpec`] 投影成 agent 侧 [`SubagentProfile`]。
+/// 把 `defect-config` 的 [`ProfileSpec`] 投影成 agent 侧 [`SubagentProfile`]，
+/// 顺带把每个 profile 自己声明的 `[hooks]` 编译成 hook 引擎注入。
 ///
 /// 两边分开是因为 `defect-config` 依赖 `defect-agent`（不能反向依赖成环）；
-/// CLI 在装配边界做这一次投影。
-fn project_profiles(specs: &BTreeMap<String, ProfileSpec>) -> BTreeMap<String, SubagentProfile> {
+/// CLI 在装配边界做这一次投影。hook 引擎在此装配是因为它需要 builtin 注册表
+/// 与 provider registry（与主 session 的 hook 装配同源，见 [`crate::hooks`]）。
+///
+/// profile 的 `[hooks]` 为空 ⇒ `hooks: None`（子 agent 无钩子，行为同改动前）。
+///
+/// # Errors
+/// 任一 profile 的 hook 引擎装配失败（未知 builtin / prompt hook 引用未注册
+/// model 等）即 hard fail，错误里带上 profile 名定位。
+fn project_profiles(
+    specs: &BTreeMap<String, ProfileSpec>,
+    builtins: &BuiltinRegistry,
+    hook_rt: &HookEngineCtx<'_>,
+) -> Result<BTreeMap<String, SubagentProfile>, ProfileHookBuildError> {
     specs
         .iter()
         .map(|(name, spec)| {
-            (
+            let hooks = if spec.hooks.is_empty() {
+                None
+            } else {
+                let engine = build_engine_arc(&spec.hooks, builtins, hook_rt).map_err(|err| {
+                    ProfileHookBuildError {
+                        profile: name.clone(),
+                        source: err,
+                    }
+                })?;
+                Some(engine as Arc<dyn HookEngine>)
+            };
+            Ok((
                 name.clone(),
                 SubagentProfile {
                     description: spec.description.clone(),
@@ -83,10 +110,20 @@ fn project_profiles(specs: &BTreeMap<String, ProfileSpec>) -> BTreeMap<String, S
                     system_prompt: spec.system_prompt_text.clone(),
                     tool_allow: spec.tool_allow.clone(),
                     sampling: spec.sampling.clone(),
+                    hooks,
                 },
-            )
+            ))
         })
         .collect()
+}
+
+/// 某个 subagent profile 的 hook 引擎装配失败。带上 profile 名定位。
+#[derive(Debug, thiserror::Error)]
+#[error("subagent profile `{profile}` hook engine build failed: {source}")]
+pub struct ProfileHookBuildError {
+    pub profile: String,
+    #[source]
+    pub source: HookEngineBuildError,
 }
 
 /// 把 `defect-config` 的 [`SkillSpec`] 投影成 agent 侧 [`SkillEntry`]——与
@@ -121,6 +158,15 @@ pub fn project_skills(specs: &BTreeMap<String, SkillSpec>) -> BTreeMap<String, S
 ///
 /// `base_prompt` 继承给子 agent（"你是会用工具的 agent"那段底座）；profile
 /// 的角色 prompt 另外叠在其后。
+///
+/// `builtins` / `hook_rt` 供把每个 profile 自己的 `[hooks]` 编译成 hook 引擎
+/// （见 [`project_profiles`]）——子 agent 的钩子是它身份的一部分，不从父继承。
+///
+/// # Errors
+/// 任一 profile 的 hook 引擎装配失败即 hard fail（[`ProfileHookBuildError`]）。
+// 装配边界函数：参数都是 AgentCore 各独立组件，拆成 struct 反而割裂调用方
+// （cli.rs 那一处把它们逐个传入），故就地多带两个 hook 装配依赖。
+#[allow(clippy::too_many_arguments)]
 pub fn build_process_tools_with_subagents(
     config: &LoadedConfig,
     profiles: &BTreeMap<String, ProfileSpec>,
@@ -128,13 +174,15 @@ pub fn build_process_tools_with_subagents(
     registry: &Arc<ProviderRegistry>,
     policy: &Arc<dyn SandboxPolicy>,
     base_prompt: Option<String>,
-) -> Arc<dyn ToolRegistry> {
+    builtins: &BuiltinRegistry,
+    hook_rt: &HookEngineCtx<'_>,
+) -> Result<Arc<dyn ToolRegistry>, ProfileHookBuildError> {
     let base = build_process_tools(config);
-    let projected = project_profiles(profiles);
+    let projected = project_profiles(profiles, builtins, hook_rt)?;
     let has_profiles = SpawnAgentTool::has_profiles(&projected);
     let has_skills = SkillTool::has_skills(skills);
     if !has_profiles && !has_skills {
-        return base;
+        return Ok(base);
     }
 
     let mut overlay = StaticToolRegistry::builder();
@@ -153,5 +201,5 @@ pub fn build_process_tools_with_subagents(
         overlay = overlay.insert(Arc::new(skill));
     }
     let overlay_reg: Arc<dyn ToolRegistry> = Arc::new(overlay.build());
-    Arc::new(CompositeRegistry::new(overlay_reg, base))
+    Ok(Arc::new(CompositeRegistry::new(overlay_reg, base)))
 }

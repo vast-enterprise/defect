@@ -42,8 +42,9 @@ use defect_agent::llm::SamplingParams;
 use serde::Deserialize;
 
 use crate::frontmatter::{parse_frontmatter, split_frontmatter};
+use crate::hooks::{HookEntryRaw, profile_hooks_from_raw};
 use crate::loader::find_repo_root;
-use crate::types::{ConfigError, LoadConfigOptions};
+use crate::types::{ConfigError, ConfigSource, HooksConfig, LoadConfigOptions};
 
 /// profile 项目层目录（相对 repo root）。对位 [`crate::types`] 的
 /// `PROJECT_CONFIG_RELATIVE`（`.defect/config.toml`）。
@@ -81,6 +82,13 @@ pub struct ProfileSpec {
     pub tool_allow: Vec<String>,
     /// 可选采样参数覆盖。
     pub sampling: Option<SamplingParams>,
+    /// 该 profile 自己声明的 `[hooks]`——子 agent 跑 turn 时挂的钩子。
+    ///
+    /// 与"继承世界、不继承身份"原则一致：profile 的钩子是它身份的一部分，由
+    /// profile 自己的 `config.toml` / frontmatter 声明，**不**从父会话继承。
+    /// 每条带上 profile 所在层的 [`ConfigSource`]（项目层覆盖用户层时也随之
+    /// 替换，因为整个 [`ProfileSpec`] 被覆盖）。省略 ⇒ 空（子 agent 无钩子）。
+    pub hooks: HooksConfig,
 }
 
 /// `config.toml` 的原始反序列化形态。`deny_unknown_fields` 与主配置一致——
@@ -99,6 +107,11 @@ struct ProfileConfigToml {
     tools: Option<ProfileToolsToml>,
     #[serde(default)]
     sampling: Option<ProfileSamplingToml>,
+    /// `[hooks]` 表：事件名 → 该事件下的 hook 条目数组。形态与主配置
+    /// `[hooks]` 完全一致（复用 [`HookEntryRaw`]）。profile 是单一闭合真相源，
+    /// 不支持跨层 `disable`——出现 `disable` 键会按未知事件名 hard fail。
+    #[serde(default)]
+    hooks: BTreeMap<String, Vec<HookEntryRaw>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,12 +171,17 @@ pub fn discover_profiles(
 ) -> Result<BTreeMap<String, ProfileSpec>, ConfigError> {
     let mut profiles = BTreeMap::new();
 
-    // 用户层先，项目层后——后写覆盖先写，实现"项目覆盖用户"。
+    // 用户层先，项目层后——后写覆盖先写，实现"项目覆盖用户"。source 随层标注，
+    // 供 profile 的 `[hooks]` 条目记录来源（trust gating）。
     if let Some(user_dir) = resolve_user_agents_dir(opts) {
-        scan_agents_dir(&user_dir, &mut profiles)?;
+        scan_agents_dir(&user_dir, ConfigSource::User, &mut profiles)?;
     }
     if let Some(repo_root) = find_repo_root(&opts.cwd) {
-        scan_agents_dir(&repo_root.join(PROJECT_AGENTS_RELATIVE), &mut profiles)?;
+        scan_agents_dir(
+            &repo_root.join(PROJECT_AGENTS_RELATIVE),
+            ConfigSource::Project,
+            &mut profiles,
+        )?;
     }
 
     Ok(profiles)
@@ -183,6 +201,7 @@ pub fn discover_profiles(
 /// error——避免一个名字两份真相源。
 fn scan_agents_dir(
     agents_dir: &Path,
+    source: ConfigSource,
     out: &mut BTreeMap<String, ProfileSpec>,
 ) -> Result<(), ConfigError> {
     let entries = match std::fs::read_dir(agents_dir) {
@@ -215,12 +234,12 @@ fn scan_agents_dir(
             let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
                 continue;
             };
-            Some((name, parse_profile_folder(&path, &config_path)?))
+            Some((name, parse_profile_folder(&path, &config_path, source)?))
         } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
             let Some(name) = path.file_stem().and_then(|n| n.to_str()).map(str::to_owned) else {
                 continue;
             };
-            Some((name, parse_profile_file(agents_dir, &path)?))
+            Some((name, parse_profile_file(agents_dir, &path, source)?))
         } else {
             // 非目录、非 .md 文件——跳过。
             None
@@ -248,12 +267,21 @@ fn scan_agents_dir(
 /// [`ProfileSpec`]。文件夹版与单文件版共用——两种形态只在"system prompt
 /// 文本从哪来"上不同，其余字段映射一致。`name` 由调用方在 `scan_agents_dir`
 /// 统一回填。
-fn spec_from_cfg(dir: &Path, cfg: ProfileConfigToml, system_prompt_text: String) -> ProfileSpec {
+fn spec_from_cfg(
+    dir: &Path,
+    cfg: ProfileConfigToml,
+    system_prompt_text: String,
+    source: ConfigSource,
+    config_path: &Path,
+) -> Result<ProfileSpec, ConfigError> {
     let tool_allow = cfg
         .tools
         .and_then(|t| t.allow)
         .unwrap_or_else(|| DEFAULT_TOOL_ALLOW.iter().map(|s| s.to_string()).collect());
-    ProfileSpec {
+    // profile 的 `[hooks]` → HooksConfig，每条带上 profile 所在层的 source。
+    // 事件名拼错 / 非法 handler 形态在此 hard fail，路径定位到 config 文件。
+    let hooks = profile_hooks_from_raw(cfg.hooks, source, config_path)?;
+    Ok(ProfileSpec {
         name: String::new(), // 由 scan_agents_dir 回填
         dir: dir.to_path_buf(),
         description: cfg.description,
@@ -261,12 +289,17 @@ fn spec_from_cfg(dir: &Path, cfg: ProfileConfigToml, system_prompt_text: String)
         system_prompt_text,
         tool_allow,
         sampling: cfg.sampling.map(ProfileSamplingToml::into_params),
-    }
+        hooks,
+    })
 }
 
 /// 解析文件夹版 profile：读 `config.toml`，再按 `[prompt] file`（默认
 /// `system.md`，相对 profile 目录 + 沙箱守界）读 system prompt。
-fn parse_profile_folder(dir: &Path, config_path: &Path) -> Result<ProfileSpec, ConfigError> {
+fn parse_profile_folder(
+    dir: &Path,
+    config_path: &Path,
+    source: ConfigSource,
+) -> Result<ProfileSpec, ConfigError> {
     let raw = std::fs::read_to_string(config_path).map_err(|err| ConfigError::Io {
         path: config_path.to_path_buf(),
         source: BoxError::new(err),
@@ -293,13 +326,17 @@ fn parse_profile_folder(dir: &Path, config_path: &Path) -> Result<ProfileSpec, C
             source: BoxError::new(err),
         })?;
 
-    Ok(spec_from_cfg(dir, cfg, system_prompt_text))
+    spec_from_cfg(dir, cfg, system_prompt_text, source, config_path)
 }
 
 /// 解析单文件版 profile：`<name>.md`，frontmatter（`+++` TOML 或 `---` YAML）
 /// 之后正文即 system prompt。`dir` 取 `.md` 所在的 `agents/` 目录（profile 不带
 /// 额外资源文件，故 `[prompt] file` 在单文件版**无意义**，写了即冲突报错）。
-fn parse_profile_file(dir: &Path, file_path: &Path) -> Result<ProfileSpec, ConfigError> {
+fn parse_profile_file(
+    dir: &Path,
+    file_path: &Path,
+    source: ConfigSource,
+) -> Result<ProfileSpec, ConfigError> {
     let raw = std::fs::read_to_string(file_path).map_err(|err| ConfigError::Io {
         path: file_path.to_path_buf(),
         source: BoxError::new(err),
@@ -326,7 +363,7 @@ fn parse_profile_file(dir: &Path, file_path: &Path) -> Result<ProfileSpec, Confi
                 .into(),
         });
     }
-    Ok(spec_from_cfg(dir, cfg, body.to_string()))
+    spec_from_cfg(dir, cfg, body.to_string(), source, file_path)
 }
 
 /// 解析用户层 `agents/` 目录。与 [`crate::loader`] 的

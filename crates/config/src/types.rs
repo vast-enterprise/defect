@@ -246,6 +246,10 @@ impl HooksConfig {
 /// 单条 hook 配置：matcher + handler + 来源层。
 #[derive(Debug, Clone, PartialEq)]
 pub struct HookEntry {
+    /// 可选的人类可读名字，仅用于 tracing / 可观测性里标识这条 hook。
+    /// `None` ⇒ 装配时回退到匿名标签（见 `defect-cli` 的 hook 装配）。
+    /// 不参与去重 / disable 匹配（那只看 matcher + handler）——纯展示用。
+    pub name: Option<String>,
     pub matcher: HookMatcher,
     pub handler: HookHandlerSpec,
     /// 该 hook 的来源层。Phase G 的 trust gating 用它判断是否需要显式信任。

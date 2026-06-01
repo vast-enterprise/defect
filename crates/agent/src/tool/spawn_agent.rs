@@ -33,7 +33,7 @@ use serde_json::json;
 
 use crate::error::BoxError;
 use crate::event::AgentEvent;
-use crate::hooks::NoopHookEngine;
+use crate::hooks::{HookEngine, NoopHookEngine};
 use crate::llm::{HostedCapabilities, MessageContent, ProviderRegistry, Role, SamplingParams};
 use crate::policy::{NonInteractivePolicy, SandboxPolicy};
 use crate::session::{
@@ -53,7 +53,7 @@ pub(crate) const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 /// `defect-config` 的 `ProfileSpec` 是配置侧的真相源；CLI 装配时把它投影成
 /// 本结构再交给工具。两边分开是因为 `defect-config` 依赖 `defect-agent`——
 /// agent 不能反向依赖 config，否则成环。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SubagentProfile {
     /// 选择期描述，进工具 schema 的 catalog，让 LLM 据此挑 profile。
     pub description: String,
@@ -65,6 +65,27 @@ pub struct SubagentProfile {
     pub tool_allow: Vec<String>,
     /// 可选采样覆盖。
     pub sampling: Option<SamplingParams>,
+    /// 该 profile 自己的 hook 引擎——子 agent 跑 turn 时挂的钩子。
+    ///
+    /// 与"继承世界、不继承身份"原则一致：hook 属于 profile 的身份，由 profile
+    /// 自己的配置声明（CLI 装配期把 `ProfileSpec.hooks` 编译成引擎注入），**不**
+    /// 从父会话继承。`None` ⇒ 子 agent 无钩子（回落 [`NoopHookEngine`]）——保持
+    /// 与改动前完全一致的行为，故现有不挂钩子的 profile 零影响。
+    pub hooks: Option<Arc<dyn HookEngine>>,
+}
+
+// `Arc<dyn HookEngine>` 不是 `Debug`，手写 `Debug` 跳过它（只标注是否挂了引擎）。
+impl std::fmt::Debug for SubagentProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubagentProfile")
+            .field("description", &self.description)
+            .field("model", &self.model)
+            .field("system_prompt", &self.system_prompt)
+            .field("tool_allow", &self.tool_allow)
+            .field("sampling", &self.sampling)
+            .field("hooks", &self.hooks.as_ref().map(|_| "<engine>"))
+            .finish()
+    }
 }
 
 /// `spawn_agent` 工具。挂在 `StaticToolRegistry` 上、随 `process_tools` 被所属
@@ -458,7 +479,12 @@ async fn run_subagent_core(
 
     let permissions = PermissionGate::new();
     let sub_policy = NonInteractivePolicy::new(policy);
-    let hooks = NoopHookEngine;
+    // profile 自己声明的 hook 引擎；未声明 ⇒ NoopHookEngine（行为同改动前）。
+    let noop = NoopHookEngine;
+    let hooks: &dyn HookEngine = match &profile.hooks {
+        Some(engine) => engine.as_ref(),
+        None => &noop,
+    };
     let session_id = SessionId::new(format!("subagent-{}", parsed.profile));
     let audit = RequestAuditTracker::new();
 
@@ -485,7 +511,7 @@ async fn run_subagent_core(
         shell,
         http,
         hosted_capabilities: HostedCapabilities::default(),
-        hooks: &hooks,
+        hooks,
         session_id: &session_id,
         request_audit: &audit,
         // 子 agent turn 不携后台句柄：结构性禁止后台任务自我繁殖

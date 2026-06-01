@@ -238,20 +238,35 @@ pub struct HandlerTable {
     pub step_buckets: std::collections::HashMap<&'static str, Vec<StepHandlerEntry>>,
 }
 
-/// 一条已装配的 step handler：matcher + handler + 单条超时。
+/// 一条已装配的 step handler：name + matcher + handler + 单条超时。
 pub struct StepHandlerEntry {
+    /// 展示名，仅用于 tracing / 可观测性里标识这条 hook。默认匿名标签
+    /// （见 [`Self::new`]）；装配方可用 [`Self::with_name`] 覆盖。
+    pub name: String,
     pub matcher: HookMatcher,
     pub handler: Arc<dyn StepHandler>,
     pub timeout: Option<Duration>,
 }
 
+/// 未命名 hook 在 tracing 里的占位名。
+pub const ANONYMOUS_HOOK_NAME: &str = "anonymous";
+
 impl StepHandlerEntry {
     pub fn new(matcher: HookMatcher, handler: Arc<dyn StepHandler>) -> Self {
         Self {
+            name: ANONYMOUS_HOOK_NAME.to_string(),
             matcher,
             handler,
             timeout: None,
         }
+    }
+
+    /// 设置展示名。`None` 保持匿名占位（[`ANONYMOUS_HOOK_NAME`]）。
+    pub fn with_name(mut self, name: Option<String>) -> Self {
+        if let Some(name) = name {
+            self.name = name;
+        }
+        self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -351,15 +366,15 @@ impl HookEngine for DefaultHookEngine {
                 let verdict = match tokio::time::timeout(timeout, fut).await {
                     Ok(Ok(Ok(v))) => v,
                     Ok(Ok(Err(err))) => {
-                        tracing::warn!(event = %step.event_name(), error = %err, "step hook handler error; skipped");
+                        tracing::warn!(event = %step.event_name(), hook = %entry.name, error = %err, "step hook handler error; skipped");
                         continue;
                     }
                     Ok(Err(panic)) => {
-                        tracing::warn!(event = %step.event_name(), panic = %panic_message(&panic), "step hook handler panicked; skipped");
+                        tracing::warn!(event = %step.event_name(), hook = %entry.name, panic = %panic_message(&panic), "step hook handler panicked; skipped");
                         continue;
                     }
                     Err(_elapsed) => {
-                        tracing::warn!(event = %step.event_name(), "step hook handler timed out; skipped");
+                        tracing::warn!(event = %step.event_name(), hook = %entry.name, "step hook handler timed out; skipped");
                         continue;
                     }
                 };
@@ -369,7 +384,7 @@ impl HookEngine for DefaultHookEngine {
                     Ok(step::HookControl::Proceed) => {}
                     Ok(control) => return control,
                     Err(err) => {
-                        tracing::warn!(event = %step.event_name(), error = %err, "step verdict malformed; skipped");
+                        tracing::warn!(event = %step.event_name(), hook = %entry.name, error = %err, "step verdict malformed; skipped");
                     }
                 }
             }

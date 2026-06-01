@@ -307,6 +307,7 @@ fn schema_has_profile_enum_and_catalog() {
         system_prompt: "you are reviewer".to_string(),
         tool_allow: vec!["read_file".to_string()],
         sampling: None,
+        hooks: None,
     };
     let tool = SpawnAgentTool::new(
         profiles_with(profile),
@@ -337,6 +338,7 @@ fn returns_subagent_final_text() {
         system_prompt: "sys".to_string(),
         tool_allow: vec![],
         sampling: None,
+        hooks: None,
     };
     let tool = SpawnAgentTool::new(
         profiles_with(profile),
@@ -367,6 +369,7 @@ fn subagent_events_bridged_to_parent() {
         system_prompt: "sys".to_string(),
         tool_allow: vec![],
         sampling: None,
+        hooks: None,
     };
     let tool = SpawnAgentTool::new(
         profiles_with(profile),
@@ -424,6 +427,7 @@ fn unknown_profile_fails() {
         system_prompt: "sys".to_string(),
         tool_allow: vec![],
         sampling: None,
+        hooks: None,
     };
     let tool = SpawnAgentTool::new(
         profiles_with(profile),
@@ -448,6 +452,7 @@ fn unknown_allowed_tool_fails_loud() {
         system_prompt: "sys".to_string(),
         tool_allow: vec!["does_not_exist".to_string()],
         sampling: None,
+        hooks: None,
     };
     let tool = SpawnAgentTool::new(
         profiles_with(profile),
@@ -479,6 +484,7 @@ fn deadlock_guard_mutating_tool_is_denied_and_turn_completes() {
         system_prompt: "sys".to_string(),
         tool_allow: vec!["write_file".to_string()],
         sampling: None,
+        hooks: None,
     };
     let tool = SpawnAgentTool::new(
         profiles_with(profile),
@@ -502,4 +508,60 @@ fn deadlock_guard_mutating_tool_is_denied_and_turn_completes() {
         completed_text(&events).as_deref(),
         Some("done after denial")
     );
+}
+
+/// 一个最小 HookEngine：在 `before_generate` 上 short-circuit，填合成 assistant
+/// 文本，从而完全跳过真实 LLM 调用。用来证明 profile 自带的 hook 引擎确实在子
+/// agent 的 turn 里被调度——否则子 agent 会回 provider 的文本而非这条。
+struct ShortCircuitHooks {
+    text: String,
+}
+
+impl crate::hooks::HookEngine for ShortCircuitHooks {
+    fn dispatch<'a>(
+        &'a self,
+        step: &'a mut dyn crate::hooks::step::HookStep,
+        _ctx: crate::hooks::HookCtx<'a>,
+    ) -> BoxFuture<'a, crate::hooks::step::HookControl> {
+        let text = self.text.clone();
+        Box::pin(async move {
+            if step.event_name() == "before_generate" {
+                // apply_verdict 走 BeforeGenerate 的 `assistant` 字段 → assistant_text。
+                let _ = step.apply_verdict(&json!({ "assistant": text }));
+            }
+            crate::hooks::step::HookControl::Proceed
+        })
+    }
+}
+
+#[test]
+fn profile_hook_engine_runs_in_subagent_turn() {
+    let tmp = tempfile::TempDir::new().expect("tmp");
+    let profile = SubagentProfile {
+        description: "d".to_string(),
+        model: None,
+        system_prompt: "sys".to_string(),
+        tool_allow: vec![],
+        sampling: None,
+        hooks: Some(Arc::new(ShortCircuitHooks {
+            text: "from hook".into(),
+        })),
+    };
+    let tool = SpawnAgentTool::new(
+        profiles_with(profile),
+        // provider 会回 "from provider"——若 hook 没跑，结果就是它。
+        registry_with(Arc::new(TextProvider {
+            text: "from provider".into(),
+        })),
+        Arc::new(AskWritesPolicy::new()),
+        process_tools_with(vec![]),
+        None,
+    );
+    let events = run_tool(
+        &tool,
+        json!({"profile": "reviewer", "task": "do it"}),
+        tmp.path(),
+    );
+    // hook short-circuit 生效 ⇒ 最终文本来自 hook，而非 provider。
+    assert_eq!(completed_text(&events).as_deref(), Some("from hook"));
 }

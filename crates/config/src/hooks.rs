@@ -114,6 +114,7 @@ pub(crate) fn parse_layer_hooks(
             entries.push(
                 key.clone(),
                 HookEntry {
+                    name: r.name,
                     matcher: r.matcher.into_typed(),
                     handler: r.handler.into_typed(&path)?,
                     source,
@@ -123,6 +124,40 @@ pub(crate) fn parse_layer_hooks(
     }
 
     Ok(LayerHooks { entries, disables })
+}
+
+/// 把一个 subagent profile 的 `[hooks]` 表（已被 serde 解析成事件名 → 原始条目
+/// 数组）转成 [`HooksConfig`]，每条带上 profile 所在层的 `source`。
+///
+/// 与 [`parse_layer_hooks`] 的差别：profile 是**单一闭合真相源**——没有上游可
+/// append / dedupe / disable，故不支持 `disable` 键，也不跨层合并。事件名仍按
+/// `ALL_EVENT_NAMES` 校验，拼错 hard fail（不静默丢弃）。`path` 仅供报错定位。
+pub(crate) fn profile_hooks_from_raw(
+    raw: BTreeMap<String, Vec<HookEntryRaw>>,
+    source: ConfigSource,
+    path: &std::path::Path,
+) -> Result<HooksConfig, ConfigError> {
+    let mut entries = HooksConfig::default();
+    for (key, list) in raw {
+        if !is_known_event(&key) {
+            return Err(ConfigError::Invalid {
+                path: path.to_path_buf(),
+                message: format!("[[hooks.{key}]] is not a known hook event name"),
+            });
+        }
+        for r in list {
+            entries.push(
+                key.clone(),
+                HookEntry {
+                    name: r.name,
+                    matcher: r.matcher.into_typed(),
+                    handler: r.handler.into_typed(path)?,
+                    source,
+                },
+            );
+        }
+    }
+    Ok(entries)
 }
 
 /// 把多层 [`LayerHooks`] 合并成最终 [`HooksConfig`]：
@@ -180,7 +215,10 @@ fn dedupe_in_place(entries: &mut Vec<HookEntry>) {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HookEntryRaw {
+pub(crate) struct HookEntryRaw {
+    /// 可选展示名（tracing / 可观测性用）。
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     #[serde(rename = "match")]
     matcher: HookMatcherRaw,

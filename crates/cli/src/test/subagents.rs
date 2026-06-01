@@ -10,6 +10,7 @@ use std::fs;
 use std::sync::Arc;
 
 use defect_acp::EchoProvider;
+use defect_agent::hooks::builtin::BuiltinRegistry;
 use defect_agent::llm::{LlmProvider, ModelInfo, ProviderRegistry};
 use defect_agent::policy::{AskWritesPolicy, SandboxPolicy};
 use defect_agent::tool::SkillEntry;
@@ -18,6 +19,7 @@ use defect_config::{
 };
 use tempfile::TempDir;
 
+use crate::hooks::HookEngineCtx;
 use crate::tools::{build_process_tools_with_subagents, filter_tools_by_allowlist, project_skills};
 
 /// 大多数 subagent 测试不涉及 skill——传一份空索引。
@@ -79,6 +81,35 @@ fn policy() -> Arc<dyn SandboxPolicy> {
     Arc::new(AskWritesPolicy::new())
 }
 
+/// 测试包装：用默认 builtin 注册表 + echo 模型上下文装配工具集并 unwrap。
+/// profile 的 `[hooks]` 装配错误会在此 panic（测试里 profile 都不带 hooks，或
+/// 显式测装配失败时直接调底层函数）。
+fn assemble(
+    config: &LoadedConfig,
+    profiles: &BTreeMap<String, ProfileSpec>,
+    skills: &BTreeMap<String, SkillEntry>,
+    registry: &Arc<ProviderRegistry>,
+    policy: &Arc<dyn SandboxPolicy>,
+    base_prompt: Option<String>,
+) -> Arc<dyn defect_agent::session::ToolRegistry> {
+    let builtins = BuiltinRegistry::defaults();
+    let hook_rt = HookEngineCtx {
+        registry,
+        default_model: "echo-1",
+    };
+    build_process_tools_with_subagents(
+        config,
+        profiles,
+        skills,
+        registry,
+        policy,
+        base_prompt,
+        &builtins,
+        &hook_rt,
+    )
+    .expect("assemble tools")
+}
+
 #[test]
 fn spawn_agent_registered_when_profiles_exist() {
     let (_tmp, config, opts) = setup();
@@ -90,7 +121,7 @@ fn spawn_agent_registered_when_profiles_exist() {
     );
     let profiles = discover(&opts);
 
-    let tools = build_process_tools_with_subagents(
+    let tools = assemble(
         &config,
         &profiles,
         &no_skills(),
@@ -110,7 +141,7 @@ fn spawn_agent_absent_when_no_profiles() {
     let profiles = discover(&opts);
     assert!(profiles.is_empty());
 
-    let tools = build_process_tools_with_subagents(
+    let tools = assemble(
         &config,
         &profiles,
         &no_skills(),
@@ -135,7 +166,7 @@ fn spawn_agent_schema_lists_profile_in_enum() {
         "sys",
     );
     let profiles = discover(&opts);
-    let tools = build_process_tools_with_subagents(
+    let tools = assemble(
         &config,
         &profiles,
         &no_skills(),
@@ -199,7 +230,7 @@ fn skill_tool_registered_when_skills_exist() {
     let skills = discover_skill_index(&opts);
     let profiles = discover(&opts);
 
-    let tools = build_process_tools_with_subagents(
+    let tools = assemble(
         &config,
         &profiles,
         &skills,
@@ -232,7 +263,7 @@ fn skill_tool_absent_when_no_skills() {
     let skills = discover_skill_index(&opts);
     assert!(skills.is_empty());
 
-    let tools = build_process_tools_with_subagents(
+    let tools = assemble(
         &config,
         &discover(&opts),
         &skills,

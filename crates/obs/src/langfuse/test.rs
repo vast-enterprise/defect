@@ -267,6 +267,7 @@ fn llm_call_lifecycle_creates_then_updates_generation() {
     );
     assert_eq!(ended[0]["type"], "generation-update");
     assert_eq!(ended[0]["body"]["id"], gen_id);
+    assert_eq!(ended[0]["body"]["name"], "llm_call");
     assert_eq!(ended[0]["body"]["output"], "hello world");
     // thinking 放 metadata.reasoning，不进 output。
     assert_eq!(ended[0]["body"]["metadata"]["reasoning"], "let me think");
@@ -276,6 +277,7 @@ fn llm_call_lifecycle_creates_then_updates_generation() {
     assert_eq!(ended[0]["body"]["usageDetails"]["output"], 12);
     // 第二个事件是 trace 收尾，usage 是 turn 级累计（100/20）。
     assert_eq!(ended[1]["type"], "trace-create");
+    assert_eq!(ended[1]["body"]["name"], "turn");
     assert_eq!(ended[1]["body"]["output"], "hello world");
     assert_eq!(ended[1]["body"]["metadata"]["usage"]["input"], 100);
 }
@@ -526,6 +528,7 @@ fn turn_ended_updates_trace_with_same_id() {
     assert_eq!(ended[1]["type"], "trace-create");
     // trace 用同一 trace_id 更新（合并 input/output/endTime）。
     assert_eq!(ended[1]["body"]["id"], trace_id);
+    assert_eq!(ended[1]["body"]["name"], "turn");
     assert_eq!(ended[1]["body"]["sessionId"], "sess-x");
     assert_eq!(ended[1]["body"]["input"], "do something");
     assert_eq!(ended[1]["body"]["output"], "done");

@@ -66,7 +66,7 @@ pub fn build_hook_engine(
         for entry in entries {
             let matcher = translate_matcher(&entry.matcher);
             let (handler, timeout) = build_handler(&entry.handler, builtins, rt)?;
-            let mut hook = StepHandlerEntry::new(matcher, handler);
+            let mut hook = StepHandlerEntry::new(matcher, handler).with_name(entry.name.clone());
             if let Some(t) = timeout {
                 hook = hook.with_timeout(t);
             }
@@ -351,6 +351,7 @@ mod test {
         hooks.push(
             "after_session_enter",
             HookEntry {
+                name: None,
                 matcher: ConfigHookMatcher::default(),
                 handler: HookHandlerSpec::Builtin {
                     name: "does-not-exist".into(),
@@ -376,6 +377,7 @@ mod test {
         hooks.push(
             "before_tool_apply",
             HookEntry {
+                name: None,
                 matcher: ConfigHookMatcher {
                     tool: Some("login".into()),
                     ..Default::default()
@@ -397,6 +399,7 @@ mod test {
         hooks.push(
             "before_tool_apply",
             HookEntry {
+                name: None,
                 matcher: ConfigHookMatcher::default(),
                 handler: HookHandlerSpec::Command(HookCommandSpec::Argv {
                     argv: vec!["true".into()],
@@ -419,6 +422,7 @@ mod test {
         hooks.push(
             "before_tool_apply",
             HookEntry {
+                name: None,
                 matcher: ConfigHookMatcher::default(),
                 handler: HookHandlerSpec::Command(HookCommandSpec::Shell {
                     shell: HookShellKind::Bash,
@@ -441,6 +445,7 @@ mod test {
         hooks.push(
             "after_session_enter",
             HookEntry {
+                name: None,
                 matcher: ConfigHookMatcher::default(),
                 handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
                     None,
@@ -462,6 +467,7 @@ mod test {
         hooks.push(
             "after_session_enter",
             HookEntry {
+                name: None,
                 matcher: ConfigHookMatcher::default(),
                 handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
                     Some("not-registered".into()),

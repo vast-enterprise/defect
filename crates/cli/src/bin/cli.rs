@@ -110,7 +110,27 @@ async fn main() -> anyhow::Result<()> {
         defect_http::build_fetch_client_arc(&build_http_stack_config(&config.effective.http)?)
             .map_err(|e| anyhow::anyhow!("fetch http client init failed: {e}"))?;
 
+    // `skill-manifest` builtin 持有 skill 索引，无参工厂构造不出来——这里用
+    // 捕获索引的闭包注册进 registry，用户可在 `[[hooks.session_start]]` 里按名
+    // 挂上（与 `skill` 工具 description 内嵌的 catalog 同源）。装在工具集之前，
+    // 因为 subagent profile 的 `[hooks]` 也要用这份 builtin 注册表装配。
+    let mut builtin_registry = BuiltinRegistry::defaults();
+    {
+        let skills_for_hook = Arc::new(skills.clone());
+        builtin_registry.register_step("skill-manifest", move || {
+            Arc::new(defect_agent::hooks::builtin::SkillManifestHook::new(
+                skills_for_hook.clone(),
+            ))
+        });
+    }
+    let hook_rt = HookEngineCtx {
+        registry: &registry,
+        default_model: turn_config.model.as_str(),
+    };
+
     // 工具集：顶层 --profile 时按其白名单裁；否则 base + (有 profile 则) spawn_agent。
+    // subagent profile 各自的 `[hooks]` 在 build_process_tools_with_subagents 里
+    // 编译成 hook 引擎注入对应 SubagentProfile。
     let tools = if let Some(profile_name) = cli.profile.as_deref() {
         let spec = profiles
             .get(profile_name)
@@ -127,7 +147,10 @@ async fn main() -> anyhow::Result<()> {
             &registry,
             &policy,
             base_prompt_text,
+            &builtin_registry,
+            &hook_rt,
         )
+        .map_err(|e| anyhow::anyhow!("subagent hook engine build failed: {e}"))?
     };
     let storage = Arc::new(StorageObserver::new(default_sessions_root()?));
 
@@ -141,27 +164,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("langfuse reporting enabled");
     }
 
-    // `skill-manifest` builtin 持有 skill 索引，无参工厂构造不出来——这里用
-    // 捕获索引的闭包注册进 registry，用户可在 `[[hooks.session_start]]` 里按名
-    // 挂上（与 `skill` 工具 description 内嵌的 catalog 同源）。
-    let mut builtin_registry = BuiltinRegistry::defaults();
-    {
-        let skills_for_hook = Arc::new(skills.clone());
-        builtin_registry.register_step("skill-manifest", move || {
-            Arc::new(defect_agent::hooks::builtin::SkillManifestHook::new(
-                skills_for_hook.clone(),
-            ))
-        });
-    }
-    let hook_engine = hooks::build_engine_arc(
-        &config.effective.hooks,
-        &builtin_registry,
-        &HookEngineCtx {
-            registry: &registry,
-            default_model: turn_config.model.as_str(),
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("hook engine build failed: {e}"))?;
+    let hook_engine = hooks::build_engine_arc(&config.effective.hooks, &builtin_registry, &hook_rt)
+        .map_err(|e| anyhow::anyhow!("hook engine build failed: {e}"))?;
 
     // 3) 拼装 AgentCore，启 stdio ACP server
     let mut builder = DefaultAgentCore::builder()
