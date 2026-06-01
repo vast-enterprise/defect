@@ -22,3 +22,6 @@ uuid.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "macros", "rt", "rt-multi-thread", "time", "test-util"] }
 tempfile.workspace = true
+
+[lints]
+workspace = true

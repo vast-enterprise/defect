@@ -1,0 +1,6 @@
+# 显式钉死 clippy::too_many_arguments 阈值 = 7（即当前 clippy 默认值）。
+# 固化它有两个目的：
+#   1. 防上游 clippy 哪天改默认值导致门禁悄悄变松/变紧；
+#   2. 让阈值成为代码里可见的约定，而非依赖工具的隐式默认。
+# 配套：根 Cargo.toml 的 [workspace.lints.clippy] 把该 lint 设为 deny。
+too-many-arguments-threshold = 7

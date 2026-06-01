@@ -105,3 +105,6 @@ tempfile.workspace = true
 name = "mcp_stdio_smoke"
 path = "tests/mcp_stdio_smoke.rs"
 required-features = ["__test-servers"]
+
+[lints]
+workspace = true

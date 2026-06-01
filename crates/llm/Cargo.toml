@@ -65,3 +65,6 @@ provider-deepseek = ["provider-openai"]
 agent-client-protocol-schema.workspace = true
 tracing-subscriber.workspace = true
 wiremock.workspace = true
+
+[lints]
+workspace = true

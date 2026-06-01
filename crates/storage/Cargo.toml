@@ -16,3 +16,6 @@ tracing.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
+
+[lints]
+workspace = true

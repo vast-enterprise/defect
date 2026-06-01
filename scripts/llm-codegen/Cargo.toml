@@ -23,3 +23,6 @@ syn.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+
+[lints]
+workspace = true
