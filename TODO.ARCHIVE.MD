@@ -50,6 +50,7 @@
 | inbound  | ACP 暴露 session 模型候选并支持 `session/set_model`            | `docs/inbound/acp-session.md`                                           | P1     |
 | internal | 上下文压缩编排（结构化摘要 + tail 保留 + ratio 触发）          | `docs/internal/turn-loop.md` §4                                         | P1     |
 | internal | Skill 加载机制（dir-per-skill 发现 + `skill` 工具按需加载 L2 body） | `docs/internal/skills.md`                                          | 远期   |
+| internal | Skill 自动激活（`always` body 注入 + `triggers.globs/keywords` 按 prompt 匹配；统一 glob 到 `globset`，含 hook tool_glob 迁移） | `docs/internal/skills.md` §4.3 / §5.1 | P2 |
 | internal | Subagent 系统（`spawn_agent` 工具 + profile 文件夹）           | `docs/internal/skills.md` 顶部实现注 / `crates/config/src/profiles.rs`  | 远期   |
 | 基础     | CLI 入口（参数解析、组装、跑 ACP server）                      | `docs/cli.md`                                                           | P0     |
 | 基础     | 端到端冒烟用例（CLI ←→ 假 ACP client ←→ 假 LLM）               | `docs/testing/e2e.md`                                                   | P1     |

@@ -48,12 +48,12 @@ pub struct HookEngineCtx<'a> {
     pub default_model: &'a str,
 }
 
-/// 用 `[hooks]` 段 + builtin 注册表构造一个 [`DefaultHookEngine`]。
-pub fn build_hook_engine(
+/// 从 `[hooks]` 段构造 [`HandlerTable`]（不含自动挂载的 builtin）。
+fn build_handler_table(
     hooks: &HooksConfig,
     builtins: &BuiltinRegistry,
     rt: &HookEngineCtx<'_>,
-) -> Result<DefaultHookEngine, HookEngineBuildError> {
+) -> Result<HandlerTable, HookEngineBuildError> {
     let mut table = HandlerTable::empty();
 
     // config 的事件桶键就是 step 的 `event_name`（1:1，config 层已校验过合法性）。
@@ -73,7 +73,16 @@ pub fn build_hook_engine(
             table.push_step(static_name, hook);
         }
     }
+    Ok(table)
+}
 
+/// 用 `[hooks]` 段 + builtin 注册表构造一个 [`DefaultHookEngine`]。
+pub fn build_hook_engine(
+    hooks: &HooksConfig,
+    builtins: &BuiltinRegistry,
+    rt: &HookEngineCtx<'_>,
+) -> Result<DefaultHookEngine, HookEngineBuildError> {
+    let table = build_handler_table(hooks, builtins, rt)?;
     let engine = DefaultHookEngine::new();
     engine.reload(table);
     Ok(engine)
@@ -242,6 +251,52 @@ pub fn build_engine_arc(
         return Ok(Arc::new(defect_agent::hooks::NoopHookEngine));
     }
     let engine = build_hook_engine(hooks, builtins, rt)?;
+    Ok(Arc::new(engine))
+}
+
+/// 主 session 的 hook 引擎：在用户 `[hooks]` 配置之上**自动挂载**两个 skill
+/// builtin（发现到任意 skill 时）——
+/// - `skill-manifest` → `after_session_enter`：注入 L1 清单 + always-on body；
+/// - `skill-triggers` → `before_ingest`：按 prompt 自动激活相关 skill。
+///
+/// 这让"自动激活"开箱即用、不要求用户手写 `[[hooks.*]]`。两个 hook 的 matcher
+/// 全空（命中该事件下所有触发）。skill 索引为空时不挂（保持零开销），且当用户
+/// 也没配 `[hooks]` 时直接走 [`NoopHookEngine`]。子 agent profile 不走这条路径
+/// （仍用 [`build_engine_arc`]），故 skill hook 不会渗进子 agent。
+pub fn build_main_session_engine(
+    hooks: &HooksConfig,
+    builtins: &BuiltinRegistry,
+    rt: &HookEngineCtx<'_>,
+    skills: &Arc<std::collections::BTreeMap<String, defect_agent::tool::SkillEntry>>,
+) -> Result<Arc<dyn defect_agent::hooks::HookEngine>, HookEngineBuildError> {
+    let mount_skills = !skills.is_empty();
+    if hooks.is_empty() && !mount_skills {
+        return Ok(Arc::new(defect_agent::hooks::NoopHookEngine));
+    }
+
+    let mut table = build_handler_table(hooks, builtins, rt)?;
+    if mount_skills {
+        use defect_agent::hooks::builtin::{SkillManifestHook, SkillTriggersHook};
+        table.push_step(
+            "after_session_enter",
+            StepHandlerEntry::new(
+                AgentHookMatcher::default(),
+                Arc::new(SkillManifestHook::new(skills.clone())),
+            )
+            .with_name(Some("skill-manifest".to_string())),
+        );
+        table.push_step(
+            "before_ingest",
+            StepHandlerEntry::new(
+                AgentHookMatcher::default(),
+                Arc::new(SkillTriggersHook::new(skills.clone())),
+            )
+            .with_name(Some("skill-triggers".to_string())),
+        );
+    }
+
+    let engine = DefaultHookEngine::new();
+    engine.reload(table);
     Ok(Arc::new(engine))
 }
 

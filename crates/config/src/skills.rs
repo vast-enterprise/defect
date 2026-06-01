@@ -31,6 +31,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use defect_agent::error::BoxError;
+use defect_agent::tool::SkillTriggers;
 use serde::Deserialize;
 
 use crate::frontmatter::{parse_frontmatter, split_frontmatter};
@@ -52,7 +53,8 @@ const DESCRIPTION_SOFT_LIMIT: usize = 200;
 ///
 /// 由 [`discover_skills`] 产出；`skill` 工具消费它——`name` / `description` 进
 /// 工具 schema 的清单，`body` 在模型按名拉取时作为 tool result，`dir` 让模型
-/// 知道资源文件（`scripts/` / `refs/`）的绝对路径根。
+/// 知道资源文件（`scripts/` / `refs/`）的绝对路径根。`always` / `triggers`
+/// 驱动自动激活（见 [`SkillTriggers`]），CLI 装配时投影到 agent 侧 `SkillEntry`。
 #[derive(Debug, Clone)]
 pub struct SkillSpec {
     /// skill 名（= 目录名）。`skill` 工具的 `name` enum 取值。
@@ -63,18 +65,24 @@ pub struct SkillSpec {
     pub description: String,
     /// `SKILL.md` 去 frontmatter 后的 body 全文（L2 加载时的内容）。
     pub body: String,
+    /// `always: true` ⇒ body 在 session 启动直接注入 system prompt（always-on）。
+    pub always: bool,
+    /// 自动激活触发条件（globs 已在解析期编译成 GlobSet / keywords）。复用 agent
+    /// 侧类型，CLI 投影时直接 clone。
+    pub triggers: SkillTriggers,
 }
 
 /// `SKILL.md` frontmatter 的原始反序列化形态。
 ///
 /// 保留 `deny_unknown_fields`（与 [`crate::profiles`] 一致）抓必填项拼写错
-/// （`naem` / `desciption` 这类 typo 不会被静默放过）；同时把 Agent Skills
-/// open-standard 的 `always` / `triggers` / `allowed_tools` 几个字段**显式占位**
-/// ——v0 解析但不消费（见 `docs/internal/skills.md` §3.2 / §4.3）。
+/// （`naem` / `desciption` 这类 typo 不会被静默放过）；Agent Skills
+/// open-standard 的 `always` / `triggers` 已**接入消费**（自动激活，见
+/// `docs/internal/skills.md` §4.3 / §5.1），`allowed_tools` 仍**显式占位**
+/// （v1 做 tool gating）。
 ///
-/// 占位（而非 deny / 而非完全放开）的取舍：deny 会把"用户已写好的
+/// 显式列出（而非 deny / 而非完全放开）的取舍：deny 会把"用户已写好的
 /// Anthropic / Codex 格式 skill 扔进来就能用"（§2.1）这个卖点废掉；完全放开
-/// 又丢了 typo 保护。显式列出文档已承诺的字段两头兼顾——v1 接入时这些字段从
+/// 又丢了 typo 保护。显式列出文档已承诺的字段两头兼顾——已接入的字段从
 /// "被忽略"变"被消费"，对用户文件向后兼容。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,14 +93,12 @@ struct SkillManifestToml {
     /// 必填——进 L1 清单。缺失即 serde 报 "missing field `description`"，被
     /// [`discover_skills`] 包成带文件路径的 hard error。
     description: String,
-    /// 占位（§5.1）：v1 接入后 `true` 表示该 skill 的 body 直接拼进 system
-    /// prompt（always-on），v0 解析后不消费。
+    /// `true` ⇒ 该 skill 的 body 在 session 启动直接拼进 system prompt
+    /// （always-on，见 §5.1）。
     #[serde(default)]
-    #[allow(dead_code, reason = "open-standard 占位字段，v0 解析但不消费")]
     always: Option<bool>,
-    /// 占位（§4.3）：按文件 glob / prompt 关键字自动激活，v0 解析后不消费。
+    /// 自动激活触发条件（按文件 glob / prompt 关键字，见 §4.3）。
     #[serde(default)]
-    #[allow(dead_code, reason = "open-standard 占位字段，v0 解析但不消费")]
     triggers: Option<SkillTriggersToml>,
     /// 占位：v1 用于让 ACP 客户端做 tool gating（参考 Anthropic `allowed-tools`，
     /// 故同时接受连字符写法）。v0 解析后不消费。
@@ -101,15 +107,14 @@ struct SkillManifestToml {
     allowed_tools: Option<Vec<String>>,
 }
 
-/// `[triggers]` 子表的占位形态——v0 解析但不消费（见 [`SkillManifestToml`]）。
+/// `[triggers]` 子表：自动激活条件。`globs` 在 [`parse_skill`] 里编译成
+/// [`globset::GlobSet`]（坏 glob fail-fast）。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SkillTriggersToml {
     #[serde(default)]
-    #[allow(dead_code, reason = "open-standard 占位字段，v0 解析但不消费")]
     globs: Vec<String>,
     #[serde(default)]
-    #[allow(dead_code, reason = "open-standard 占位字段，v0 解析但不消费")]
     keywords: Vec<String>,
 }
 
@@ -225,12 +230,49 @@ fn parse_skill(dir: &Path, manifest_path: &Path, dir_name: &str) -> Result<Skill
         );
     }
 
+    // triggers：把 globs 编译成 GlobSet（坏 glob 当场 hard fail，带 skill 路径），
+    // keywords 原样保留。无 [triggers] 子表 ⇒ 默认空触发。
+    let triggers = match manifest.triggers {
+        Some(t) => SkillTriggers {
+            globs: compile_globs(&t.globs, manifest_path)?,
+            keywords: t.keywords,
+        },
+        None => SkillTriggers::default(),
+    };
+
     Ok(SkillSpec {
         name: manifest.name,
         dir: dir.to_path_buf(),
         description: manifest.description,
         body: body.to_string(),
+        always: manifest.always.unwrap_or(false),
+        triggers,
     })
+}
+
+/// 把 `triggers.globs` 编译成 [`globset::GlobSet`]。空 ⇒ `None`（无 glob 触发）。
+/// 任一 glob 非法 ⇒ [`ConfigError::Invalid`]，带 `SKILL.md` 路径与 globset 错误
+/// （fail loud，不静默吞坏 glob）。
+fn compile_globs(
+    globs: &[String],
+    manifest_path: &Path,
+) -> Result<Option<globset::GlobSet>, ConfigError> {
+    if globs.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = globset::GlobSetBuilder::new();
+    for pat in globs {
+        let glob = globset::Glob::new(pat).map_err(|err| ConfigError::Invalid {
+            path: manifest_path.to_path_buf(),
+            message: format!("invalid trigger glob `{pat}`: {err}"),
+        })?;
+        builder.add(glob);
+    }
+    let set = builder.build().map_err(|err| ConfigError::Invalid {
+        path: manifest_path.to_path_buf(),
+        message: format!("failed to build trigger glob set: {err}"),
+    })?;
+    Ok(Some(set))
 }
 
 /// 解析用户层 `skills/` 目录。与 [`crate::profiles`] 的 `resolve_user_agents_dir`

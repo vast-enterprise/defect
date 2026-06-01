@@ -274,3 +274,95 @@ fn skill_tool_absent_when_no_skills() {
     let names: Vec<String> = tools.schemas().into_iter().map(|s| s.name).collect();
     assert!(!names.contains(&"skill".to_string()), "got: {names:?}");
 }
+
+/// 发现到 skill 时，主 session 引擎自动挂载 skill-manifest（after_session_enter，
+/// 注入 L1 清单 + always-on body）与 skill-triggers（before_ingest，按 prompt
+/// 激活）——无需用户在 `[hooks]` 里手写。
+#[test]
+fn main_session_auto_mounts_skill_hooks() {
+    use defect_agent::hooks::HookCtx;
+    use defect_agent::hooks::step::{AfterSessionEnter, BeforeIngest, IngestSource, SessionSource};
+
+    let (_tmp, config, opts) = setup();
+    write_skill(
+        &opts,
+        "style",
+        "+++\nname = \"style\"\ndescription = \"coding style\"\nalways = true\n+++\nALWAYS USE TABS\n",
+    );
+    write_skill(
+        &opts,
+        "sql",
+        "+++\nname = \"sql\"\ndescription = \"sql help\"\n[triggers]\nglobs = [\"**/*.sql\"]\n+++\nSQL body\n",
+    );
+    let skills = Arc::new(discover_skill_index(&opts));
+    assert_eq!(skills.len(), 2);
+
+    let builtins = BuiltinRegistry::defaults();
+    let registry = echo_registry();
+    let hook_rt = HookEngineCtx {
+        registry: &registry,
+        default_model: "echo-1",
+    };
+    let engine = crate::hooks::build_main_session_engine(
+        &config.effective.hooks,
+        &builtins,
+        &hook_rt,
+        &skills,
+    )
+    .expect("engine");
+
+    let session_id = agent_client_protocol_schema::SessionId::new("s1");
+    let cwd = std::path::Path::new("/");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("rt");
+
+    // after_session_enter：注入了 L1 清单 + always-on body。
+    let mut enter = AfterSessionEnter {
+        cwd: "/".to_string(),
+        source: SessionSource::New,
+        additional_context: Vec::new(),
+    };
+    rt.block_on(engine.dispatch(
+        &mut enter,
+        HookCtx::new(&session_id, cwd, tokio_util::sync::CancellationToken::new()),
+    ));
+    let injected = enter
+        .additional_context
+        .iter()
+        .filter_map(|b| match b {
+            agent_client_protocol_schema::ContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(injected.contains("**style**"), "L1 manifest: {injected}");
+    assert!(injected.contains("ALWAYS USE TABS"), "always-on body missing");
+
+    // before_ingest：prompt 提及 .sql 路径 → sql skill 被前插提示。
+    let mut ingest = BeforeIngest {
+        source: IngestSource::User,
+        input: vec![agent_client_protocol_schema::ContentBlock::from(
+            "please edit migrations/0001.sql",
+        )],
+    };
+    rt.block_on(engine.dispatch(
+        &mut ingest,
+        HookCtx::new(&session_id, cwd, tokio_util::sync::CancellationToken::new()),
+    ));
+    // 原始块保留 + 前插了一条 sql 提示。
+    let texts: Vec<&str> = ingest
+        .input
+        .iter()
+        .filter_map(|b| match b {
+            agent_client_protocol_schema::ContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("`sql`")), "got: {texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("migrations/0001.sql")),
+        "original prompt dropped: {texts:?}"
+    );
+}

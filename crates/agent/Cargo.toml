@@ -9,6 +9,9 @@ agent-client-protocol-schema.workspace = true
 arc-swap.workspace = true
 dashmap.workspace = true
 futures.workspace = true
+# 统一的 glob 实现：工具名匹配（hook matcher）与 skill triggers.globs 共用，
+# 与 defect-tools 的 search 同款（ripgrep 栈）。
+globset = "0.4"
 os_info.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -550,13 +550,12 @@ pub struct DefaultSession {
     /// hook 引擎（本 core 的多 session 共享）。`run_turn` 装配
     /// [`TurnRunner`] 时把 `&dyn HookEngine` 借给主循环。
     hook_engine: Arc<dyn HookEngine>,
-    /// session 启动期 [`HookEvent::SessionStart`] hook 返回的 append 内容。
-    /// 由 [`AgentCore::create_session`] / `load_session` 在 SessionStart hook
-    /// 跑完之后填进来；目前**保留但暂不消费**——system_prompt 在 turn 装配
-    /// 时由 [`crate::session::prompt::resolve_system_prompt`] 计算，
-    /// SessionStart preload 的落地等系统 prompt 动态拼接落地后接入。
-    /// 详见 `docs/internal/hooks.md` §3.2 / §9.1。
-    #[allow(dead_code)]
+    /// session 启动期 `after_session_enter` hook 返回的 append 内容（如 skill
+    /// L1 清单 / always-on skill body）。由 [`AgentCore::create_session`] /
+    /// `load_session` 在 hook 跑完之后填进来；每个 turn 装配 system prompt 时由
+    /// [`merge_session_overlay`] 与显式 `config.system_prompt` 合并，经
+    /// [`crate::session::prompt::resolve_system_prompt`] 落到 "Session
+    /// Instructions" 段。详见 `docs/internal/hooks.md` §3.2 / §9.1。
     session_start_append: Vec<agent_client_protocol_schema::ContentBlock>,
     /// 相邻请求稳定性诊断器。每次实际发给 provider 的请求都会产一条
     /// tracing 记录，帮助定位 cache miss 来源。
@@ -649,13 +648,20 @@ impl DefaultSession {
             let provider = self.current_provider();
             let hosted = self.current_hosted();
             let running_ctx = RunningContext::new(self.frontend, &self.cwd);
+            // session 作用域注入（after_session_enter hook 的 additional_context，
+            // 如 skill L1 清单 / always-on skill body）与显式 system_prompt 合并成
+            // 单一 "Session Instructions" overlay——两者同源、同落点，不另加参数。
+            let session_overlay = merge_session_overlay(
+                config.system_prompt.as_deref(),
+                &self.session_start_append,
+            );
             let system_prompt = resolve_system_prompt(
                 &running_ctx,
                 &provider.info().vendor,
                 &config.model,
                 &config.base_prompt,
                 &config.prompt,
-                config.system_prompt.as_deref(),
+                session_overlay.as_deref(),
             )
             .map_err(|err| TurnError::Internal(BoxError::new(err)))?;
             let runner = TurnRunner {
@@ -977,5 +983,25 @@ fn short_id(s: &str) -> &str {
     match s.char_indices().nth(12) {
         Some((idx, _)) => &s[..idx],
         None => s,
+    }
+}
+
+/// 把显式 `config.system_prompt` 与 session 启动期 hook 注入的 `append`（仅取
+/// 文本块）合并成单一 overlay 字符串，喂给 [`resolve_system_prompt`] 的
+/// `session_overlay` 参数。两者都空 ⇒ `None`（不注入空段）；都有 ⇒ `\n\n` 相隔。
+fn merge_session_overlay(system_prompt: Option<&str>, append: &[ContentBlock]) -> Option<String> {
+    let appended: String = append
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    match (system_prompt, appended.is_empty()) {
+        (Some(sp), true) => Some(sp.to_owned()),
+        (Some(sp), false) => Some(format!("{sp}\n\n{appended}")),
+        (None, false) => Some(appended),
+        (None, true) => None,
     }
 }

@@ -38,6 +38,20 @@ use crate::tool::{
 /// `skill` 工具的名字。
 pub(crate) const SKILL_TOOL_NAME: &str = "skill";
 
+/// skill 的自动激活触发条件（Agent Skills open-standard 的 `triggers` 子表）。
+///
+/// 定义在 agent 侧、由 `defect-config` 在解析期填充并复用（依赖方向：config →
+/// agent，不能反向）。`globs` 在配置解析期就编译成 [`globset::GlobSet`]——坏
+/// glob 当场 fail-fast，运行期不再 parse；为空时为 `None`。匹配逻辑见
+/// `crate::hooks::builtin::SkillTriggersHook`。
+#[derive(Debug, Clone, Default)]
+pub struct SkillTriggers {
+    /// 编译好的文件路径 glob 集合；`None` = 未配置 globs。
+    pub globs: Option<globset::GlobSet>,
+    /// prompt 关键字（大小写不敏感 substring 匹配）。
+    pub keywords: Vec<String>,
+}
+
 /// 一个可被 `skill` 工具加载的 skill（agent 侧表示）。
 ///
 /// `defect-config` 的 `SkillSpec` 是配置侧真相源；CLI 装配时投影成本结构再交给
@@ -52,6 +66,11 @@ pub struct SkillEntry {
     /// skill 目录绝对路径——L2 tool result 里回填，供模型拼 `scripts/` /
     /// `refs/` 等资源的绝对路径喂给 `bash` / `read_file`。
     pub dir: PathBuf,
+    /// `always: true` ⇒ body 在 session 启动直接拼进 system prompt（always-on，
+    /// 见 `crate::hooks::builtin::SkillManifestHook`）。
+    pub always: bool,
+    /// 自动激活触发条件（按文件 glob / prompt 关键字），见 [`SkillTriggers`]。
+    pub triggers: SkillTriggers,
 }
 
 /// `skill` 工具。挂在 `StaticToolRegistry` 上、随 `process_tools` 被所属

@@ -22,7 +22,6 @@
 
 | 域       | 功能点                                                         | 文档                                                                    | 优先级 | 完成情况 |
 | -------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- | ------ | -------- |
-| internal | Skill 条件激活：`always: true` body 注入 + `triggers.globs/keywords` 匹配（字段 v0 已显式占位，"解析但不消费"，待 v1 接入 SkillRouterHook / SkillManifestHook 消费） | `docs/internal/skills.md` §4.3 / §5.1 / §9 | P2 | 🚧 进行中（占位已落地） |
 | inbound  | ACP slash commands（`session/commands` 暴露 + 触发桥接）       | `docs/inbound/acp-slash-commands.md`                                    | P1     | 🕒 未开始 |
 | internal | 上下文 microcompact（Phase 2：原地把旧 tool_result 替换成占位、不调 LLM；现有结构化摘要压缩已落地） | `docs/internal/turn-loop.md` §4 | P2 | 🕒 未开始 |
 | internal | Workspace Checkpoint / Undo（git 隐藏引用做 turn 级文件快照，可回滚、不污染用户分支） | `docs/internal/workspace-checkpoints.md` | P2 | 🕒 未开始（设计已写） |

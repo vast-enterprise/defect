@@ -470,6 +470,12 @@ pub enum IngestSource {
 /// `before Ingest`：摄入本轮输入之前。可改写整条待摄入输入 / `Break` 拒该 turn。
 ///
 /// 变更型——short-circuit 是 `Break`（拒掉），不是"填结果"（无可分离产出）。空摄入轮 `input` 为空。
+///
+/// verdict 两种改写方式（互不冲突，可同时给）：
+/// - `input`（String / 字符串数组）：**整体替换**待摄入输入。
+/// - `prepend_input`（String / 字符串数组）：把文本块**前插**到现有 input 之前，
+///   保留原有块（含图片等非文本块）。用于在用户 prompt 前注入上下文（如 skill
+///   自动激活的 L1 提示），不丢原始多模态内容。
 #[derive(Debug, Clone)]
 pub struct BeforeIngest {
     pub source: IngestSource,
@@ -511,6 +517,16 @@ impl HookStep for BeforeIngest {
                 Value::String(s) => vec![ContentBlock::from(s.as_str())],
                 _ => parse_block_array(v, "input")?,
             };
+        }
+        // prepend：把文本块前插到现有 input 之前，保留原有块（含非文本）。在
+        // `input` 整体替换之后应用——若两者同给，前插落在替换结果之前。
+        if let Some(v) = verdict.get("prepend_input").filter(|v| !v.is_null()) {
+            let mut prefix = match v {
+                Value::String(s) => vec![ContentBlock::from(s.as_str())],
+                _ => parse_block_array(v, "prepend_input")?,
+            };
+            prefix.append(&mut self.input);
+            self.input = prefix;
         }
         parse_control(verdict)
     }

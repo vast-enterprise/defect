@@ -231,6 +231,29 @@ fn before_ingest_rewrites_input() {
 }
 
 #[test]
+fn before_ingest_prepends_input_preserving_existing() {
+    let mut step = BeforeIngest {
+        source: IngestSource::User,
+        input: vec![ContentBlock::from("original")],
+    };
+    let ctrl = step
+        .apply_verdict(&json!({"prepend_input": ["hint-a", "hint-b"]}))
+        .expect("verdict");
+    assert_eq!(ctrl, HookControl::Proceed);
+    // 前插两块在前、原块保留在后。
+    assert_eq!(step.input.len(), 3);
+    let texts: Vec<&str> = step
+        .input
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["hint-a", "hint-b", "original"]);
+}
+
+#[test]
 fn before_compact_can_skip() {
     let mut step = BeforeCompact {
         token_estimate: 9000,

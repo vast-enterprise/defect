@@ -87,7 +87,7 @@ impl HookMatcher {
             return false;
         }
         if let Some(pat) = &self.tool_glob
-            && tool.is_none_or(|n| !glob_match(pat, n))
+            && tool.is_none_or(|n| !tool_name_matches(pat, n))
         {
             return false;
         }
@@ -98,44 +98,20 @@ impl HookMatcher {
     }
 }
 
-/// 极简 glob 匹配：仅支持 `*`（任意 0+ 字符）与 `?`（单字符）。
+/// 工具名 glob 匹配，统一走 [`globset`]（与 skill triggers / search 同款）。
 ///
-/// 不引入 `globset` / `glob` crate 是为了：
-/// 1. 工具名 glob 的复杂度天花板就这两通配符，引重型依赖收益不大
-/// 2. workspace 当前 0 依赖于 glob，新加要走 deps review；hook matcher 落地不阻塞
-fn glob_match(pattern: &str, text: &str) -> bool {
-    // 所有 `[1..]` / `[i..]` 索引在 `first()` / `0..=len()` 的前置条件下
-    // 一定不越界；为简洁起见这里 allow 掉 crate 级 indexing_slicing 警告。
-    #[allow(clippy::indexing_slicing)]
-    fn helper(p: &[u8], t: &[u8]) -> bool {
-        if p.is_empty() {
-            return t.is_empty();
-        }
-        match p.first().copied() {
-            Some(b'*') => {
-                let rest = &p[1..];
-                if rest.is_empty() {
-                    return true;
-                }
-                for i in 0..=t.len() {
-                    if helper(rest, &t[i..]) {
-                        return true;
-                    }
-                }
-                false
-            }
-            Some(b'?') => !t.is_empty() && helper(&p[1..], &t[1..]),
-            Some(c) => {
-                if t.first().copied() == Some(c) {
-                    helper(&p[1..], &t[1..])
-                } else {
-                    false
-                }
-            }
-            None => t.is_empty(),
+/// 工具名以 `.` 分隔（如 `mcp.fs.read`），不是文件路径——`globset` 默认把 `*`
+/// 视作"不跨 `/`"，但工具名里没有 `/`，所以 `mcp.*` 能正常匹配整串。模式在每次
+/// 匹配时编译（工具名匹配调用稀疏、模式短，编译开销可忽略）。非法模式不 panic：
+/// 记一条 warn 并当作不匹配（matcher 失配 = 该 hook 不触发，安全侧）。
+fn tool_name_matches(pattern: &str, name: &str) -> bool {
+    match globset::Glob::new(pattern) {
+        Ok(glob) => glob.compile_matcher().is_match(name),
+        Err(err) => {
+            tracing::warn!(%pattern, %err, "invalid tool_glob pattern; treating as no-match");
+            false
         }
     }
-    helper(pattern.as_bytes(), text.as_bytes())
 }
 
 /// 共享给 handler 的轻量上下文。
@@ -443,14 +419,17 @@ mod test {
 
     #[test]
     fn glob_basic() {
-        assert!(glob_match("*.rs", "main.rs"));
-        assert!(glob_match("*", ""));
-        assert!(glob_match("a*c", "abc"));
-        assert!(glob_match("a*c", "ac"));
-        assert!(!glob_match("a*c", "abd"));
-        assert!(glob_match("???", "abc"));
-        assert!(!glob_match("???", "abcd"));
-        assert!(glob_match("mcp.*", "mcp.fs.read"));
+        // 迁移到 globset 后的工具名匹配语义（`.` 非路径分隔符，`*`/`?` 照常）。
+        assert!(tool_name_matches("*.rs", "main.rs"));
+        assert!(tool_name_matches("*", ""));
+        assert!(tool_name_matches("a*c", "abc"));
+        assert!(tool_name_matches("a*c", "ac"));
+        assert!(!tool_name_matches("a*c", "abd"));
+        assert!(tool_name_matches("???", "abc"));
+        assert!(!tool_name_matches("???", "abcd"));
+        assert!(tool_name_matches("mcp.*", "mcp.fs.read"));
+        // 非法模式不 panic，当作不匹配。
+        assert!(!tool_name_matches("[bad", "anything"));
     }
 
     // ----- step 模型派发（迁移 slice 1）-----

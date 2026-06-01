@@ -1207,6 +1207,7 @@ dependencies = [
  "arc-swap",
  "dashmap",
  "futures",
+ "globset",
  "os_info",
  "serde",
  "serde_json",
@@ -1258,6 +1259,7 @@ name = "defect-config"
 version = "0.1.0"
 dependencies = [
  "defect-agent",
+ "globset",
  "serde",
  "serde_yaml",
  "tempfile",

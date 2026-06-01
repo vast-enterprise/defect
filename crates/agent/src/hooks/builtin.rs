@@ -199,7 +199,9 @@ impl SkillManifestHook {
     }
 }
 
-/// 渲染 L1 清单文本。空索引返回 `None`（不注入空段）。
+/// 渲染 session 启动注入：L1 清单（所有 skill 的 name+description）+ 每个
+/// `always` skill 的完整 body（always-on，直接进 system prompt）。空索引返回
+/// `None`（不注入空段）。
 fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String> {
     if skills.is_empty() {
         return None;
@@ -210,6 +212,13 @@ fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String
     );
     for (name, entry) in skills {
         out.push_str(&format!("- **{name}**: {}\n", entry.description));
+    }
+    // always-on：把标了 `always: true` 的 skill body 直接拼进去——模型一开机
+    // 就带着这些说明，无需再调 `skill` 工具加载（设计 §5.1）。
+    for (name, entry) in skills {
+        if entry.always {
+            out.push_str(&format!("\n## Skill: {name}\n\n{}\n", entry.body));
+        }
     }
     Some(out)
 }
@@ -224,6 +233,126 @@ impl StepHandler for SkillManifestHook {
     ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
         let verdict = render_skill_manifest(&self.skills)
             .map(|manifest| serde_json::json!({ "additional_context": [manifest] }));
+        Box::pin(async move { Ok(verdict) })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// skill-triggers
+// ---------------------------------------------------------------------------
+
+/// `before_ingest` 上按用户 prompt 自动激活相关 skill——命中即在 prompt 前面
+/// 前插一条 **L1 提示**（"检测到 skill X 相关，需要时用 `skill` 工具加载"），
+/// 而非整段 body（progressive disclosure：把"是否真加载"留给模型）。
+///
+/// 命中条件（任一即命中，设计见 `docs/internal/skills.md` §4.3）：
+/// - **keyword**：skill 的 `triggers.keywords` 任一是 prompt 文本的大小写不敏感
+///   子串；
+/// - **glob**：从 prompt 文本里抽出的"路径样 token"任一被 `triggers.globs`
+///   命中。
+///
+/// `always` skill 已在 session 启动整段注入，这里跳过——不重复提示。
+///
+/// 与 [`SkillManifestHook`] 一样持有 skill 索引，用捕获索引的闭包注册
+/// （见 `defect_cli::hooks`）。
+pub struct SkillTriggersHook {
+    skills: Arc<BTreeMap<String, SkillEntry>>,
+}
+
+impl SkillTriggersHook {
+    /// 用已加载的 skill 索引构造。`skills` 为空时调用方**不应**注册本 hook。
+    pub fn new(skills: Arc<BTreeMap<String, SkillEntry>>) -> Self {
+        Self { skills }
+    }
+}
+
+/// 从 prompt 文本里抽"路径样 token"（best-effort，不做 NLP）。
+///
+/// 按空白切分，剥两侧引号 / 反引号 / 括号与尾部标点；token 满足任一即算路径：
+/// (1) 含 `/`（如 `crates/agent/src/foo.rs`）；(2) 结尾是扩展名 `xxx.ext`
+/// （如 `Cargo.toml` / `main.rs`）。剥前导 `./`。纯词（无 `/` 无扩展名）不算
+/// 路径——交给 keyword 匹配。
+fn extract_path_tokens(prompt: &str) -> Vec<String> {
+    prompt
+        .split_whitespace()
+        .filter_map(|raw| {
+            let trimmed = raw.trim_matches(|c: char| {
+                c == '`' || c == '"' || c == '\'' || c == '(' || c == ')' || c == '[' || c == ']'
+            });
+            let trimmed = trimmed.trim_end_matches([',', '.', ':', ';']);
+            let token = trimmed.strip_prefix("./").unwrap_or(trimmed);
+            if token.is_empty() {
+                return None;
+            }
+            if is_path_like(token) {
+                Some(token.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// token 是否"路径样"：含 `/`，或形如 `name.ext`（结尾点 + 1+ 字母数字）。
+fn is_path_like(token: &str) -> bool {
+    if token.contains('/') {
+        return true;
+    }
+    // 结尾扩展名：最后一个 `.` 之后是 1+ 个字母数字，且点不在首位。
+    match token.rsplit_once('.') {
+        Some((stem, ext)) => {
+            !stem.is_empty() && !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        }
+        None => false,
+    }
+}
+
+/// 对单个 skill 判断是否被 prompt 激活：keyword 子串 OR glob 命中路径 token。
+fn skill_triggered(entry: &SkillEntry, prompt_lower: &str, path_tokens: &[String]) -> bool {
+    let keyword_hit = entry
+        .triggers
+        .keywords
+        .iter()
+        .any(|kw| !kw.is_empty() && prompt_lower.contains(&kw.to_ascii_lowercase()));
+    if keyword_hit {
+        return true;
+    }
+    match &entry.triggers.globs {
+        Some(set) => path_tokens.iter().any(|t| set.is_match(t)),
+        None => false,
+    }
+}
+
+impl StepHandler for SkillTriggersHook {
+    /// Step 模型：在 `before_ingest` 读 prompt 文本，命中的 skill 各前插一条 L1
+    /// 提示（`prepend_input` verdict）。无命中返回 `None`。
+    fn handle_step<'a>(
+        &'a self,
+        envelope: &'a Value,
+        _ctx: HookCtx<'a>,
+    ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
+        let prompt = envelope
+            .get("input")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let prompt_lower = prompt.to_ascii_lowercase();
+        let path_tokens = extract_path_tokens(prompt);
+
+        let hints: Vec<String> = self
+            .skills
+            .iter()
+            .filter(|(_, e)| !e.always)
+            .filter(|(_, e)| skill_triggered(e, &prompt_lower, &path_tokens))
+            .map(|(name, _)| {
+                format!(
+                    "Detected skill `{name}` is relevant to the current task; \
+                     load it with the `skill` tool when needed."
+                )
+            })
+            .collect();
+
+        let verdict =
+            (!hints.is_empty()).then(|| serde_json::json!({ "prepend_input": hints }));
         Box::pin(async move { Ok(verdict) })
     }
 }
@@ -294,16 +423,41 @@ mod test {
         assert!(verdict.is_none());
     }
 
+    /// 造一个 skill：description/body/always/keywords/globs 可定制。
+    fn skill(
+        description: &str,
+        body: &str,
+        always: bool,
+        keywords: &[&str],
+        globs: &[&str],
+    ) -> SkillEntry {
+        let compiled = if globs.is_empty() {
+            None
+        } else {
+            let mut b = globset::GlobSetBuilder::new();
+            for g in globs {
+                b.add(globset::Glob::new(g).expect("valid glob"));
+            }
+            Some(b.build().expect("glob set"))
+        };
+        SkillEntry {
+            description: description.to_string(),
+            body: body.to_string(),
+            dir: std::path::PathBuf::from("/skills/x"),
+            always,
+            triggers: crate::tool::SkillTriggers {
+                globs: compiled,
+                keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            },
+        }
+    }
+
     #[tokio::test]
     async fn skill_manifest_step_injects_context() {
         let mut skills = BTreeMap::new();
         skills.insert(
             "deploy".to_string(),
-            SkillEntry {
-                description: "deploy the app".to_string(),
-                body: String::new(),
-                dir: std::path::PathBuf::from("/skills/deploy"),
-            },
+            skill("deploy the app", "", false, &[], &[]),
         );
         let h = SkillManifestHook::new(Arc::new(skills));
         let session_id = agent_client_protocol_schema::SessionId::new("s1");
@@ -317,5 +471,115 @@ mod test {
         let ctx_arr = verdict["additional_context"].as_array().expect("array");
         assert_eq!(ctx_arr.len(), 1);
         assert!(ctx_arr[0].as_str().unwrap().contains("deploy"));
+    }
+
+    #[test]
+    fn manifest_includes_always_on_body() {
+        let mut skills = BTreeMap::new();
+        skills.insert(
+            "style".to_string(),
+            skill("coding style", "ALWAYS USE TABS", true, &[], &[]),
+        );
+        skills.insert(
+            "deploy".to_string(),
+            skill("deploy", "deploy body", false, &[], &[]),
+        );
+        let out = render_skill_manifest(&skills).expect("some");
+        // L1 清单含两者；always-on body 只拼 style 的。
+        assert!(out.contains("**style**"));
+        assert!(out.contains("**deploy**"));
+        assert!(out.contains("ALWAYS USE TABS"));
+        assert!(!out.contains("deploy body"));
+    }
+
+    fn triggers_envelope(prompt: &str) -> Value {
+        serde_json::json!({ "source": "user", "input": prompt, "input_len": 1 })
+    }
+
+    #[tokio::test]
+    async fn triggers_keyword_hit() {
+        let mut skills = BTreeMap::new();
+        skills.insert(
+            "db".to_string(),
+            skill("database", "", false, &["migration"], &[]),
+        );
+        let h = SkillTriggersHook::new(Arc::new(skills));
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        // 大小写不敏感子串命中。
+        let verdict = h
+            .handle_step(&triggers_envelope("please run the MIGRATION now"), ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        let arr = verdict["prepend_input"].as_array().expect("array");
+        assert_eq!(arr.len(), 1);
+        assert!(arr[0].as_str().unwrap().contains("`db`"));
+    }
+
+    #[tokio::test]
+    async fn triggers_glob_hit_on_path_token() {
+        let mut skills = BTreeMap::new();
+        skills.insert(
+            "sql".to_string(),
+            skill("sql files", "", false, &[], &["**/*.sql"]),
+        );
+        let h = SkillTriggersHook::new(Arc::new(skills));
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let verdict = h
+            .handle_step(
+                &triggers_envelope("edit migrations/0001.sql to add a column"),
+                ctx(&session_id, cwd),
+            )
+            .await
+            .expect("ok")
+            .expect("verdict");
+        assert_eq!(verdict["prepend_input"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn triggers_no_hit_returns_none() {
+        let mut skills = BTreeMap::new();
+        skills.insert(
+            "db".to_string(),
+            skill("database", "", false, &["migration"], &["**/*.sql"]),
+        );
+        let h = SkillTriggersHook::new(Arc::new(skills));
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let verdict = h
+            .handle_step(&triggers_envelope("write some rust code"), ctx(&session_id, cwd))
+            .await
+            .expect("ok");
+        assert!(verdict.is_none());
+    }
+
+    #[tokio::test]
+    async fn triggers_excludes_always_on_skill() {
+        let mut skills = BTreeMap::new();
+        // always 的 skill 即便 keyword 命中也不再提示（已整段注入）。
+        skills.insert(
+            "style".to_string(),
+            skill("style", "body", true, &["rust"], &[]),
+        );
+        let h = SkillTriggersHook::new(Arc::new(skills));
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let verdict = h
+            .handle_step(&triggers_envelope("write rust"), ctx(&session_id, cwd))
+            .await
+            .expect("ok");
+        assert!(verdict.is_none());
+    }
+
+    #[test]
+    fn path_token_extraction() {
+        let toks = extract_path_tokens("look at `crates/agent/src/foo.rs` and Cargo.toml please");
+        assert!(toks.contains(&"crates/agent/src/foo.rs".to_string()));
+        assert!(toks.contains(&"Cargo.toml".to_string()));
+        // 纯词不算路径。
+        assert!(!toks.contains(&"please".to_string()));
+        assert!(!toks.contains(&"look".to_string()));
     }
 }

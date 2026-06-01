@@ -20,6 +20,8 @@ fn skills_with(entries: &[(&str, &str, &str)]) -> Arc<BTreeMap<String, SkillEntr
                 description: (*description).to_string(),
                 body: (*body).to_string(),
                 dir: PathBuf::from(format!("/skills/{name}")),
+                always: false,
+                triggers: crate::tool::SkillTriggers::default(),
             },
         );
     }

@@ -138,6 +138,8 @@ pub fn project_skills(specs: &BTreeMap<String, SkillSpec>) -> BTreeMap<String, S
                     description: spec.description.clone(),
                     body: spec.body.clone(),
                     dir: spec.dir.clone(),
+                    always: spec.always,
+                    triggers: spec.triggers.clone(),
                 },
             )
         })

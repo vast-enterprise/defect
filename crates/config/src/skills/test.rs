@@ -137,10 +137,10 @@ fn empty_when_no_skills_dirs() {
     assert!(skills.is_empty());
 }
 
-/// open-standard 字段（always / triggers / allowed_tools）v0 解析但不消费——
-/// 写了**不报错**（吃得下 Anthropic / Codex 格式 skill），且不影响 name/desc/body。
+/// open-standard 字段：`always` / `triggers` 已接入消费，`allowed_tools` 仍占位
+/// （写了不报错，吃得下 Anthropic / Codex 格式 skill）。
 #[test]
-fn open_standard_fields_parse_but_are_ignored() {
+fn always_and_triggers_are_consumed() {
     let tmp = TempDir::new().expect("tmp");
     let repo_root = repo(&tmp);
     write_skill(
@@ -149,7 +149,7 @@ fn open_standard_fields_parse_but_are_ignored() {
         "+++\n\
          name = \"code-review\"\n\
          description = \"review Rust diffs\"\n\
-         always = false\n\
+         always = true\n\
          allowed_tools = [\"bash\", \"read_file\"]\n\
          [triggers]\n\
          globs = [\"**/*.rs\"]\n\
@@ -161,6 +161,48 @@ fn open_standard_fields_parse_but_are_ignored() {
     let s = &skills["code-review"];
     assert_eq!(s.description, "review Rust diffs");
     assert_eq!(s.body, "# Review body");
+    // always / keywords 已消费；globs 编译成 GlobSet 并能匹配。
+    assert!(s.always);
+    assert_eq!(s.triggers.keywords, vec!["clippy", "lint"]);
+    let set = s.triggers.globs.as_ref().expect("globs compiled");
+    assert!(set.is_match("crates/agent/src/main.rs"));
+    assert!(!set.is_match("Cargo.toml"));
+}
+
+/// 无 `[triggers]` 子表 ⇒ 默认空触发（globs=None，keywords 空），always=false。
+#[test]
+fn no_triggers_defaults_to_empty() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_skill(
+        &repo_root.join(".defect/skills"),
+        "plain",
+        "+++\nname = \"plain\"\ndescription = \"d\"\n+++\nbody\n",
+    );
+    let skills = discover_skills(&opts_with(&tmp, &repo_root)).expect("must parse");
+    let s = &skills["plain"];
+    assert!(!s.always);
+    assert!(s.triggers.globs.is_none());
+    assert!(s.triggers.keywords.is_empty());
+}
+
+/// 坏 glob 必须在解析期 hard fail（fail loud，不静默吞）。
+#[test]
+fn invalid_trigger_glob_is_hard_error() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_skill(
+        &repo_root.join(".defect/skills"),
+        "bad",
+        "+++\nname = \"bad\"\ndescription = \"d\"\n[triggers]\nglobs = [\"[unclosed\"]\n+++\nbody\n",
+    );
+    let err = discover_skills(&opts_with(&tmp, &repo_root)).expect_err("must fail");
+    match err {
+        ConfigError::Invalid { message, .. } => {
+            assert!(message.contains("glob"), "got: {message}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
 }
 
 /// Anthropic 用连字符 `allowed-tools`——alias 应当也吃得下。

@@ -34,7 +34,7 @@ use crate::shell::ShellBackend;
 
 mod skill;
 mod spawn_agent;
-pub use skill::{SkillEntry, SkillTool};
+pub use skill::{SkillEntry, SkillTool, SkillTriggers};
 pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
 
 /// 工具的"对外名片"：只描述参数形状，不带任何执行能力。
