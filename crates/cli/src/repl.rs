@@ -215,7 +215,7 @@ async fn run_user_turn(
                     match key {
                         None => keys_open = false,
                         Some(msg) => {
-                            if let Some(line) = handle_key_during_turn(msg, editor, out).await? {
+                            if let Some(line) = handle_key_during_turn(session, msg, editor, out).await? {
                                 queued.push(line);
                             }
                         }
@@ -249,7 +249,7 @@ async fn run_user_turn(
                             match key {
                                 None => keys_open = false,
                                 Some(msg) => {
-                                    if let Some(line) = handle_key_during_turn(msg, editor, out).await? {
+                                    if let Some(line) = handle_key_during_turn(session, msg, editor, out).await? {
                                         queued.push(line);
                                     }
                                 }
@@ -265,10 +265,13 @@ async fn run_user_turn(
 }
 
 /// turn 进行中处理一个按键消息。编辑动作更新 buffer（流式态下静默，turn 结束重绘
-/// 时显示）；回车返回 `Some(line)` 让调用方排队。Ctrl-C 清当前编辑行；Ctrl-D
-/// 在 turn 进行中不打断 turn，忽略（turn 结束回输入循环会再次读到而退出）。
-/// channel 关闭（`None`）由调用方的 select 守卫处理，不进本函数。
+/// 时显示）；回车返回 `Some(line)` 让调用方排队。Ctrl-C **打断正在跑的 turn**——
+/// 调 [`Session::cancel_turn`]（幂等），turn loop 在下一个检查点退出并发出
+/// `TurnEnded{Cancelled}`，由事件渲染收尾；同时清掉当前编辑行。Ctrl-D 在 turn
+/// 进行中不打断，忽略（turn 结束回输入循环会再次读到而退出）。channel 关闭
+/// （`None`）由调用方的 select 守卫处理，不进本函数。
 async fn handle_key_during_turn(
+    session: &dyn defect_agent::session::Session,
     msg: KeyMsg,
     editor: &mut LineEditor,
     out: &mut Stdout,
@@ -277,6 +280,10 @@ async fn handle_key_during_turn(
         KeyMsg::Line(text) => Ok(Some(text)),
         KeyMsg::Edit(key) => editor.on_key(key, out).await,
         KeyMsg::Interrupt => {
+            // 打断在跑的 turn：底层 CancellationToken 被 cancel，turn 在下一个
+            // 检查点（LLM 流 drain / 主循环 / 权限等待）退出。turn future 随后
+            // 返回 Cancelled，事件流的 TurnEnded 负责收尾重绘——这里不直接动屏。
+            session.cancel_turn();
             editor.clear_line(out).await?;
             Ok(None)
         }
