@@ -588,3 +588,136 @@ fn context_compressed_emits_event_observation() {
     assert_eq!(out[0]["body"]["metadata"]["tokens_before"], 5000);
     assert_eq!(out[0]["body"]["metadata"]["tokens_after"], 1200);
 }
+
+// ---- subagent 投影：前台嵌套 / 后台相邻（用户构想的两层 span）----
+
+/// 前台 subagent：spawn_agent 工具 span 仍张开时，子事件到达 → 独立 subagent span
+/// 挂在工具 span 下，子 generation 再挂在 subagent span 下。
+#[test]
+fn foreground_subagent_nests_under_open_tool_span() {
+    let mut proj = TraceProjector::new("s");
+    let mut ids = counter_ids();
+    project_json(&mut proj, AgentEvent::TurnStarted, &mut ids); // trace = id-1
+
+    // 父 spawn_agent 工具开始（span 张开，登记锚点）。
+    let started = project_json(
+        &mut proj,
+        AgentEvent::ToolCallStarted {
+            id: ToolCallId::new("sa-1"),
+            name: "spawn_agent".into(),
+            fields: ToolCallUpdateFields::default(),
+        },
+        &mut ids,
+    );
+    let tool_span_id = started[0]["body"]["id"].as_str().unwrap().to_string();
+    assert_eq!(tool_span_id, "id-1-tool-sa-1");
+
+    // 子 turn 第一个事件：LlmCallStarted → 先建 subagent span，再建子 generation。
+    let out = project_json(
+        &mut proj,
+        AgentEvent::Subagent {
+            parent_tool_call_id: ToolCallId::new("sa-1"),
+            agent_type: "reviewer".into(),
+            inner: Box::new(AgentEvent::LlmCallStarted {
+                model: "m".into(),
+                attempt: 1,
+                request: snapshot(None, "do it"),
+            }),
+        },
+        &mut ids,
+    );
+    // 两个 observation：subagent span-create + generation-create。
+    assert_eq!(out[0]["type"], "span-create");
+    let subagent_span_id = out[0]["body"]["id"].as_str().unwrap().to_string();
+    assert_eq!(subagent_span_id, "id-1-sub-sa-1");
+    // subagent span 挂在父工具 span 下（嵌套）。
+    assert_eq!(out[0]["body"]["parentObservationId"], tool_span_id);
+    assert!(out[0]["body"]["name"].as_str().unwrap().contains("reviewer"));
+
+    assert_eq!(out[1]["type"], "generation-create");
+    // 子 generation 挂在 subagent span 下（不是直接挂工具 span）。
+    assert_eq!(out[1]["body"]["parentObservationId"], subagent_span_id);
+    assert_eq!(out[1]["body"]["traceId"], "id-1");
+}
+
+/// 后台 subagent：spawn_agent 工具 span 先正常关闭、发起 turn 也 TurnEnded，**之后**
+/// 子事件才到达——仍能经 session 级锚点把 subagent span 挂回原工具 span 下（相邻而非嵌套）。
+#[test]
+fn background_subagent_attaches_after_tool_and_turn_closed() {
+    let mut proj = TraceProjector::new("s");
+    let mut ids = counter_ids();
+    project_json(&mut proj, AgentEvent::TurnStarted, &mut ids); // trace = id-1
+
+    // spawn_agent 工具开始 + **立即结束**（后台：返回"已启动"）。
+    project_json(
+        &mut proj,
+        AgentEvent::ToolCallStarted {
+            id: ToolCallId::new("sa-9"),
+            name: "spawn_agent".into(),
+            fields: ToolCallUpdateFields::default(),
+        },
+        &mut ids,
+    );
+    let mut done = ToolCallUpdateFields::default();
+    done.status = Some(ToolCallStatus::Completed);
+    let fin = project_json(
+        &mut proj,
+        AgentEvent::ToolCallFinished {
+            id: ToolCallId::new("sa-9"),
+            fields: done,
+        },
+        &mut ids,
+    );
+    assert_eq!(fin[0]["type"], "span-update"); // 工具 span 正常关闭
+
+    // 发起 turn 结束。
+    project_json(
+        &mut proj,
+        AgentEvent::TurnEnded {
+            reason: StopReason::EndTurn,
+            usage: Usage::default(),
+        },
+        &mut ids,
+    );
+
+    // **现在**后台子事件才到达（工具 span 与发起 turn 都已收尾）。
+    let out = project_json(
+        &mut proj,
+        AgentEvent::Subagent {
+            parent_tool_call_id: ToolCallId::new("sa-9"),
+            agent_type: "worker".into(),
+            inner: Box::new(AgentEvent::LlmCallStarted {
+                model: "m".into(),
+                attempt: 1,
+                request: snapshot(None, "bg work"),
+            }),
+        },
+        &mut ids,
+    );
+    // 仍然建出 subagent span，挂在原工具 span 下（锚点跨 turn 存活）。
+    assert_eq!(out[0]["type"], "span-create");
+    assert_eq!(out[0]["body"]["id"], "id-1-sub-sa-9");
+    assert_eq!(out[0]["body"]["parentObservationId"], "id-1-tool-sa-9");
+    // 复用原 trace（即便该 trace 的 turn 已 TurnEnded）。
+    assert_eq!(out[0]["body"]["traceId"], "id-1");
+    assert_eq!(out[1]["type"], "generation-create");
+    assert_eq!(out[1]["body"]["parentObservationId"], "id-1-sub-sa-9");
+
+    // 子 turn 结束 → 关闭 subagent span。
+    let closed = project_json(
+        &mut proj,
+        AgentEvent::Subagent {
+            parent_tool_call_id: ToolCallId::new("sa-9"),
+            agent_type: "worker".into(),
+            inner: Box::new(AgentEvent::TurnEnded {
+                reason: StopReason::EndTurn,
+                usage: Usage::default(),
+            }),
+        },
+        &mut ids,
+    );
+    // generation-update（收尾 gen）+ subagent span-update（end_time）。
+    assert!(closed.iter().any(|e| e["type"] == "span-update"
+        && e["body"]["id"] == "id-1-sub-sa-9"
+        && e["body"]["endTime"].is_string()));
+}

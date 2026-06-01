@@ -4,6 +4,15 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
+[lib]
+# 关掉本 crate 的 doctest。本 crate 唯一的 doctest 来源是 `wire/*`——它们由
+# `defect-llm-codegen` 从 OAS 生成（见 wire.rs，"不要手改"），doc 注释里夹带的
+# 是 OpenAI/Anthropic 规范原文的 markdown/代码片段，并非可编译的 Rust 示例
+# （如 openai.rs 的 `Request` 文档里那段 ` ``` ` 围栏文本会被 rustdoc 误当 Rust
+# 跑而失败）。生成代码无法逐块标 `ignore`，rustdoc 也无"按模块关 doctest"的粒度，
+# 故在 crate 级关闭。本 crate 的真实测试在 tests/ 与 #[cfg(test)] 单测，不受影响。
+doctest = false
+
 [dependencies]
 defect-agent.workspace = true
 defect-http.workspace = true

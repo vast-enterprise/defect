@@ -285,17 +285,30 @@ impl Tool for SpawnAgentTool {
                     shell,
                     http,
                     parent_model,
-                    // 后台路径：发起它的 spawn_agent tool span 当场就收尾了，没有
-                    // 仍然张开的父 span 可嵌套——故不桥接（projector 那侧也会因
-                    // 父 turn trace 已结束而丢弃）。后台 subagent 的可观测性是独立议题。
-                    bridge: None,
+                    // 后台路径**也桥接**——与前台同一套 `AgentEvent::Subagent` 机制。
+                    // 发起它的 spawn_agent tool span 会先正常 close（下方"已启动"的
+                    // ToolCallFinished），随后子 turn 事件作为一个**相邻**的 subagent span
+                    // 挂在同一 parent_tool_call_id 锚点下、自行张开到子 turn 真正结束。
+                    // projector 据"tool span 是否还在表里"天然区分前台(嵌套)/后台(相邻)。
+                    // bridge 的 parent_events 是 session 级 EventEmitter，后台任务跑时仍活着。
+                    bridge,
                 };
                 // spawn 给任务 mint 一个 session 级子 token——任务的取消生命周期独立于
                 // 发起它的 turn，turn 结束不会杀掉它。
+                let label_for_log = parsed.profile.clone();
                 let task_id = bg.spawn(label, move |task_cancel| async move {
                     match run_subagent_core(parsed, deps, task_cancel).await {
                         Ok(answer) => crate::session::BackgroundResult::Completed(answer),
-                        Err(err) => crate::session::BackgroundResult::Failed(err.to_string()),
+                        Err(err) => {
+                            // fail loud：后台失败此前只被数据化成 Failed 字符串静默流走，
+                            // 既不上 langfuse 也无日志。这里补一条 warn，带 task / 错误。
+                            tracing::warn!(
+                                profile = %label_for_log,
+                                error = %err,
+                                "background subagent failed"
+                            );
+                            crate::session::BackgroundResult::Failed(err.to_string())
+                        }
                     }
                 });
                 // 当场同步返回"已启动 id=X"——满足 tool_use↔tool_result 配对契约
