@@ -82,26 +82,34 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
     let mut editor = LineEditor::new("› ".cyan().bold().to_string());
     editor.redraw(&mut out).await?;
 
+    // turn 进行中用户敲的下一条 prompt 排在这里——同一 session 不能并发 turn，
+    // 故 turn 结束后再依次跑。FIFO。
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+
     'session: loop {
-        // 输入阶段：收按键拼行 / 同时实时渲染事件。直到拼出一整行或退出。
-        let line = loop {
-            tokio::select! {
-                key = key_rx.recv() => match key {
-                    Some(KeyMsg::Line(text)) => break text,                          // 非 TTY 逐行
-                    Some(KeyMsg::Edit(key)) => {
-                        if let Some(line) = editor.on_key(key, &mut out).await? {
-                            break line;                                              // 回车提交
+        // 取下一条 prompt：优先消费上一个 turn 期间排队的行；否则进输入阶段读新行。
+        let line = if let Some(queued) = pending.pop_front() {
+            editor.echo_submitted(&mut out, &queued).await?; // 回显，让用户看到即将跑哪条
+            queued
+        } else {
+            // 输入阶段：收按键拼行 / 同时实时渲染事件。直到拼出一整行或退出。
+            let mut submitted: Option<String> = None;
+            while submitted.is_none() {
+                tokio::select! {
+                    key = key_rx.recv() => match key {
+                        Some(KeyMsg::Line(text)) => submitted = Some(text),          // 非 TTY 逐行
+                        Some(KeyMsg::Edit(key)) => submitted = editor.on_key(key, &mut out).await?,
+                        Some(KeyMsg::Interrupt) => editor.clear_line(&mut out).await?, // Ctrl-C 丢弃当前行
+                        Some(KeyMsg::Eof) | None => break 'session,                   // Ctrl-D / 输入关闭
+                    },
+                    ev = events.next() => {
+                        if let Some(ev) = ev {
+                            editor.render_event(&mut out, ev).await?;
                         }
-                    }
-                    Some(KeyMsg::Interrupt) => editor.clear_line(&mut out).await?,    // Ctrl-C 丢弃当前行
-                    Some(KeyMsg::Eof) | None => break 'session,                       // Ctrl-D / 输入关闭
-                },
-                ev = events.next() => {
-                    if let Some(ev) = ev {
-                        editor.render_event(&mut out, ev).await?;
                     }
                 }
             }
+            submitted.expect("loop exits only when submitted is Some")
         };
 
         let prompt_text = line.trim();
@@ -114,16 +122,19 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
         }
 
         // 跑 turn：future 只返回最终 StopReason，本轮事件经持久订阅推送，期间仍要
-        // 排空事件流渲染。turn slot 可能被后台自主续转 turn 占着 → TurnInProgress
-        // 退避重试（仿 ACP run_prompt_turn），不直接报错。
-        let stop = run_user_turn(
+        // 排空事件流渲染、**并继续消费按键**（让用户能编辑/排队下一条）。turn slot
+        // 可能被后台自主续转 turn 占着 → TurnInProgress 退避重试（仿 ACP），不直接报错。
+        let (stop, queued) = run_user_turn(
             session.as_ref(),
             prompt_text.to_owned(),
             &mut events,
+            &mut key_rx,
             &mut editor,
             &mut out,
         )
         .await?;
+        // 本 turn 期间用户回车提交的行进队列，turn 结束后依次跑。
+        pending.extend(queued);
 
         // 成功路径：turn 的 TurnEnded 事件已驱动 end_streaming（收尾 + 重绘 prompt），
         // 这里无需再打状态行。仅 fatal error（不发 TurnEnded）需显式落屏 + 回到 prompt。
@@ -144,22 +155,37 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// 跑一个用户 turn，期间持续排空事件流渲染；撞上 [`TurnError::TurnInProgress`]
-/// （后台自主续转 turn 正占着 slot）时退避重试——这是后台 subagent 回流与用户
-/// 输入竞争同一 turn slot 的落点。返回 turn 的最终结果（重试用尽也按其错误返回）。
+/// 跑一个用户 turn，期间：
+/// - 持续排空事件流渲染；
+/// - **持续消费按键**——turn 进行中用户可编辑下一条 prompt（进 buffer，流式态下
+///   静默、turn 结束重绘时显示），回车则把该行**排队**（同一 session 不能并发
+///   turn，故等本 turn 结束后再跑）。
+///
+/// 撞上 [`TurnError::TurnInProgress`]（后台自主续转 turn 正占着 slot）时退避重试。
+///
+/// 返回 `(turn 最终结果, 本 turn 期间排队的行)`。`Eof`（Ctrl-D）也按"输入关闭"
+/// 处理：不强行打断在跑的 turn，但记下，由调用方在 turn 后决定（这里简单忽略，
+/// turn 结束回到输入循环时再次读到 EOF 自然退出）。
 async fn run_user_turn(
     session: &dyn defect_agent::session::Session,
     prompt_text: String,
     events: &mut defect_agent::session::EventStream,
+    key_rx: &mut mpsc::Receiver<KeyMsg>,
     editor: &mut LineEditor,
     out: &mut Stdout,
-) -> anyhow::Result<Result<StopReason, TurnError>> {
+) -> anyhow::Result<(Result<StopReason, TurnError>, Vec<String>)> {
     // 退避参数与 ACP run_prompt_turn 一致：自主续转 turn 通常很短，退避几次即可拿到 slot。
     const MAX_RETRIES: u32 = 100;
     const BACKOFF: Duration = Duration::from_millis(20);
 
+    // turn 进行中用户回车提交的行，turn 结束后交回调用方排队跑。
+    let mut queued: Vec<String> = Vec::new();
+    // 按键 channel 是否仍开。关闭后（cooked 路径 EOF / 用户关闭输入）必须**停止**
+    // select 它——否则 `recv()` 持续立即返回 `None`，把 select 拖成 busy-spin，
+    // 反而饿死 turn future（这是一个隐蔽的死循环：进程像挂死，CPU 打满）。
+    let mut keys_open = true;
     let mut attempt = 0u32;
-    loop {
+    let result = loop {
         let prompt_blocks = vec![ContentBlock::Text(TextContent::new(prompt_text.clone()))];
         let turn = session.run_turn(prompt_blocks);
         tokio::pin!(turn);
@@ -176,6 +202,18 @@ async fn run_user_turn(
                         editor.render_event(out, ev).await?;
                     }
                 }
+                // turn 进行中也消费按键：编辑下一条 prompt / 回车排队。channel 关闭后
+                // 禁用本臂（见 keys_open 注释）。
+                key = key_rx.recv(), if keys_open => {
+                    match key {
+                        None => keys_open = false,
+                        Some(msg) => {
+                            if let Some(line) = handle_key_during_turn(msg, editor, out).await? {
+                                queued.push(line);
+                            }
+                        }
+                    }
+                }
                 r = &mut turn => break r,
             }
         };
@@ -189,7 +227,7 @@ async fn run_user_turn(
         match result {
             Err(TurnError::TurnInProgress) if attempt < MAX_RETRIES => {
                 attempt += 1;
-                // 退避期间仍要排空事件——占着 slot 的自主续转 turn 正在产出，得实时渲染。
+                // 退避期间仍要排空事件 + 消费按键——占着 slot 的自主续转 turn 正在产出。
                 let sleep = tokio::time::sleep(BACKOFF);
                 tokio::pin!(sleep);
                 loop {
@@ -200,11 +238,42 @@ async fn run_user_turn(
                                 editor.render_event(out, ev).await?;
                             }
                         }
+                        key = key_rx.recv(), if keys_open => {
+                            match key {
+                                None => keys_open = false,
+                                Some(msg) => {
+                                    if let Some(line) = handle_key_during_turn(msg, editor, out).await? {
+                                        queued.push(line);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-            other => return Ok(other),
+            other => break other,
         }
+    };
+    Ok((result, queued))
+}
+
+/// turn 进行中处理一个按键消息。编辑动作更新 buffer（流式态下静默，turn 结束重绘
+/// 时显示）；回车返回 `Some(line)` 让调用方排队。Ctrl-C 清当前编辑行；Ctrl-D
+/// 在 turn 进行中不打断 turn，忽略（turn 结束回输入循环会再次读到而退出）。
+/// channel 关闭（`None`）由调用方的 select 守卫处理，不进本函数。
+async fn handle_key_during_turn(
+    msg: KeyMsg,
+    editor: &mut LineEditor,
+    out: &mut Stdout,
+) -> anyhow::Result<Option<String>> {
+    match msg {
+        KeyMsg::Line(text) => Ok(Some(text)),
+        KeyMsg::Edit(key) => editor.on_key(key, out).await,
+        KeyMsg::Interrupt => {
+            editor.clear_line(out).await?;
+            Ok(None)
+        }
+        KeyMsg::Eof => Ok(None),
     }
 }
 
@@ -393,6 +462,19 @@ impl LineEditor {
             write(out, &format!("\r\x1b[K{}{}", self.prompt, self.buf)).await?;
         } else {
             write(out, &self.prompt).await?;
+        }
+        out.flush().await?;
+        Ok(())
+    }
+
+    /// 回显一条"即将运行"的 prompt（来自 turn 期间排队的行）：清当前行、打
+    /// `prompt + line` 并换行，让用户看到下一条跑的是什么。
+    async fn echo_submitted(&mut self, out: &mut Stdout, line: &str) -> anyhow::Result<()> {
+        self.buf.clear();
+        if self.tty {
+            write(out, &format!("\r\x1b[K{}{}\r\n", self.prompt, line)).await?;
+        } else {
+            write(out, &format!("{}{}\n", self.prompt, line)).await?;
         }
         out.flush().await?;
         Ok(())
