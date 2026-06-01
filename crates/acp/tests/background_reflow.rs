@@ -26,7 +26,9 @@ use defect_agent::llm::{
     ProviderChunk, ProviderError, ProviderInfo, ProviderStream, StopReason as LlmStopReason,
     ThinkingEcho,
 };
-use defect_agent::session::{AgentCore, DefaultAgentCore, StaticToolRegistry, ToolRegistry, TurnConfig};
+use defect_agent::session::{
+    AgentCore, DefaultAgentCore, StaticToolRegistry, ToolRegistry, TurnConfig,
+};
 use defect_agent::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolEvent, ToolSchema, ToolStream,
 };
@@ -191,15 +193,10 @@ impl Tool for BgTool {
                 }
                 None => "no background".to_string(),
             };
-            fields.content = Some(vec![
-                ToolCallContent::Content(
-                    Content::new(text),
-                ),
-            ]);
+            fields.content = Some(vec![ToolCallContent::Content(Content::new(text))]);
             ToolEvent::Completed(fields)
         };
-        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
-            Box::pin(stream::once(fut));
+        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> = Box::pin(stream::once(fut));
         s
     }
 }

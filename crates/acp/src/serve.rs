@@ -18,9 +18,7 @@ use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
 use defect_agent::fs::FsBackend;
 use defect_agent::llm::{ModelCandidate, ModelInfo, ProviderError, ProviderInfo};
-use defect_agent::session::{
-    AgentCore, AgentError, Frontend, Session, TurnError, new_session_id,
-};
+use defect_agent::session::{AgentCore, AgentError, Frontend, Session, TurnError, new_session_id};
 use defect_agent::shell::ShellBackend;
 use defect_tools::{LocalFsBackend, LocalShellBackend};
 use futures::StreamExt;
@@ -714,11 +712,7 @@ async fn run_prompt_turn(
 /// 生命周期：`session.subscribe()` 的事件流在 session drop（EventEmitter 析构）时结束，
 /// `events.next()` 返回 `None`，pump 自然退出。pump 持 `Arc<dyn Session>`，与 AgentCore
 /// 的 sessions 表同样强引用——v0 session 随进程存活，pump 亦然。
-fn spawn_session_pump(
-    session: Arc<dyn Session>,
-    session_id: SessionId,
-    cx: ConnectionTo<Client>,
-) {
+fn spawn_session_pump(session: Arc<dyn Session>, session_id: SessionId, cx: ConnectionTo<Client>) {
     let mut events = session.subscribe();
     let cx_for_pump = cx.clone();
     let _ = cx.spawn(async move {

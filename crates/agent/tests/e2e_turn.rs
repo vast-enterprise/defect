@@ -1101,7 +1101,11 @@ async fn turn_end_hook_continue_makes_turn_loop() {
 
     assert!(matches!(stop, StopReason::EndTurn));
     // 1 初始 + 2 次续命 = 3 次 LLM 调用。证明 turn-end hook 让循环多转了两轮。
-    assert_eq!(calls.load(Ordering::SeqCst), 3, "turn should loop 2 extra rounds");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "turn should loop 2 extra rounds"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1225,8 +1229,7 @@ impl Tool for BgSpawnTool {
             ]);
             ToolEvent::Completed(fields)
         };
-        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
-            Box::pin(stream::once(fut));
+        let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> = Box::pin(stream::once(fut));
         s
     }
 }

@@ -12,12 +12,15 @@ fn relative_path_resolves_inside_workspace() {
 }
 
 #[test]
-fn parent_must_exist() {
+fn missing_parent_resolves_by_walking_up() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
-    let err = resolve_workspace_path(root, Path::new("missing/a.txt")).unwrap_err();
-    assert!(matches!(err, FsError::Backend(_)), "got {err:?}");
+    // 父目录不存在——向上走到 workspace root 再拼回缺失段。
+    let resolved = resolve_workspace_path(root, Path::new("missing_dir/sub/file.txt")).unwrap();
+    let root_canon = std::fs::canonicalize(root).unwrap();
+    let expected = root_canon.join("missing_dir/sub/file.txt");
+    assert_eq!(resolved, expected);
 }
 
 #[test]

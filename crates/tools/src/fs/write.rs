@@ -35,7 +35,7 @@ impl WriteFileTool {
                 name: "write_file".to_string(),
                 description: "Write a UTF-8 text file. \
                               Overwrites the file if it exists; creates it if it does not. \
-                              Requires the parent directory to already exist. \
+                              Creates intermediate directories as needed. \
                               Path must be inside the workspace root."
                     .to_string(),
                 input_schema: json!({
@@ -121,7 +121,8 @@ impl Tool for WriteFileTool {
     fn execute(&self, args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream {
         let cancel = ctx.cancel.clone();
         let fs = ctx.fs.clone();
-        let fut = async move { run_write(args, cancel, fs).await };
+        let cwd = ctx.cwd.to_path_buf();
+        let fut = async move { run_write(args, cancel, fs, &cwd).await };
         let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> = Box::pin(stream::once(fut));
         s
     }
@@ -131,6 +132,7 @@ async fn run_write(
     args: serde_json::Value,
     cancel: tokio_util::sync::CancellationToken,
     fs: Arc<dyn FsBackend>,
+    cwd: &std::path::Path,
 ) -> ToolEvent {
     let parsed: WriteArgs = match serde_json::from_value(args) {
         Ok(v) => v,
@@ -145,6 +147,14 @@ async fn run_write(
     }
 
     let path = PathBuf::from(&parsed.path);
+
+    // 在写之前记下父目录是否已存在（best-effort，用于告知 LLM）。
+    let abs_path = if path.is_absolute() {
+        path.clone()
+    } else {
+        cwd.join(&path)
+    };
+    let parent_existed = abs_path.parent().is_none_or(|p| p.is_dir());
 
     // best-effort 读旧内容，画精确 diff 与判断 created
     let old = match fs.read_text(path.clone(), None, None).await {
@@ -169,7 +179,7 @@ async fn run_write(
     let raw_output = serde_json::to_value(WriteFileOutput {
         bytes_written,
         created: old.is_none(),
-        parent_existed: true,
+        parent_existed,
     })
     .unwrap_or(serde_json::Value::Null);
 

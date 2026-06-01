@@ -656,7 +656,10 @@ fn encode_multimodal_tool_result_routes_image_to_following_user_message() {
         panic!("expected text tool content");
     };
     assert!(text.contains("the logo"), "text: {text}");
-    assert!(text.contains("image"), "should mention images follow: {text}");
+    assert!(
+        text.contains("image"),
+        "should mention images follow: {text}"
+    );
 
     let user_msg = w
         .messages

@@ -548,8 +548,7 @@ impl TraceProjector {
             AgentEvent::LlmCallStarted { model, attempt, .. } => {
                 let mut events = flush_sub_generation(&trace_id, sub, now, new_id);
                 sub.call_seq += 1;
-                let gen_id =
-                    format!("{trace_id}-sub-{parent_tool_call_id}-gen-{}", sub.call_seq);
+                let gen_id = format!("{trace_id}-sub-{parent_tool_call_id}-gen-{}", sub.call_seq);
                 sub.current_gen = Some(PendingGeneration {
                     id: gen_id.clone(),
                     model: model.clone(),
@@ -581,17 +580,13 @@ impl TraceProjector {
                 events
             }
             AgentEvent::AssistantText { content } => {
-                if let (ContentBlock::Text(text), Some(pg)) =
-                    (&content, sub.current_gen.as_mut())
-                {
+                if let (ContentBlock::Text(text), Some(pg)) = (&content, sub.current_gen.as_mut()) {
                     pg.output.push_str(&text.text);
                 }
                 Vec::new()
             }
             AgentEvent::AssistantThought { content } => {
-                if let (ContentBlock::Text(text), Some(pg)) =
-                    (&content, sub.current_gen.as_mut())
-                {
+                if let (ContentBlock::Text(text), Some(pg)) = (&content, sub.current_gen.as_mut()) {
                     pg.thinking.push_str(&text.text);
                 }
                 Vec::new()
@@ -607,8 +602,7 @@ impl TraceProjector {
             }
             AgentEvent::ToolCallStarted { id, name, fields } => {
                 let tool_id = id.to_string();
-                let span_id =
-                    format!("{trace_id}-sub-{parent_tool_call_id}-tool-{tool_id}");
+                let span_id = format!("{trace_id}-sub-{parent_tool_call_id}-tool-{tool_id}");
                 sub.tool_spans.insert(tool_id, span_id.clone());
                 let body = ObservationBody {
                     id: span_id,

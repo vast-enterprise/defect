@@ -22,14 +22,14 @@ use crate::fs::FsBackend;
 use crate::http::HttpClient;
 use crate::llm::{ImageData, Message, MessageContent, Role, ToolResultBody, ToolResultContent};
 use crate::policy::{PolicyCtx, PolicyDecision, RecordedOutcome};
-use crate::session::events::EventEmitter;
 use crate::session::TurnError;
+use crate::session::events::EventEmitter;
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolContext, ToolError, ToolEvent};
 
+use super::TurnRunner;
 use super::hooks::PreToolHookFlow;
 use super::llm_drive::{ToolUseAccumulated, parse_args};
-use super::TurnRunner;
 
 impl TurnRunner<'_> {
     pub(super) async fn decide_permissions(
@@ -229,8 +229,11 @@ impl TurnRunner<'_> {
         // 否则所有工具 task 共享一个 `Semaphore`：每个 task 在驱动工具流之前先抢一个
         // permit，跑完（task future 结束）即归还。这给同一 turn 内一次发出 N 个
         // `spawn_agent`（fanout）的场景一个上限，避免 spawn 风暴打爆 provider/资源。
-        let semaphore = (self.config.max_concurrent_tools > 0)
-            .then(|| Arc::new(tokio::sync::Semaphore::new(self.config.max_concurrent_tools)));
+        let semaphore = (self.config.max_concurrent_tools > 0).then(|| {
+            Arc::new(tokio::sync::Semaphore::new(
+                self.config.max_concurrent_tools,
+            ))
+        });
 
         for a in approved {
             match a {
@@ -261,7 +264,9 @@ impl TurnRunner<'_> {
                             // `acquire_owned` 仅在 Semaphore 被 close 时返回 Err——本处
                             // 永不 close，故 unwrap 安全。
                             let _permit = match semaphore {
-                                Some(sem) => Some(sem.acquire_owned().await.expect("semaphore not closed")),
+                                Some(sem) => {
+                                    Some(sem.acquire_owned().await.expect("semaphore not closed"))
+                                }
                                 None => None,
                             };
                             drive_tool_stream(
@@ -355,8 +360,7 @@ impl TurnRunner<'_> {
 
 // ----- hook helpers -----
 
-impl<'a> TurnRunner<'a> {
-}
+impl<'a> TurnRunner<'a> {}
 
 // ----- 类型 -----
 

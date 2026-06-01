@@ -396,4 +396,3 @@ mod test {
         assert_eq!(parsed["tool"], "bash");
     }
 }
-

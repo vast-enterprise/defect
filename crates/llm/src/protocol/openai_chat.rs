@@ -492,10 +492,7 @@ fn encode_assistant_message_into(
 
 /// 构造一个 OpenAI user message 的 image part。`MessageContent::Image` 与
 /// 多模态 tool_result 里剥出来的图片块共用这条。
-fn image_part(
-    mime: &str,
-    data: &ImageData,
-) -> wire::ChatCompletionRequestUserMessageContentPart {
+fn image_part(mime: &str, data: &ImageData) -> wire::ChatCompletionRequestUserMessageContentPart {
     wire::ChatCompletionRequestUserMessageContentPart::ChatCompletionRequestMessageContentPartImage(
         wire::ChatCompletionRequestMessageContentPartImage {
             r#type: wire::ChatCompletionRequestMessageContentPartImageType::ImageUrl,

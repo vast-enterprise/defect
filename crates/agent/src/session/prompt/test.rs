@@ -55,15 +55,12 @@ fn resolves_layers_in_order_with_headings_and_rules() {
     .expect("system prompt");
 
     // 各段套一级标题、以 markdown 水平线相隔。标题出现顺序即拼接顺序。
-    let titles: Vec<&str> = resolved
-        .lines()
-        .filter(|l| l.starts_with("# "))
-        .collect();
+    let titles: Vec<&str> = resolved.lines().filter(|l| l.starts_with("# ")).collect();
     assert_eq!(
         titles,
         [
-            "# Base Prompt",        // base file
-            "# Base Prompt",        // base text
+            "# Base Prompt", // base file
+            "# Base Prompt", // base text
             "# Environment",
             "# System Instructions", // prompt.text
             "# Project Instructions (AGENTS.md)",

@@ -91,9 +91,7 @@ impl HookMatcher {
         {
             return false;
         }
-        if !self.safety.is_empty()
-            && safety.is_none_or(|s| !self.safety.contains(&s))
-        {
+        if !self.safety.is_empty() && safety.is_none_or(|s| !self.safety.contains(&s)) {
             return false;
         }
         true
@@ -172,7 +170,6 @@ pub enum HookError {
     #[error("hook configuration error: {0}")]
     Configuration(String),
 }
-
 
 /// **Step 模型的 handler**（迁移目标）。引擎给它一个挂载点的输入信封（[`step::HookStep::to_envelope`]
 /// 的产物），它产出一个 verdict JSON——引擎再用 [`step::HookStep::apply_verdict`] 把 verdict 应用回
@@ -380,7 +377,6 @@ impl HookEngine for DefaultHookEngine {
         })
     }
 }
-
 
 /// 把通用头并进 step 专属信封。通用头：`session_id` / `cwd` / `hook_event`。
 ///

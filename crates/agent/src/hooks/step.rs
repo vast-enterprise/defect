@@ -122,9 +122,12 @@ pub trait HookStep: Send {
 fn parse_control(verdict: &Value) -> Result<HookControl, VerdictError> {
     // 默认：`veto` 解读为 `Break`（多数 step 的否决语义）。turn-end / compact 用
     // `parse_control_veto` 覆盖成自己的语义。
-    parse_control_veto(verdict, HookControl::Break {
-        reason: AcpStopReason::EndTurn,
-    })
+    parse_control_veto(
+        verdict,
+        HookControl::Break {
+            reason: AcpStopReason::EndTurn,
+        },
+    )
 }
 
 /// 同 [`parse_control`]，但把抽象的 `"veto"` 控制（command hook exit 2 产生）解读为 `veto_as`——
@@ -164,12 +167,12 @@ fn parse_additional_context(verdict: &Value) -> Result<Vec<ContentBlock>, Verdic
         Value::Array(items) => items
             .iter()
             .map(|item| {
-                item.as_str().map(ContentBlock::from).ok_or_else(|| {
-                    VerdictError::Malformed {
+                item.as_str()
+                    .map(ContentBlock::from)
+                    .ok_or_else(|| VerdictError::Malformed {
                         field: "additional_context",
                         reason: "each entry must be a string".to_string(),
-                    }
-                })
+                    })
             })
             .collect(),
         _ => Err(VerdictError::Malformed {
@@ -414,7 +417,8 @@ impl HookStep for AfterSessionEnter {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        self.additional_context.extend(parse_additional_context(verdict)?);
+        self.additional_context
+            .extend(parse_additional_context(verdict)?);
         parse_control(verdict)
     }
 }
@@ -440,7 +444,8 @@ impl HookStep for AfterTurnEnter {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        self.additional_context.extend(parse_additional_context(verdict)?);
+        self.additional_context
+            .extend(parse_additional_context(verdict)?);
         parse_control(verdict)
     }
 }
@@ -528,7 +533,8 @@ impl HookStep for AfterIngest {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        self.additional_context.extend(parse_additional_context(verdict)?);
+        self.additional_context
+            .extend(parse_additional_context(verdict)?);
         parse_control(verdict)
     }
 }
@@ -577,7 +583,8 @@ impl HookStep for AfterCompact {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        self.additional_context.extend(parse_additional_context(verdict)?);
+        self.additional_context
+            .extend(parse_additional_context(verdict)?);
         parse_control(verdict)
     }
 }
@@ -703,7 +710,8 @@ impl HookStep for AfterToolApply {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        self.additional_context.extend(parse_additional_context(verdict)?);
+        self.additional_context
+            .extend(parse_additional_context(verdict)?);
         parse_control(verdict)
     }
 }
@@ -737,7 +745,8 @@ impl HookStep for AfterToolBatch {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        self.additional_context.extend(parse_additional_context(verdict)?);
+        self.additional_context
+            .extend(parse_additional_context(verdict)?);
         parse_control(verdict)
     }
 }
@@ -755,11 +764,7 @@ impl HookStep for AfterToolBatch {
 ///   ——`Break` / `Continue` / `Skip` 都意味着"走向已定"，后续 handler 不应再覆盖。
 /// - **错误处理**：某个 verdict 解析失败时由 `on_error` 决定降级（返回 `Some(control)` 早退 / `None`
 ///   跳过该 verdict 继续）——把"允许 block 的事件错误等价 block"这类策略留给调用方，本函数不写死。
-pub fn run_step_pipeline<S, I, F>(
-    step: &mut S,
-    verdicts: I,
-    mut on_error: F,
-) -> HookControl
+pub fn run_step_pipeline<S, I, F>(step: &mut S, verdicts: I, mut on_error: F) -> HookControl
 where
     S: HookStep + ?Sized,
     I: IntoIterator<Item = Value>,
@@ -785,10 +790,12 @@ fn parse_block_array(v: &Value, field: &'static str) -> Result<Vec<ContentBlock>
         Value::Array(items) => items
             .iter()
             .map(|item| {
-                item.as_str().map(ContentBlock::from).ok_or(VerdictError::Malformed {
-                    field,
-                    reason: "each entry must be a string".to_string(),
-                })
+                item.as_str()
+                    .map(ContentBlock::from)
+                    .ok_or(VerdictError::Malformed {
+                        field,
+                        reason: "each entry must be a string".to_string(),
+                    })
             })
             .collect(),
         _ => Err(VerdictError::Malformed {

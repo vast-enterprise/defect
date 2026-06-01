@@ -228,12 +228,18 @@ impl HooksConfig {
 
     /// 取某事件下的条目（无则空切片）。
     pub fn get(&self, event_name: &str) -> &[HookEntry] {
-        self.buckets.get(event_name).map(Vec::as_slice).unwrap_or(&[])
+        self.buckets
+            .get(event_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// 在某事件下追加一条。
     pub fn push(&mut self, event_name: impl Into<String>, entry: HookEntry) {
-        self.buckets.entry(event_name.into()).or_default().push(entry);
+        self.buckets
+            .entry(event_name.into())
+            .or_default()
+            .push(entry);
     }
 }
 

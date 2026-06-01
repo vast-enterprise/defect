@@ -14,7 +14,10 @@ async fn completed_task_flows_into_queue() {
     let outcome = wait_for_one(&bg).await;
     assert_eq!(outcome.task_id, "bg-0");
     assert_eq!(outcome.label, "reviewer");
-    assert_eq!(outcome.result, BackgroundResult::Completed("done".to_string()));
+    assert_eq!(
+        outcome.result,
+        BackgroundResult::Completed("done".to_string())
+    );
 
     // drain 取空后再 drain 为空。
     assert!(bg.drain_completed().is_empty());
@@ -29,13 +32,20 @@ async fn task_outlives_spawn_call() {
         let _ = rx.await;
         BackgroundResult::Completed("late".to_string())
     });
-    assert_eq!(bg.running_count(), 1, "task should still be running after spawn returned");
+    assert_eq!(
+        bg.running_count(),
+        1,
+        "task should still be running after spawn returned"
+    );
     assert!(bg.drain_completed().is_empty(), "not done yet");
 
     // 放行 → 任务完成 → 入队、running 清零。
     tx.send(()).unwrap();
     let outcome = wait_for_one(&bg).await;
-    assert_eq!(outcome.result, BackgroundResult::Completed("late".to_string()));
+    assert_eq!(
+        outcome.result,
+        BackgroundResult::Completed("late".to_string())
+    );
     assert_eq!(bg.running_count(), 0);
 }
 
@@ -48,14 +58,21 @@ async fn cancel_all_propagates_to_task_token() {
     });
     bg.cancel_all();
     let outcome = wait_for_one(&bg).await;
-    assert_eq!(outcome.result, BackgroundResult::Failed("cancelled".to_string()));
+    assert_eq!(
+        outcome.result,
+        BackgroundResult::Failed("cancelled".to_string())
+    );
 }
 
 #[tokio::test]
 async fn ids_are_unique_and_monotonic() {
     let bg = BackgroundTasks::new(CancellationToken::new());
-    let id0 = bg.spawn("a".to_string(), |_c| async { BackgroundResult::Completed(String::new()) });
-    let id1 = bg.spawn("b".to_string(), |_c| async { BackgroundResult::Completed(String::new()) });
+    let id0 = bg.spawn("a".to_string(), |_c| async {
+        BackgroundResult::Completed(String::new())
+    });
+    let id1 = bg.spawn("b".to_string(), |_c| async {
+        BackgroundResult::Completed(String::new())
+    });
     assert_eq!(id0, "bg-0");
     assert_eq!(id1, "bg-1");
 }

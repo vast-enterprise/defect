@@ -249,10 +249,12 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
     let snap = session.history_snapshot();
     let first = snap.first().expect("non-empty history");
     assert_eq!(first.role, Role::Assistant, "summary message is assistant");
-    let has_summary_text = first.content.iter().any(|c| matches!(
-        c,
-        MessageContent::Text { text } if text.contains("ship compaction")
-    ));
+    let has_summary_text = first.content.iter().any(|c| {
+        matches!(
+            c,
+            MessageContent::Text { text } if text.contains("ship compaction")
+        )
+    });
     assert!(has_summary_text, "first message should carry the summary");
 }
 

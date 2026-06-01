@@ -125,7 +125,7 @@ pub trait FsBackend: Send + Sync {
 
     /// 全量覆盖写一个 UTF-8 文本文件。
     ///
-    /// 父目录必须已存在；后端不静默 mkdir-p。
+    /// 后端负责确保父目录存在（`mkdir -p` 语义）。
     ///
     /// 行末符 / 原子性的责任划分见 `docs/internal/tools-fs.md` §6：
     /// - 本地后端做行末符规范化与 `tmp + rename` 原子写
@@ -180,17 +180,18 @@ pub enum FsError {
 ///
 /// 行为：
 /// 1. 相对路径基于 `workspace_root` 拼接；绝对路径直接用
-/// 2. canonicalize **父目录**（write 场景下目标本身可能尚未存在）
-/// 3. 校验父目录的真实路径以 `workspace_root` 的真实路径开头——
+/// 2. 从目标路径向上查找最近的**已存在**祖先目录，对它做 canonicalize
+///    （write 场景下目标本身乃至多级父目录都可能尚未存在）
+/// 3. 校验已存在祖先的真实路径以 `workspace_root` 的真实路径开头——
 ///    防 symlink 越狱（`workspace/dir/link → /etc` 这类）
-/// 4. 拼上文件名返回
+/// 4. 把剩余不存在的路径段原样拼回，再拼上文件名返回
 ///
 /// [`crate::fs::FsBackend`] 的 `LocalFsBackend` / `AcpFsBackend` 实现都调用
 /// 同一份函数——委托模式下 agent 仍自己守边界，不依赖客户端 enforce。
 ///
 /// # Errors
 /// - [`FsError::NotPermitted`]：路径越界 / 无父目录 / 无文件名
-/// - [`FsError::Backend`]：父目录 canonicalize 失败（IO 错误）
+/// - [`FsError::Backend`]：祖先 canonicalize 失败（IO 错误）
 pub fn resolve_workspace_path(workspace_root: &Path, requested: &Path) -> Result<PathBuf, FsError> {
     let target = if requested.is_absolute() {
         requested.to_path_buf()
@@ -202,13 +203,23 @@ pub fn resolve_workspace_path(workspace_root: &Path, requested: &Path) -> Result
         FsError::NotPermitted(format!("path has no parent: {}", target.display()))
     })?;
 
-    let parent_canon =
-        std::fs::canonicalize(parent).map_err(|e| FsError::Backend(BoxError::new(e)))?;
+    // 从 parent 向上查找最近已存在的祖先目录。
+    // canonicalize 要求路径存在——write 场景下目标乃至多级父目录都可能
+    // 尚未创建，因此向上走到第一个真实存在的目录再 canonicalize。
+    let (existing_ancestor, missing_suffix) = find_existing_ancestor(parent).ok_or_else(|| {
+        FsError::NotPermitted(format!(
+            "no existing ancestor found for: {}",
+            target.display()
+        ))
+    })?;
+
+    let existing_canon =
+        std::fs::canonicalize(existing_ancestor).map_err(|e| FsError::Backend(BoxError::new(e)))?;
 
     let root_canon =
         std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
 
-    if !parent_canon.starts_with(&root_canon) {
+    if !existing_canon.starts_with(&root_canon) {
         return Err(FsError::NotPermitted(format!(
             "path {} escapes workspace root {}",
             target.display(),
@@ -220,7 +231,26 @@ pub fn resolve_workspace_path(workspace_root: &Path, requested: &Path) -> Result
         FsError::NotPermitted(format!("path has no file component: {}", target.display()))
     })?;
 
-    Ok(parent_canon.join(file_name))
+    // 把不存在的那段路径原样拼回已存在祖先后面，再拼文件名。
+    Ok(existing_canon.join(missing_suffix).join(file_name))
+}
+
+/// 从 `path` 开始向上走，返回 `(最近已存在的祖先, 剩余路径段)`。
+///
+/// 剩余路径段保持原有相对关系（不使用 canonicalize 后的形式），
+/// 以便拼回时保留原始语义。
+fn find_existing_ancestor(path: &Path) -> Option<(&Path, PathBuf)> {
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if current.exists() {
+            // 从下往上收集的路径段需要逆序拼回
+            missing.reverse();
+            return Some((current, missing.into_iter().collect()));
+        }
+        missing.push(current.file_name()?.to_os_string());
+        current = current.parent()?;
+    }
 }
 
 #[cfg(test)]

@@ -527,7 +527,10 @@ impl<'a> TurnRunner<'a> {
             return Some(explicit);
         }
         let ratio = self.config.compact_ratio?;
-        let context_window = self.provider.model_info(&self.config.model)?.context_window?;
+        let context_window = self
+            .provider
+            .model_info(&self.config.model)?
+            .context_window?;
         // ratio 落在 (0, 1]；context_window * ratio 向下取整。
         let threshold = (context_window as f64 * ratio).floor() as u64;
         (threshold > 0).then_some(threshold)
@@ -538,17 +541,13 @@ impl<'a> TurnRunner<'a> {
     }
 }
 
-
 // ----- internal types -----
-
-
 
 #[derive(Clone, Copy)]
 struct TurnOutcome {
     reason: AcpStopReason,
     usage: Usage,
 }
-
 
 /// `before turn-end` hook 强制续命次数的**默认**上限。可被
 /// [`TurnConfig::max_hook_continues`] 覆盖（配置项 `[turn].max_hook_continues`）。
@@ -606,10 +605,6 @@ impl TurnState {
 
 // ----- helpers -----
 
-
-
-
-
 fn turn_outcome(state: &TurnState, reason: AcpStopReason) -> TurnOutcome {
     TurnOutcome {
         reason,
@@ -617,9 +612,5 @@ fn turn_outcome(state: &TurnState, reason: AcpStopReason) -> TurnOutcome {
     }
 }
 
-
-
-
 #[cfg(test)]
 mod test;
-

@@ -97,7 +97,10 @@ impl TurnRunner<'_> {
     ///   `[prepend, original, append]`，落 history 时按改写后形态
     /// - `append` → 暂未拼到 system prompt（v0 无落点；待 system_prompt
     ///   动态拼接落地后填上，详见 `docs/internal/hooks.md` §3.2）
-    pub(super) async fn fire_user_prompt_submit(&self, prompt: Vec<ContentBlock>) -> UserPromptHookFlow {
+    pub(super) async fn fire_user_prompt_submit(
+        &self,
+        prompt: Vec<ContentBlock>,
+    ) -> UserPromptHookFlow {
         // Step 模型：`before Ingest`（输入摄入前）。hook 可改写 input、或 `Break` 拒该 turn。
         // source 由 turn 携带——用户 turn=User，后台续转 turn=Background（§5.1）。
         let mut step = crate::hooks::step::BeforeIngest {

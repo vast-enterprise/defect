@@ -71,12 +71,12 @@ pub(crate) fn parse_layer_hooks(
     for (key, raw) in table {
         if key == "disable" {
             let raw_list: Vec<HookDisableRaw> =
-                raw.clone().try_into().map_err(|err: toml::de::Error| {
-                    ConfigError::Invalid {
+                raw.clone()
+                    .try_into()
+                    .map_err(|err: toml::de::Error| ConfigError::Invalid {
                         path: path.clone(),
                         message: format!("invalid [[hooks.disable]]: {err}"),
-                    }
-                })?;
+                    })?;
             for d in raw_list {
                 if !is_known_event(&d.event) {
                     return Err(ConfigError::Invalid {
@@ -104,10 +104,12 @@ pub(crate) fn parse_layer_hooks(
             });
         }
         let raw_list: Vec<HookEntryRaw> =
-            raw.clone().try_into().map_err(|err: toml::de::Error| ConfigError::Invalid {
-                path: path.clone(),
-                message: format!("invalid [[hooks.{key}]]: {err}"),
-            })?;
+            raw.clone()
+                .try_into()
+                .map_err(|err: toml::de::Error| ConfigError::Invalid {
+                    path: path.clone(),
+                    message: format!("invalid [[hooks.{key}]]: {err}"),
+                })?;
         for r in raw_list {
             entries.push(
                 key.clone(),

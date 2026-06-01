@@ -209,7 +209,6 @@ impl StepHandler for CommandHandler {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // command construction
 // ---------------------------------------------------------------------------
@@ -366,7 +365,10 @@ mod test {
         let session_id = SessionId::new("s1");
         let cwd = Path::new("/");
         let env = serde_json::json!({"tool": "bash", "args": {"x": 1}});
-        let v = h.handle_step(&env, ctx(&session_id, cwd)).await.expect("ok");
+        let v = h
+            .handle_step(&env, ctx(&session_id, cwd))
+            .await
+            .expect("ok");
         assert!(v.is_none());
     }
 
@@ -380,7 +382,10 @@ mod test {
         let session_id = SessionId::new("s1");
         let cwd = Path::new("/");
         let env = serde_json::json!({"tool": "bash"});
-        let v = h.handle_step(&env, ctx(&session_id, cwd)).await.expect("ok");
+        let v = h
+            .handle_step(&env, ctx(&session_id, cwd))
+            .await
+            .expect("ok");
         assert!(v.is_none());
     }
 
@@ -485,4 +490,3 @@ mod test {
         }
     }
 }
-

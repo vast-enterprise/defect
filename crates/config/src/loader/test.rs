@@ -1194,7 +1194,10 @@ handler = { type = "prompt", system = "diagnose", render = { type = "json" }, ti
         HookHandlerSpec::Prompt(_)
     ));
 
-    assert_eq!(hooks.get("after_session_enter")[0].source, ConfigSource::User);
+    assert_eq!(
+        hooks.get("after_session_enter")[0].source,
+        ConfigSource::User
+    );
 }
 
 #[test]

@@ -72,11 +72,11 @@ fn boundary_keeps_recent_turns_within_budget() {
     // 三个轮次，每个很小。预算够大 → 保留尽量多但 head 非空：边界落在第二个
     // 轮次起点（index 2），head = 第一个轮次。
     let messages = vec![
-        user("turn1 user"), // 0  turn start
+        user("turn1 user"),       // 0  turn start
         assistant("turn1 reply"), // 1
-        user("turn2 user"), // 2  turn start
+        user("turn2 user"),       // 2  turn start
         assistant("turn2 reply"), // 3
-        user("turn3 user"), // 4  turn start
+        user("turn3 user"),       // 4  turn start
         assistant("turn3 reply"), // 5
     ];
     // 预算极大 → 想全保留，但 last_start>0 时仍不能让 head 空：
@@ -108,12 +108,12 @@ fn boundary_never_splits_tool_use_result_pair() {
     // 轮次2 含 tool_use(assistant) + tool_result(user)。边界必须落在轮次起点，
     // 绝不落在 tool_result 上，确保 tail 不出现孤儿 tool_result。
     let messages = vec![
-        user("turn1"),                  // 0 start
-        assistant("r1"),                // 1
-        user("turn2"),                  // 2 start
-        assistant_tool_use("call_a"),   // 3
-        tool_result("call_a", "out"),   // 4  <- 不是轮次起点
-        assistant("r2"),                // 5
+        user("turn1"),                // 0 start
+        assistant("r1"),              // 1
+        user("turn2"),                // 2 start
+        assistant_tool_use("call_a"), // 3
+        tool_result("call_a", "out"), // 4  <- 不是轮次起点
+        assistant("r2"),              // 5
     ];
     let boundary = select_boundary(&messages, 1_000_000).expect("boundary");
     // 唯一安全的非零轮次起点是 index 2。

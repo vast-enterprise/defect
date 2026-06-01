@@ -89,7 +89,10 @@ pub fn resolve_system_prompt(
     }
 
     if let Some(session_overlay) = session_overlay {
-        sections.push(Section::new("Session Instructions", session_overlay.to_owned()));
+        sections.push(Section::new(
+            "Session Instructions",
+            session_overlay.to_owned(),
+        ));
     }
 
     Ok(render_sections(&sections))

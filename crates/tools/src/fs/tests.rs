@@ -338,20 +338,26 @@ async fn case10_write_overwrite_crlf_normalizes_lf_to_crlf() {
 }
 
 #[tokio::test]
-async fn case11_write_parent_missing() {
+async fn case11_write_parent_missing_auto_creates() {
     let h = Harness::new();
     let tool = WriteFileTool::new();
     let events = drive(tool.execute(
-        json!({"path": "no_such_dir/x.txt", "content": "y"}),
+        json!({"path": "no_such_dir/sub/x.txt", "content": "y"}),
         h.ctx(),
     ))
     .await;
     assert_eq!(events.len(), 1);
     assert!(
-        matches!(events[0], ToolEvent::Failed(ToolError::Execution(_))),
-        "got {:?}",
+        matches!(events[0], ToolEvent::Completed(_)),
+        "expected Completed, got {:?}",
         events[0]
     );
+    let raw = extract_raw(&events[0]);
+    assert_eq!(raw["created"], json!(true));
+    assert_eq!(raw["parent_existed"], json!(false));
+    // 文件落到了应有的位置
+    let on_disk = std::fs::read_to_string(h.root.join("no_such_dir/sub/x.txt")).unwrap();
+    assert_eq!(on_disk, "y");
     // 不应有 .tmp 残留
     let stale: Vec<_> = std::fs::read_dir(&h.root)
         .unwrap()

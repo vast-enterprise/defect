@@ -122,8 +122,12 @@ pub enum ProviderActivityKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolResultBody {
-    Text { text: String },
-    Json { value: serde_json::Value },
+    Text {
+        text: String,
+    },
+    Json {
+        value: serde_json::Value,
+    },
     /// 多模态工具结果：文本与图片块混排。`read_file` 读图片、未来的截图
     /// 工具等走这条。
     ///
@@ -131,7 +135,9 @@ pub enum ToolResultBody {
     /// - Anthropic 的 `tool_result` 块原生支持 image，逐块塞进去即可
     /// - OpenAI 的 tool message 只接受文本——codec 把图片块剥出来挂到
     ///   紧随其后的 user message 里，tool message 仅留文本（含占位提示）
-    Content { blocks: Vec<ToolResultContent> },
+    Content {
+        blocks: Vec<ToolResultContent>,
+    },
 }
 
 /// [`ToolResultBody::Content`] 里的单块。文本沿用 [`ToolResultBody::Text`]

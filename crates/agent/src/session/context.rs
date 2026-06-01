@@ -33,7 +33,13 @@ impl Frontend {
     /// 文件系统是否委托给客户端代理。仅 [`Frontend::Acp`] 且协商出
     /// `fs_delegated = true` 时为真；其余形态都在本地直接读写。
     fn fs_delegated(self) -> bool {
-        matches!(self, Self::Acp { fs_delegated: true, .. })
+        matches!(
+            self,
+            Self::Acp {
+                fs_delegated: true,
+                ..
+            }
+        )
     }
 
     /// 渲染进 `# Environment` 段的单行描述。

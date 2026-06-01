@@ -60,7 +60,12 @@ fn turn_end_break_with_reason() {
     let ctrl = step
         .apply_verdict(&json!({"control": "break", "stop_reason": "refusal"}))
         .expect("verdict");
-    assert_eq!(ctrl, HookControl::Break { reason: AcpStopReason::Refusal });
+    assert_eq!(
+        ctrl,
+        HookControl::Break {
+            reason: AcpStopReason::Refusal
+        }
+    );
 }
 
 #[test]
@@ -129,21 +134,39 @@ fn tool_apply_short_circuit_fills_result() {
     assert_eq!(ctrl, HookControl::Proceed);
     let r = step.result.expect("synthetic result");
     assert!(r.is_error);
-    assert_eq!(r.body, ToolResultBody::Text { text: "blocked by hook".to_string() });
+    assert_eq!(
+        r.body,
+        ToolResultBody::Text {
+            text: "blocked by hook".to_string()
+        }
+    );
 }
 
 #[test]
 fn tool_apply_break_ends_turn() {
     let mut step = tool_apply();
-    let ctrl = step.apply_verdict(&json!({"control": "break"})).expect("verdict");
-    assert_eq!(ctrl, HookControl::Break { reason: AcpStopReason::EndTurn });
+    let ctrl = step
+        .apply_verdict(&json!({"control": "break"}))
+        .expect("verdict");
+    assert_eq!(
+        ctrl,
+        HookControl::Break {
+            reason: AcpStopReason::EndTurn
+        }
+    );
 }
 
 #[test]
 fn tool_apply_malformed_result_errors() {
     let mut step = tool_apply();
     let err = step.apply_verdict(&json!({"result": {"kind": "bogus"}}));
-    assert!(matches!(err, Err(VerdictError::Malformed { field: "result", .. })));
+    assert!(matches!(
+        err,
+        Err(VerdictError::Malformed {
+            field: "result",
+            ..
+        })
+    ));
 }
 
 // ----- after Generate -----
@@ -184,7 +207,12 @@ fn session_enter_injects_and_breaks() {
     let ctrl = step
         .apply_verdict(&json!({"additional_context": ["use rustfmt"], "control": "break"}))
         .expect("verdict");
-    assert_eq!(ctrl, HookControl::Break { reason: AcpStopReason::EndTurn });
+    assert_eq!(
+        ctrl,
+        HookControl::Break {
+            reason: AcpStopReason::EndTurn
+        }
+    );
     assert_eq!(step.additional_context.len(), 1);
 }
 
@@ -204,17 +232,27 @@ fn before_ingest_rewrites_input() {
 
 #[test]
 fn before_compact_can_skip() {
-    let mut step = BeforeCompact { token_estimate: 9000, threshold: 8000 };
+    let mut step = BeforeCompact {
+        token_estimate: 9000,
+        threshold: 8000,
+    };
     assert_eq!(step.to_envelope()["threshold"], 8000);
-    let ctrl = step.apply_verdict(&json!({"control": "skip"})).expect("verdict");
+    let ctrl = step
+        .apply_verdict(&json!({"control": "skip"}))
+        .expect("verdict");
     assert_eq!(ctrl, HookControl::Skip);
 }
 
 #[test]
 fn before_compact_veto_means_skip() {
     // command hook exit 2 → veto；compact 把 veto 解读为跳过本次压缩。
-    let mut step = BeforeCompact { token_estimate: 9000, threshold: 8000 };
-    let ctrl = step.apply_verdict(&json!({"control": "veto"})).expect("verdict");
+    let mut step = BeforeCompact {
+        token_estimate: 9000,
+        threshold: 8000,
+    };
+    let ctrl = step
+        .apply_verdict(&json!({"control": "veto"}))
+        .expect("verdict");
     assert_eq!(ctrl, HookControl::Skip);
 }
 
@@ -222,8 +260,15 @@ fn before_compact_veto_means_skip() {
 fn tool_apply_veto_means_break() {
     // 默认 step（如 ToolApply）把 veto 解读为 Break。
     let mut step = tool_apply();
-    let ctrl = step.apply_verdict(&json!({"control": "veto"})).expect("verdict");
-    assert_eq!(ctrl, HookControl::Break { reason: AcpStopReason::EndTurn });
+    let ctrl = step
+        .apply_verdict(&json!({"control": "veto"}))
+        .expect("verdict");
+    assert_eq!(
+        ctrl,
+        HookControl::Break {
+            reason: AcpStopReason::EndTurn
+        }
+    );
 }
 
 #[test]
@@ -249,7 +294,9 @@ fn before_permission_stub_records_resolved() {
         decision: "ask".to_string(),
         resolved: None,
     };
-    let ctrl = step.apply_verdict(&json!({"resolved": true})).expect("verdict");
+    let ctrl = step
+        .apply_verdict(&json!({"resolved": true}))
+        .expect("verdict");
     assert_eq!(ctrl, HookControl::Proceed);
     assert_eq!(step.resolved, Some(true));
 }
@@ -266,7 +313,12 @@ fn pipeline_accumulates_data_then_early_exits_on_control() {
         json!({"control": "break"}),
     ];
     let ctrl = run_step_pipeline(&mut step, verdicts, |_| None);
-    assert_eq!(ctrl, HookControl::Break { reason: AcpStopReason::EndTurn });
+    assert_eq!(
+        ctrl,
+        HookControl::Break {
+            reason: AcpStopReason::EndTurn
+        }
+    );
     // 数据轴累积到最后一次改动。
     assert_eq!(step.args["command"], "step2");
 }
@@ -293,24 +345,44 @@ fn pipeline_error_handler_can_skip_or_block() {
         json!({"control": "break"}),
     ];
     let ctrl = run_step_pipeline(&mut step, verdicts, |_| None);
-    assert_eq!(ctrl, HookControl::Break { reason: AcpStopReason::EndTurn });
+    assert_eq!(
+        ctrl,
+        HookControl::Break {
+            reason: AcpStopReason::EndTurn
+        }
+    );
 
     // on_error 选择早退(Some)：错误等价 break。
     let mut step2 = tool_apply();
     let ctrl2 = run_step_pipeline(
         &mut step2,
         vec![json!({"result": {"kind": "bogus"}})],
-        |_| Some(HookControl::Break { reason: AcpStopReason::Refusal }),
+        |_| {
+            Some(HookControl::Break {
+                reason: AcpStopReason::Refusal,
+            })
+        },
     );
-    assert_eq!(ctrl2, HookControl::Break { reason: AcpStopReason::Refusal });
+    assert_eq!(
+        ctrl2,
+        HookControl::Break {
+            reason: AcpStopReason::Refusal
+        }
+    );
 }
 
 #[test]
 fn after_tool_batch_envelope_lists_results() {
     let step = AfterToolBatch {
         results: vec![
-            ToolBatchEntry { tool_name: "bash".to_string(), is_error: false },
-            ToolBatchEntry { tool_name: "edit".to_string(), is_error: true },
+            ToolBatchEntry {
+                tool_name: "bash".to_string(),
+                is_error: false,
+            },
+            ToolBatchEntry {
+                tool_name: "edit".to_string(),
+                is_error: true,
+            },
         ],
         additional_context: Vec::new(),
     };

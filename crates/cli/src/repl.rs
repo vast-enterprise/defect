@@ -54,7 +54,14 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
     let fs = Arc::new(LocalFsBackend::new(cwd.clone()));
     let shell = Arc::new(LocalShellBackend::new());
     let session = agent
-        .create_session(session_id, cwd.clone(), Vec::new(), fs, shell, Frontend::Cli)
+        .create_session(
+            session_id,
+            cwd.clone(),
+            Vec::new(),
+            fs,
+            shell,
+            Frontend::Cli,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("create_session failed: {e}"))?;
 

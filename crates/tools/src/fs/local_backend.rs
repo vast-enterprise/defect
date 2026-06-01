@@ -167,10 +167,7 @@ impl FsBackend for LocalFsBackend {
 
             atomic_write(&abs, final_content.as_bytes())
                 .await
-                .map_err(|e| match e.kind() {
-                    io::ErrorKind::NotFound => FsError::NotFound(abs.clone()),
-                    _ => FsError::Backend(BoxError::new(e)),
-                })?;
+                .map_err(|e| FsError::Backend(BoxError::new(e)))?;
 
             Ok(())
         })
@@ -318,16 +315,12 @@ fn slice_lines(text: &str, line: Option<u32>, limit: Option<u32>) -> String {
 }
 
 /// `tmp + rename` 原子写。tmp 文件落在同一父目录以避免跨设备 rename。
+/// 父目录不存在时自动创建（`mkdir -p`）。
 async fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("path has no parent"))?;
-    if !parent.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("parent directory missing: {}", parent.display()),
-        ));
-    }
+    tokio::fs::create_dir_all(parent).await?;
     let file_name = path
         .file_name()
         .ok_or_else(|| io::Error::other("path has no file component"))?;

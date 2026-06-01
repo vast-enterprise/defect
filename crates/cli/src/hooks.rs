@@ -348,13 +348,16 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.push("after_session_enter", HookEntry {
-            matcher: ConfigHookMatcher::default(),
-            handler: HookHandlerSpec::Builtin {
-                name: "does-not-exist".into(),
+        hooks.push(
+            "after_session_enter",
+            HookEntry {
+                matcher: ConfigHookMatcher::default(),
+                handler: HookHandlerSpec::Builtin {
+                    name: "does-not-exist".into(),
+                },
+                source: ConfigSource::User,
             },
-            source: ConfigSource::User,
-        });
+        );
         let err = match build_engine_arc(&hooks, &builtins, &ctx(&reg)) {
             Ok(_) => panic!("should fail"),
             Err(e) => e,
@@ -370,16 +373,19 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.push("before_tool_apply", HookEntry {
-            matcher: ConfigHookMatcher {
-                tool: Some("login".into()),
-                ..Default::default()
+        hooks.push(
+            "before_tool_apply",
+            HookEntry {
+                matcher: ConfigHookMatcher {
+                    tool: Some("login".into()),
+                    ..Default::default()
+                },
+                handler: HookHandlerSpec::Builtin {
+                    name: "redact-secrets".into(),
+                },
+                source: ConfigSource::Project,
             },
-            handler: HookHandlerSpec::Builtin {
-                name: "redact-secrets".into(),
-            },
-            source: ConfigSource::Project,
-        });
+        );
         let _arc = build_engine_arc(&hooks, &builtins, &ctx(&reg)).expect("ok");
     }
 
@@ -388,17 +394,20 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.push("before_tool_apply", HookEntry {
-            matcher: ConfigHookMatcher::default(),
-            handler: HookHandlerSpec::Command(HookCommandSpec::Argv {
-                argv: vec!["true".into()],
-                argv_windows: None,
-                cwd: None,
-                env: BTreeMap::new(),
-                timeout_sec: Some(5),
-            }),
-            source: ConfigSource::User,
-        });
+        hooks.push(
+            "before_tool_apply",
+            HookEntry {
+                matcher: ConfigHookMatcher::default(),
+                handler: HookHandlerSpec::Command(HookCommandSpec::Argv {
+                    argv: vec!["true".into()],
+                    argv_windows: None,
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    timeout_sec: Some(5),
+                }),
+                source: ConfigSource::User,
+            },
+        );
         let _arc = build_engine_arc(&hooks, &builtins, &ctx(&reg)).expect("ok");
     }
 
@@ -407,17 +416,20 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.push("before_tool_apply", HookEntry {
-            matcher: ConfigHookMatcher::default(),
-            handler: HookHandlerSpec::Command(HookCommandSpec::Shell {
-                shell: HookShellKind::Bash,
-                command: "echo hi".into(),
-                cwd: None,
-                env: BTreeMap::new(),
-                timeout_sec: Some(5),
-            }),
-            source: ConfigSource::User,
-        });
+        hooks.push(
+            "before_tool_apply",
+            HookEntry {
+                matcher: ConfigHookMatcher::default(),
+                handler: HookHandlerSpec::Command(HookCommandSpec::Shell {
+                    shell: HookShellKind::Bash,
+                    command: "echo hi".into(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    timeout_sec: Some(5),
+                }),
+                source: ConfigSource::User,
+            },
+        );
         let _arc = build_engine_arc(&hooks, &builtins, &ctx(&reg)).expect("ok");
     }
 
@@ -426,16 +438,19 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.push("after_session_enter", HookEntry {
-            matcher: ConfigHookMatcher::default(),
-            handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
-                None,
-                "summarize".into(),
-                HookPromptRender::Json,
-                Some(5),
-            )),
-            source: ConfigSource::User,
-        });
+        hooks.push(
+            "after_session_enter",
+            HookEntry {
+                matcher: ConfigHookMatcher::default(),
+                handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
+                    None,
+                    "summarize".into(),
+                    HookPromptRender::Json,
+                    Some(5),
+                )),
+                source: ConfigSource::User,
+            },
+        );
         let _arc = build_engine_arc(&hooks, &builtins, &ctx(&reg)).expect("ok");
     }
 
@@ -444,16 +459,19 @@ mod test {
         let builtins = BuiltinRegistry::defaults();
         let reg = stub_registry();
         let mut hooks = HooksConfig::default();
-        hooks.push("after_session_enter", HookEntry {
-            matcher: ConfigHookMatcher::default(),
-            handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
-                Some("not-registered".into()),
-                "x".into(),
-                HookPromptRender::Json,
-                None,
-            )),
-            source: ConfigSource::User,
-        });
+        hooks.push(
+            "after_session_enter",
+            HookEntry {
+                matcher: ConfigHookMatcher::default(),
+                handler: HookHandlerSpec::Prompt(HookPromptSpec::new(
+                    Some("not-registered".into()),
+                    "x".into(),
+                    HookPromptRender::Json,
+                    None,
+                )),
+                source: ConfigSource::User,
+            },
+        );
         let err = match build_engine_arc(&hooks, &builtins, &ctx(&reg)) {
             Ok(_) => panic!("should fail"),
             Err(e) => e,
