@@ -35,7 +35,7 @@ use defect_agent::session::WebSearchCapabilityConfig;
 /// 配置无法反序列化为强类型结构时返回 [`ConfigError`]。
 pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError> {
     let cwd = canonicalize_or_original(&opts.cwd);
-    let user_path = resolve_user_config_path(&opts)?;
+    let user_path = resolve_user_config_path(&opts);
     let repo_root = find_repo_root(&cwd);
     let project_path = repo_root
         .as_ref()
@@ -61,7 +61,8 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
     // `crates/config/src/hooks.rs` 顶部注释。每层先单独抽取，最后 merge_layer_hooks。
     let mut hook_layers: Vec<LayerHooks> = Vec::new();
 
-    if let Some((user_layer, layer_warnings)) = load_optional_layer(ConfigSource::User, user_path)?
+    if let Some((user_layer, layer_warnings)) =
+        load_optional_layer_opt(ConfigSource::User, user_path)?
     {
         warnings.extend(layer_warnings);
         if let Some(candidate) = extract_base_prompt(&user_layer.value, user_layer.path.as_ref()) {
@@ -552,13 +553,6 @@ fn provider_capability_overrides(
     )
 }
 
-fn load_optional_layer(
-    source: ConfigSource,
-    path: PathBuf,
-) -> Result<Option<(ConfigLayerEntry, Vec<ConfigWarning>)>, ConfigError> {
-    load_optional_layer_opt(source, Some(path))
-}
-
 fn load_optional_layer_opt(
     source: ConfigSource,
     path: Option<PathBuf>,
@@ -652,24 +646,24 @@ fn strip_quotes(s: &str) -> &str {
     s
 }
 
-fn resolve_user_config_path(opts: &LoadConfigOptions) -> Result<PathBuf, ConfigError> {
+/// 解析用户层 `config.toml` 路径。与 [`crate::profiles`] 的
+/// `resolve_user_agents_dir`、[`crate::skills`] 同源优先级，**找不到时返回
+/// `None`**：用户没设 XDG/HOME 时用户层配置直接缺席，不该让整个程序跑不起来。
+fn resolve_user_config_path(opts: &LoadConfigOptions) -> Option<PathBuf> {
     if let Some(xdg) = &opts.xdg_config_home {
-        return Ok(xdg.join(USER_CONFIG_RELATIVE));
+        return Some(xdg.join(USER_CONFIG_RELATIVE));
     }
     if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(xdg).join(USER_CONFIG_RELATIVE));
+        return Some(PathBuf::from(xdg).join(USER_CONFIG_RELATIVE));
     }
     if let Some(home) = &opts.home_dir {
-        return Ok(home.join(".config/defect/config.toml"));
+        return Some(home.join(".config/defect/config.toml"));
     }
     if let Ok(home) = env::var("HOME") {
-        return Ok(PathBuf::from(home).join(".config/defect/config.toml"));
+        return Some(PathBuf::from(home).join(".config/defect/config.toml"));
     }
 
-    Err(ConfigError::Invalid {
-        path: PathBuf::from("<env>"),
-        message: "neither XDG_CONFIG_HOME nor HOME is set".into(),
-    })
+    None
 }
 
 pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
