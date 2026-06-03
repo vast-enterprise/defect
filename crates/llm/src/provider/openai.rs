@@ -25,7 +25,9 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
 
-use crate::protocol::openai_chat::{self, ChatDialect, ReasoningEffort};
+use defect_agent::llm::ReasoningEffort;
+
+use crate::protocol::openai_chat::{self, ChatDialect};
 use crate::wire::openai::{
     components as wire,
     operations::{chat::completions as chat_completions, models},

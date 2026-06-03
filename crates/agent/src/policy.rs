@@ -240,6 +240,97 @@ impl SandboxPolicy for NonInteractivePolicy {
     fn record(&self, _ctx: PolicyCtx<'_>, _outcome: RecordedOutcome) {}
 }
 
+// ---------------------------------------------------------------------------
+// permission mode 目录
+// ---------------------------------------------------------------------------
+
+/// 一个可被 ACP 客户端选择的权限模式条目。
+///
+/// `defect-agent` 不认识上层的 `SandboxMode`（那是 `defect-config` 的概念，
+/// 本 crate 是它的依赖底座、不能反向依赖）。装配方（CLI）把每个
+/// [`crate::policy::SandboxPolicy`] 连同一个稳定的 `id`、展示用 `name` /
+/// `description` 一起塞进来；本 crate 只在不透明条目上做"按 id 查表换 active
+/// policy"，与 ACP `session/set_mode` 的 `SessionMode` 一一对应。
+#[derive(Clone)]
+pub struct PolicyMode {
+    /// 稳定标识——ACP wire 上的 `mode_id`。约定用 kebab-case（如
+    /// `ask-writes`），与 `SandboxMode::as_str()` 对齐。
+    pub id: String,
+    /// 给客户端展示的人类可读名字。
+    pub name: String,
+    /// 可选描述，客户端 UI 展示用。
+    pub description: Option<String>,
+    /// 该模式对应的决策策略。`set_mode` 命中本条目时整体换成它。
+    pub policy: Arc<dyn SandboxPolicy>,
+}
+
+impl std::fmt::Debug for PolicyMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolicyMode")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("description", &self.description)
+            .finish_non_exhaustive()
+    }
+}
+
+/// 一组互斥的权限模式 + 当前选中项。映射到 ACP 的 `SessionModeState`。
+///
+/// 由装配方（CLI）一次性构造，随 [`crate::session::AgentCore`] 流入每个
+/// session。session 持有自己的副本（`current` 可独立切换），`set_mode` 在其上
+/// 按 id 查表换出对应 policy。
+#[derive(Debug, Clone)]
+pub struct ModeCatalog {
+    modes: Vec<PolicyMode>,
+    current: String,
+}
+
+impl ModeCatalog {
+    /// 构造目录。`current` 必须命中 `modes` 中某个 `id`，否则返回 `None`
+    /// （装配错误应 fail loud，不静默回落）。空目录也返回 `None`。
+    #[must_use]
+    pub fn new(modes: Vec<PolicyMode>, current: impl Into<String>) -> Option<Self> {
+        let current = current.into();
+        if modes.is_empty() || !modes.iter().any(|m| m.id == current) {
+            return None;
+        }
+        Some(Self { modes, current })
+    }
+
+    /// 当前选中模式的 id。
+    #[must_use]
+    pub fn current_id(&self) -> &str {
+        &self.current
+    }
+
+    /// 当前选中模式对应的 policy。
+    #[must_use]
+    pub fn current_policy(&self) -> Arc<dyn SandboxPolicy> {
+        self.modes
+            .iter()
+            .find(|m| m.id == self.current)
+            .map(|m| m.policy.clone())
+            // 不变量：`current` 恒命中某条目（构造时校验，set 时也校验）。
+            .expect("ModeCatalog current id must always resolve to a mode")
+    }
+
+    /// 全部可选模式（顺序即装配顺序）。
+    #[must_use]
+    pub fn modes(&self) -> &[PolicyMode] {
+        &self.modes
+    }
+
+    /// 切换当前模式。`id` 未命中任一条目时返回 `false`，`current` 不变。
+    pub fn set_current(&mut self, id: &str) -> bool {
+        if self.modes.iter().any(|m| m.id == id) {
+            self.current = id.to_string();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 const ALLOW_ONCE_ID: &str = "allow_once";
 const ALLOW_ALWAYS_ID: &str = "allow_always";
 const REJECT_ONCE_ID: &str = "reject_once";

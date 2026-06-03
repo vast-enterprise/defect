@@ -22,7 +22,7 @@ use futures::future::BoxFuture;
 use crate::error::BoxError;
 use crate::event::{AgentEvent, PermissionResolution};
 use crate::fs::FsBackend;
-use crate::llm::{Message, ModelCandidate, ModelInfo, ProviderError, ProviderInfo};
+use crate::llm::{Message, ModelCandidate, ModelInfo, ProviderError, ProviderInfo, ReasoningEffort};
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolSchema};
 
@@ -172,6 +172,17 @@ pub trait SessionObserver: Send + Sync {
     ) -> Result<(), BoxError>;
 }
 
+/// 一个可选权限模式的对外描述。`defect-acp` 用它构造 ACP `SessionMode`。
+///
+/// 是 [`crate::policy::PolicyMode`] 的"无 policy"投影——只暴露 id / 展示
+/// 字段，不泄露内部决策器。
+#[derive(Debug, Clone)]
+pub struct ModeDescriptor {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
 /// 单次会话。
 ///
 /// 所有方法都是 trait 对象友好（`&self` + `BoxFuture`）。`Arc<dyn Session>`
@@ -209,6 +220,32 @@ pub trait Session: Send + Sync {
     ///
     /// 当 provider 拉取模型列表失败，或请求的模型不存在时返回 [`ProviderError`]。
     fn set_model(&self, model_id: String) -> BoxFuture<'_, Result<(), ProviderError>>;
+
+    /// 当前生效的权限模式 id。未装配模式目录时返回 `None`。
+    ///
+    /// 映射到 ACP `SessionModeState::current_mode_id`。
+    fn current_mode(&self) -> Option<String>;
+
+    /// 本 session 可选的权限模式列表（顺序即装配顺序）。未装配模式目录时
+    /// 返回空。映射到 ACP `SessionModeState::available_modes`。
+    fn available_modes(&self) -> Vec<ModeDescriptor>;
+
+    /// 切换当前权限模式。后续 turn 生效，进行中的 turn 保持原 policy
+    /// （与 [`Self::set_model`] 同语义——run_turn 启动时快照 policy）。
+    ///
+    /// # Errors
+    ///
+    /// `mode_id` 未命中任一可选模式，或本 session 未装配模式目录时返回
+    /// [`AgentError::ModeNotFound`]。
+    fn set_mode(&self, mode_id: String) -> Result<(), AgentError>;
+
+    /// 当前的 `reasoning_effort` 等级（`None` = 未设置，沿用 provider 默认）。
+    /// 映射到 ACP thought-level 配置项的当前值。
+    fn current_reasoning_effort(&self) -> Option<ReasoningEffort>;
+
+    /// 设置 `reasoning_effort` 等级。`None` 清除覆盖（回落 provider 默认）。
+    /// 后续 turn 生效。不支持该概念的 provider 在装配请求时忽略。
+    fn set_reasoning_effort(&self, effort: Option<ReasoningEffort>);
 
     /// 订阅事件流。三个独立消费者（acp / storage / tracing）各自调一次，
     /// 互不影响——内部用 mpsc 配 fan-out 保证慢消费者只 backpressure
@@ -323,6 +360,10 @@ pub enum AgentError {
 
     #[error("session not found in storage: {0}")]
     SessionNotFound(SessionId),
+
+    /// `set_mode` 收到的 `mode_id` 不在该 session 的模式目录里（或目录未装配）。
+    #[error("permission mode not found: {0}")]
+    ModeNotFound(String),
 
     #[error("session restore failed: {0}")]
     Restore(#[source] BoxError),

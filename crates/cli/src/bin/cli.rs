@@ -25,7 +25,7 @@ use defect_cli::{
     mcp_servers::build_default_mcp_servers,
     observability,
     paths::default_sessions_root,
-    policy::build_policy,
+    policy::{build_mode_catalog, build_policy},
     providers::build_registry,
     tools::{
         build_process_tools, build_process_tools_with_subagents, filter_tools_by_allowlist,
@@ -184,10 +184,15 @@ async fn main() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("hook engine build failed: {e}"))?;
 
     // 3) 拼装 AgentCore，启 stdio ACP server
+    // 权限模式目录：暴露全部 4 个 SandboxMode 给 ACP 客户端，当前选中
+    // = 启动期解析出的 `sandbox_mode`。支持 `session/set_mode` 运行时切换。
+    let mode_catalog = build_mode_catalog(sandbox_mode);
+
     let mut builder = DefaultAgentCore::builder()
         .registry(registry)
         .process_tools(tools)
         .policy(policy)
+        .modes(mode_catalog)
         .observe_session(storage.clone())
         .session_loader(storage)
         .session_tool_factory(Arc::new(McpToolFactory::with_default_servers(

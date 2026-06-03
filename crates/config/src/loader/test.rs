@@ -130,16 +130,59 @@ models = ["gpt-4.1-mini", "gpt-4.1", "o4-mini"]
         loaded.effective.providers.openai.default_model.as_deref(),
         Some("gpt-4.1-mini")
     );
+    let model_ids: Vec<&str> = loaded
+        .effective
+        .providers
+        .openai
+        .models
+        .as_ref()
+        .expect("openai models present")
+        .iter()
+        .map(|m| m.id())
+        .collect();
+    assert_eq!(model_ids, vec!["gpt-4.1-mini", "gpt-4.1", "o4-mini"]);
+}
+
+/// `models` 接受裸字符串与 `{ id, name }` table 混用：前者展示名 `None`
+/// （UI fallback 到 id），后者带展示名。
+#[test]
+fn provider_models_accept_id_and_named_table() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[default]
+provider = "openai"
+
+[providers.openai]
+default_model = "gpt-4.1-mini"
+models = [
+    "gpt-4.1-mini",
+    { id = "gpt-4.1", name = "GPT 4.1" },
+]
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    let models = loaded
+        .effective
+        .providers
+        .openai
+        .models
+        .as_ref()
+        .expect("openai models present");
+
+    assert_eq!(models[0].id(), "gpt-4.1-mini");
+    assert_eq!(models[0].name(), None);
+    assert_eq!(models[1].id(), "gpt-4.1");
+    assert_eq!(models[1].name(), Some("GPT 4.1"));
+
+    // allowed_models 白名单仍只含 id（展示名不参与白名单匹配）。
     assert_eq!(
-        loaded.effective.providers.openai.models.as_deref(),
-        Some(
-            [
-                "gpt-4.1-mini".to_string(),
-                "gpt-4.1".to_string(),
-                "o4-mini".to_string(),
-            ]
-            .as_slice(),
-        )
+        loaded.effective.turn.allowed_models.as_deref(),
+        Some(["gpt-4.1-mini", "gpt-4.1"].map(String::from).as_slice())
     );
 }
 

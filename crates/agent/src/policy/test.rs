@@ -172,3 +172,68 @@ fn non_interactive_maps_ask_to_deny_passes_allow_deny() {
         PolicyDecision::Deny
     ));
 }
+
+#[test]
+fn mode_catalog_rejects_empty_or_unknown_current() {
+    // 空目录 → None。
+    assert!(ModeCatalog::new(vec![], "x").is_none());
+
+    // current 不命中任一条目 → None。
+    let modes = vec![PolicyMode {
+        id: "open".to_string(),
+        name: "Open".to_string(),
+        description: None,
+        policy: Arc::new(OpenPolicy),
+    }];
+    assert!(ModeCatalog::new(modes.clone(), "read-only").is_none());
+
+    // current 命中 → Some。
+    assert!(ModeCatalog::new(modes, "open").is_some());
+}
+
+#[test]
+fn mode_catalog_switches_active_policy() {
+    let cwd = PathBuf::from("/");
+    let args = json!({});
+
+    let mut catalog = ModeCatalog::new(
+        vec![
+            PolicyMode {
+                id: "open".to_string(),
+                name: "Open".to_string(),
+                description: None,
+                policy: Arc::new(OpenPolicy),
+            },
+            PolicyMode {
+                id: "deny-all".to_string(),
+                name: "Deny all".to_string(),
+                description: None,
+                policy: Arc::new(DenyAllPolicy),
+            },
+        ],
+        "open",
+    )
+    .expect("catalog");
+
+    assert_eq!(catalog.current_id(), "open");
+    assert!(matches!(
+        catalog
+            .current_policy()
+            .classify(ctx("t", SafetyClass::Mutating, &args, &cwd)),
+        PolicyDecision::Allow
+    ));
+
+    // 切到 deny-all：active policy 随之变。
+    assert!(catalog.set_current("deny-all"));
+    assert_eq!(catalog.current_id(), "deny-all");
+    assert!(matches!(
+        catalog
+            .current_policy()
+            .classify(ctx("t", SafetyClass::ReadOnly, &args, &cwd)),
+        PolicyDecision::Deny
+    ));
+
+    // 未知 id：set 失败，current 不变。
+    assert!(!catalog.set_current("bogus"));
+    assert_eq!(catalog.current_id(), "deny-all");
+}

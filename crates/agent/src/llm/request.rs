@@ -186,6 +186,31 @@ pub struct SamplingParams {
     pub top_k: Option<u32>,
     pub stop_sequences: Vec<String>,
     pub thinking: ThinkingConfig,
+    /// OpenAI 兼容协议的 `reasoning_effort` 等级。`Some(_)` 时 codec 直接
+    /// 写入 wire；`None` 时 codec 回退到从 [`Self::thinking`] 推导。
+    ///
+    /// 这是该值的**运行时权威表示**——能 per-session 切换（ACP
+    /// `session/set_config_option`，category=ThoughtLevel）。配置文件层另有
+    /// `defect_config::ReasoningEffort` 负责反序列化，装配时翻成本枚举填进
+    /// 初始 `SamplingParams`。不支持该概念的 provider 应忽略此字段。
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// OpenAI 兼容协议 `reasoning_effort` 的运行时等级枚举。
+///
+/// 与 OpenAI 官方 wire 枚举 1:1 对齐：`xhigh` 仅 `gpt-5.1-codex-max` 之后
+/// 支持，`none` 仅 `gpt-5.1` 之后支持；本层不区分模型，原样下发由上游
+/// 校验。`defect-llm` 的 wire codec import 本枚举做物化映射。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
 }
 
 /// 思考链配置。不支持思考链概念的 provider 应忽略 `Enabled` 的预算字段，

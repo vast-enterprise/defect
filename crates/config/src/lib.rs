@@ -25,8 +25,9 @@ pub use types::{
     HookCommandSpec, HookEntry, HookHandlerSpec, HookMatcher, HookPromptRender, HookPromptSpec,
     HookShellKind, HooksConfig, HttpClientConfig, HttpProxyConfig, HttpProxyMode,
     HttpProxySettings, LangfuseConfig, LiteLlmConfigFile, LoadConfigOptions, LoadedConfig,
-    McpConfig, McpRemoteServerConfig, McpServerConfig, McpStdioServerConfig, OpenAiConfigFile,
-    OtlpTracingConfig, PromptConfigFile, ProviderAwsConfigFile, ProviderCapabilityOverrides,
+    McpConfig, McpRemoteServerConfig, McpServerConfig, McpStdioServerConfig, ModelEntry,
+    OpenAiConfigFile, OtlpTracingConfig, PromptConfigFile, ProviderAwsConfigFile,
+    ProviderCapabilityOverrides,
     ProviderConfigFile, ProviderConfigs, ProviderKind, ProviderProtocol, ReasoningEffort,
     SandboxConfig, SandboxMode, SearchToolConfig, ToolsConfig, TracingConfig,
 };

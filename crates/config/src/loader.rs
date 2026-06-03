@@ -201,7 +201,12 @@ fn build_effective_config(
         });
     }
     let provider_model = provider_default_model(&provider, provider_config);
-    let provider_allowed_models = provider_config.and_then(|cfg| cfg.models.clone());
+    // allowed_models 白名单只需 id——展示名在 entry_models 那条链路另取。
+    let provider_allowed_models: Option<Vec<String>> = provider_config.and_then(|cfg| {
+        cfg.models
+            .as_ref()
+            .map(|models| models.iter().map(|m| m.id().to_string()).collect())
+    });
     let model = match config.default.model.or(provider_model) {
         Some(model) => model,
         None => {
@@ -481,7 +486,11 @@ fn provider_declared_models(section: &ProviderSection) -> Vec<String> {
         models.push(default_model.clone());
     }
     if let Some(section_models) = &section.models {
-        append_unique_models(&mut models, section_models.clone());
+        // allowed_models 白名单只关心 id——丢掉展示名。
+        append_unique_models(
+            &mut models,
+            section_models.iter().map(|m| m.id().to_string()).collect(),
+        );
     }
     models
 }

@@ -251,6 +251,9 @@ impl TurnRunner<'_> {
                     let http = self.http.clone();
                     let model = self.config.model.clone();
                     let background = self.background.clone();
+                    // 把本轮 active policy 传给工具——`spawn_agent` 据此让子 agent
+                    // 包父此刻的真实策略（反映 session 当前 permission mode）。
+                    let policy = self.policy.clone();
                     let name = tool.schema().name.clone();
                     let span = tracing::info_span!(
                         "tool_call",
@@ -283,6 +286,7 @@ impl TurnRunner<'_> {
                                 http,
                                 model,
                                 background,
+                                policy,
                             )
                             .await
                         }
@@ -513,6 +517,7 @@ async fn drive_tool_stream(
     http: Arc<dyn HttpClient>,
     model: String,
     background: Option<crate::session::BackgroundTasks>,
+    policy: Arc<dyn crate::policy::SandboxPolicy>,
 ) -> ToolResult {
     let mut ctx = ToolContext::new(
         &cwd,
@@ -521,7 +526,8 @@ async fn drive_tool_stream(
         shell.clone(),
         http.clone(),
         &model,
-    );
+    )
+    .with_policy(policy);
     if let Some(bg) = background {
         ctx = ctx.with_background(bg);
     }

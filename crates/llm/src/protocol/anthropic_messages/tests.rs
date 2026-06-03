@@ -163,6 +163,7 @@ fn encode_request_carries_sampling() {
             thinking: ThinkingConfig::Enabled {
                 budget_tokens: Some(2000),
             },
+            reasoning_effort: None,
         },
         hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };

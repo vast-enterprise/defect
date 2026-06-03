@@ -599,12 +599,54 @@ pub enum ProviderProtocol {
     OpenaiChat,
 }
 
+/// 一个模型候选的配置声明。
+///
+/// TOML 两种写法（[`Deserialize`] 经 `untagged` 接受）：
+/// - 纯字符串 `"gpt-5.5"`：只给 id，UI 展示名 fallback 到 id；
+/// - table `{ id = "...", name = "Opus 4.8" }`：给长 id 配一个短展示名。
+///
+/// `name` 翻进 [`defect_agent::llm::ModelInfo::display_name`]，ACP 把它作为
+/// 模型选择器选项的 label；`None` 时 wire 层 fallback 到 id。array-of-table
+/// 形态预留了 future 字段（context_window / deprecated 等）的扩展位。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum ModelEntry {
+    /// 纯 id（老写法）。
+    Id(String),
+    /// 带展示名的 table。
+    Detailed {
+        id: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+}
+
+impl ModelEntry {
+    /// 模型 id（两种形态都有）。
+    #[must_use]
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Id(id) => id,
+            Self::Detailed { id, .. } => id,
+        }
+    }
+
+    /// 可选展示名（仅 table 形态可能有）。
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Id(_) => None,
+            Self::Detailed { name, .. } => name.as_deref(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProviderConfigFile {
     pub protocol: Option<ProviderProtocol>,
     pub base_url: Option<String>,
     pub default_model: Option<String>,
-    pub models: Option<Vec<String>>,
+    pub models: Option<Vec<ModelEntry>>,
     pub display_name: Option<String>,
     pub api_key_env: Option<String>,
     pub organization: Option<String>,
@@ -880,7 +922,7 @@ pub(crate) struct ProviderSection {
     pub(crate) protocol: Option<ProviderProtocol>,
     pub(crate) base_url: Option<String>,
     pub(crate) default_model: Option<String>,
-    pub(crate) models: Option<Vec<String>>,
+    pub(crate) models: Option<Vec<ModelEntry>>,
     pub(crate) display_name: Option<String>,
     pub(crate) api_key_env: Option<String>,
     pub(crate) organization: Option<String>,

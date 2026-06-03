@@ -236,7 +236,9 @@ impl Tool for SpawnAgentTool {
         // 嵌套 TurnRunner 的所有借用都活在这个 async block 内，不外逃。
         let profiles = self.profiles.clone();
         let registry = self.registry.clone();
-        let policy = self.policy.clone();
+        // 优先用本 turn 快照的 active policy（ctx 注入）——它反映 session 当前
+        // permission mode；缺省（测试 / 未注入）才回退构造期捕获的 policy。
+        let policy = ctx.policy.clone().unwrap_or_else(|| self.policy.clone());
         let process_tools = self.process_tools.clone();
         let base_prompt = self.base_prompt.clone();
 
@@ -491,7 +493,7 @@ async fn run_subagent_core(
     });
 
     let permissions = PermissionGate::new();
-    let sub_policy = NonInteractivePolicy::new(policy);
+    let sub_policy: Arc<dyn SandboxPolicy> = Arc::new(NonInteractivePolicy::new(policy));
     // profile 自己声明的 hook 引擎；未声明 ⇒ NoopHookEngine（行为同改动前）。
     let noop = NoopHookEngine;
     let hooks: &dyn HookEngine = match &profile.hooks {
@@ -513,7 +515,7 @@ async fn run_subagent_core(
         history: &history,
         tools: &sub_tools,
         provider: provider.as_ref(),
-        policy: &sub_policy,
+        policy: sub_policy,
         events: events.clone(),
         permissions: &permissions,
         cancel: cancel.clone(),

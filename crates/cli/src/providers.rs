@@ -29,7 +29,7 @@ use defect_config::{
 #[cfg(any(feature = "provider-openai", feature = "provider-deepseek"))]
 use defect_config::ReasoningEffort as ConfigReasoningEffort;
 #[cfg(any(feature = "provider-openai", feature = "provider-deepseek"))]
-use defect_llm::protocol::openai_chat::ReasoningEffort as LlmReasoningEffort;
+use defect_agent::llm::ReasoningEffort as LlmReasoningEffort;
 #[cfg(feature = "provider-anthropic")]
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 #[cfg(feature = "provider-bedrock")]
@@ -337,40 +337,44 @@ fn entry_models(
     provider: Option<&ProviderConfigFile>,
     fallback_model: Option<&str>,
 ) -> Vec<ModelInfo> {
-    let mut ids = Vec::new();
+    let mut models: Vec<ModelInfo> = Vec::new();
     if let Some(provider) = provider {
+        // `default_model` 只有 id（裸字符串），无展示名。
         if let Some(default_model) = &provider.default_model {
-            ids.push(default_model.clone());
+            push_unique_model(&mut models, default_model, None);
         }
-        if let Some(models) = &provider.models {
-            append_unique_model_ids(&mut ids, models.iter().cloned());
+        if let Some(entries) = &provider.models {
+            for entry in entries {
+                push_unique_model(&mut models, entry.id(), entry.name());
+            }
         }
     }
-    if ids.is_empty()
+    if models.is_empty()
         && let Some(fallback_model) = fallback_model
     {
-        ids.push(fallback_model.to_string());
+        push_unique_model(&mut models, fallback_model, None);
     }
-    ids.into_iter().map(model_info_from_id).collect()
+    models
 }
 
-fn append_unique_model_ids(target: &mut Vec<String>, source: impl IntoIterator<Item = String>) {
-    for model in source {
-        if !target.iter().any(|existing| existing == &model) {
-            target.push(model);
+/// 按 id 去重地追加一个 [`ModelInfo`]。已存在同 id 时：若新声明带展示名而旧的
+/// 没有，用新的补上（让 `[[models]]` 里的 `name` 覆盖来自 `default_model` 的
+/// 裸 id 项）；否则保持原样。
+fn push_unique_model(models: &mut Vec<ModelInfo>, id: &str, name: Option<&str>) {
+    if let Some(existing) = models.iter_mut().find(|m| m.id == id) {
+        if existing.display_name.is_none() {
+            existing.display_name = name.map(str::to_string);
         }
+        return;
     }
-}
-
-fn model_info_from_id(id: String) -> ModelInfo {
-    ModelInfo {
-        id,
-        display_name: None,
+    models.push(ModelInfo {
+        id: id.to_string(),
+        display_name: name.map(str::to_string),
         context_window: None,
         max_output_tokens: None,
         deprecated: false,
         capabilities_overrides: ModelCapabilityOverrides::default(),
-    }
+    });
 }
 
 #[cfg(feature = "provider-openai")]
@@ -401,7 +405,13 @@ async fn build_bedrock_provider(
         ),
         base_url: provider.base_url,
         default_model: provider.default_model,
-        models: provider.models.unwrap_or_default(),
+        // Bedrock provider 的 model 列表只需 id；展示名在 entry_models 链路另取。
+        models: provider
+            .models
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.id().to_string())
+            .collect(),
         aws_profile: aws.profile,
         aws_region: aws.region,
     })

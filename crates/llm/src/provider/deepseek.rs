@@ -25,7 +25,8 @@ use tower::Service;
 
 use super::openai::{OpenAiConfig, OpenAiProvider};
 use crate::protocol::deepseek_chat;
-use crate::protocol::openai_chat::{ChatDialect, ReasoningEffort};
+use crate::protocol::openai_chat::ChatDialect;
+use defect_agent::llm::ReasoningEffort;
 use defect_http::HttpStackConfig;
 
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";

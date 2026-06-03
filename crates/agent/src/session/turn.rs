@@ -173,7 +173,10 @@ pub struct TurnRunner<'a> {
     pub history: &'a dyn History,
     pub tools: &'a dyn ToolRegistry,
     pub provider: &'a dyn LlmProvider,
-    pub policy: &'a dyn SandboxPolicy,
+    /// 本轮快照的 active policy。owned `Arc` 而非借用：它要随
+    /// [`crate::tool::ToolContext`] 流给 `spawn_agent`，子 agent 用
+    /// [`NonInteractivePolicy`] 包它——必须是父此刻的真实策略。
+    pub policy: Arc<dyn SandboxPolicy>,
     pub events: Arc<EventEmitter>,
     pub permissions: &'a PermissionGate,
     pub cancel: CancellationToken,

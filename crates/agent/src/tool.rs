@@ -181,6 +181,11 @@ pub struct ToolContext<'a> {
     /// [`crate::session::turn::TurnRunner`] 在驱动每个工具时按该工具的
     /// [`ToolCallId`] 注入；子 agent 嵌套 turn 不注入（不递归桥接）。
     pub subagent_bridge: Option<SubagentBridge>,
+    /// 本 turn 快照的 active sandbox policy。`spawn_agent` 用它做"子 agent 包
+    /// 父此刻的真实策略"——`session/set_mode` 切换后新起的 turn 把新策略经此
+    /// 传下去，子 agent 不会拿到陈旧的进程级默认。`None` 时 `spawn_agent`
+    /// 回退到构造期捕获的 policy（测试 / 未注入场景）。绝大多数工具忽略本字段。
+    pub policy: Option<Arc<dyn crate::policy::SandboxPolicy>>,
 }
 
 /// 把工具内部派生的子 turn 事件桥接回父 session 事件流所需的句柄。
@@ -217,7 +222,17 @@ impl<'a> ToolContext<'a> {
             current_model,
             background: None,
             subagent_bridge: None,
+            policy: None,
         }
+    }
+
+    /// 注入本 turn 快照的 active sandbox policy。顶层 turn 的工具驱动用它把
+    /// 父此刻的策略传给 `spawn_agent`；不调用则 `policy` 为 `None`（子 agent
+    /// 嵌套 / 测试），`spawn_agent` 回退到构造期捕获的 policy。
+    #[must_use]
+    pub fn with_policy(mut self, policy: Arc<dyn crate::policy::SandboxPolicy>) -> Self {
+        self.policy = Some(policy);
+        self
     }
 
     /// 注入 session 级后台任务句柄。顶层 turn 的工具驱动用它开启 `run_in_background`

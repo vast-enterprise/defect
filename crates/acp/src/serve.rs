@@ -9,15 +9,16 @@ use std::sync::{Arc, RwLock};
 
 use agent_client_protocol::schema::{
     AgentCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, ModelId,
-    ModelInfo as AcpModelInfo, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    SessionModelState, SetSessionModelRequest, SetSessionModelResponse,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelectOption, SessionConfigValueId, SessionId, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
 use defect_agent::fs::FsBackend;
-use defect_agent::llm::{ModelCandidate, ModelInfo, ProviderError, ProviderInfo};
+use defect_agent::llm::{ModelCandidate, ProviderError, ReasoningEffort};
 use defect_agent::session::{AgentCore, AgentError, Frontend, Session, TurnError, new_session_id};
 use defect_agent::shell::ShellBackend;
 use defect_tools::{LocalFsBackend, LocalShellBackend};
@@ -98,8 +99,9 @@ pub enum AcpError {
     #[error("load_session failed: {0}")]
     LoadSession(#[source] AgentError),
 
-    #[error("set_model failed: {0}")]
-    SetModel(#[source] ProviderError),
+    /// `session/set_config_option` 收到未知 config_id 或非法 value。
+    #[error("invalid session config option: {0}")]
+    InvalidConfigOption(String),
 
     /// `session/prompt` 跑 turn 时失败（重试用尽的 provider 错误 / 主循环
     /// invariant 被破坏）。
@@ -156,14 +158,11 @@ impl AcpError {
                 }))
             }
 
-            AcpError::SetModel(err) => {
-                let code = match err.kind {
-                    defect_agent::llm::ProviderErrorKind::ModelNotFound { .. } => {
-                        ErrorCode::InvalidParams
-                    }
-                    _ => ErrorCode::InternalError,
-                };
-                Wire::new(code.into(), err.to_string()).data(provider_error_data(&err))
+            AcpError::InvalidConfigOption(message) => {
+                Wire::new(ErrorCode::InvalidParams.into(), message.clone()).data(json!({
+                    "kind": "invalid_config_option",
+                    "message": message,
+                }))
             }
 
             AcpError::Turn(err) => {
@@ -237,83 +236,175 @@ fn provider_error_data(err: &ProviderError) -> serde_json::Value {
     data
 }
 
-async fn session_model_state(session: &dyn Session) -> Option<SessionModelState> {
-    let current_model = session.current_model().to_string();
-    let current_provider = session.provider_info();
-    let candidates = match session.list_candidates().await {
-        Ok(models) => models,
-        Err(err) => {
-            tracing::warn!(
-                provider = %current_provider.vendor,
-                model = %current_model,
-                error = %err,
-                "failed to load ACP session model candidates; falling back to current model only"
-            );
-            Vec::new()
-        }
-    };
+/// `session/set_config_option` 里 thought-level 选择器的稳定 config id。
+const THOUGHT_LEVEL_CONFIG_ID: &str = "reasoning_effort";
 
-    Some(SessionModelState::new(
-        ModelId::new(current_model.clone()),
-        acp_model_candidates(&current_provider, &current_model, candidates),
-    ))
+/// `session/set_config_option` 里权限模式选择器的稳定 config id。
+///
+/// Session Config Options 取代了旧的 Session Modes API：现代客户端（如 Zed
+/// ≥ 1.4）只读 `configOptions`、忽略响应里 deprecated 的 `modes` 字段。故权限
+/// 模式必须**也**作为一个 `category = Mode` 的 config option 暴露，否则客户端
+/// 不渲染模式选择器。`modes` 字段仍保留以兼容老客户端。
+const MODE_CONFIG_ID: &str = "permission_mode";
+
+/// `session/set_config_option` 里模型选择器的稳定 config id。
+///
+/// 与 [`MODE_CONFIG_ID`] 同理——现代客户端只读 config_options，故模型也必须
+/// 作为 `category = Model` 的 config option 暴露，否则不渲染模型选择器。响应里
+/// deprecated 的 `models` 字段仍保留以兼容老客户端。
+const MODEL_CONFIG_ID: &str = "model";
+
+/// thought-level 的 "不设置"（沿用 provider 默认）档位的 value id。
+/// 其余档位用 [`ReasoningEffort`] 的 wire token（`minimal` / `low` / …）。
+const REASONING_DEFAULT_VALUE: &str = "default";
+
+/// 把 ACP value id 解析成 [`ReasoningEffort`] 覆盖。`"default"` → `None`
+/// （清除覆盖）；其余按 wire token 匹配；未知 token 返回 `Err`。
+fn parse_reasoning_value(value: &str) -> Result<Option<ReasoningEffort>, ()> {
+    match value {
+        REASONING_DEFAULT_VALUE => Ok(None),
+        "none" => Ok(Some(ReasoningEffort::None)),
+        "minimal" => Ok(Some(ReasoningEffort::Minimal)),
+        "low" => Ok(Some(ReasoningEffort::Low)),
+        "medium" => Ok(Some(ReasoningEffort::Medium)),
+        "high" => Ok(Some(ReasoningEffort::High)),
+        "xhigh" => Ok(Some(ReasoningEffort::Xhigh)),
+        _ => Err(()),
+    }
 }
 
-fn acp_model_candidates(
-    current_provider: &ProviderInfo,
-    current_model: &str,
-    candidates: Vec<ModelCandidate>,
-) -> Vec<AcpModelInfo> {
-    let mut acp_candidates = candidates
-        .into_iter()
-        .map(|candidate| acp_model_info(&candidate.provider, candidate.model))
-        .collect::<Vec<_>>();
+/// 当前 [`ReasoningEffort`] 覆盖对应的 ACP value id。`None` → `"default"`。
+fn reasoning_value_id(effort: Option<ReasoningEffort>) -> &'static str {
+    match effort {
+        None => REASONING_DEFAULT_VALUE,
+        Some(ReasoningEffort::None) => "none",
+        Some(ReasoningEffort::Minimal) => "minimal",
+        Some(ReasoningEffort::Low) => "low",
+        Some(ReasoningEffort::Medium) => "medium",
+        Some(ReasoningEffort::High) => "high",
+        Some(ReasoningEffort::Xhigh) => "xhigh",
+    }
+}
 
-    let has_current_model = acp_candidates
-        .iter()
-        .any(|candidate| candidate.model_id.0.as_ref() == current_model);
-    if !has_current_model {
-        // 兜底：registry 没有声明当前 model（理论不会发生——session 启动
-        // 时 model 必须落在某个 entry 上）。仍然把当前 model 渲染出来以便
-        // 客户端 UI 不至于看到一个空 dropdown。
-        acp_candidates.insert(
-            0,
-            AcpModelInfo::new(current_model.to_string(), current_model.to_string()).description(
-                Some(provider_model_description(current_provider, None, false)),
-            ),
+/// 构造 session 的配置项列表（ACP `config_options`）。
+///
+/// 含三个 select：模型（`category = Model`）、权限模式（`category = Mode`，来自
+/// session 的模式目录）、thought-level（`category = ThoughtLevel`，6 档
+/// `reasoning_effort` + "default"）。
+///
+/// **三者都必须经 config option 暴露**：Session Config Options 取代了旧的
+/// Session Modes / Models API，现代客户端（如 Zed ≥ 1.4）只渲染 config_options
+/// 里的选择器、忽略响应里 deprecated 的 `models` / `modes` 字段（后两者仍保留
+/// 以兼容老客户端）。见 [`MODE_CONFIG_ID`] / [`MODEL_CONFIG_ID`]。
+async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOption> {
+    let mut out = Vec::new();
+
+    // 0) 模型选择器。候选来自 registry（不发网络请求，恒可解析）。拿不到候选
+    //    时退而只列当前模型，保证 dropdown 非空。
+    {
+        let current_model = session.current_model();
+        let candidates = session.list_candidates().await.unwrap_or_default();
+        let mut model_options = candidates
+            .into_iter()
+            .map(|c| {
+                let name = c.model.display_name.clone().unwrap_or_else(|| c.model.id.clone());
+                let description = model_option_description(&c);
+                SessionConfigSelectOption::new(SessionConfigValueId::new(c.model.id), name)
+                    .description(Some(description))
+            })
+            .collect::<Vec<_>>();
+        if !model_options
+            .iter()
+            .any(|o| o.value.0.as_ref() == current_model)
+        {
+            // 兜底：候选里没有当前模型（理论不该发生）。仍列出它，避免空 dropdown。
+            model_options.insert(
+                0,
+                SessionConfigSelectOption::new(
+                    SessionConfigValueId::new(current_model.clone()),
+                    current_model.clone(),
+                ),
+            );
+        }
+        out.push(
+            SessionConfigOption::select(
+                MODEL_CONFIG_ID,
+                "Model",
+                SessionConfigValueId::new(current_model),
+                model_options,
+            )
+            .category(Some(SessionConfigOptionCategory::Model))
+            .description(Some("本会话使用的模型".to_string())),
         );
     }
 
-    acp_candidates
-}
-
-fn acp_model_info(provider: &ProviderInfo, model: ModelInfo) -> AcpModelInfo {
-    let name = model
-        .display_name
-        .clone()
-        .unwrap_or_else(|| model.id.clone());
-    AcpModelInfo::new(model.id.clone(), name).description(Some(provider_model_description(
-        provider,
-        Some(&model),
-        model.deprecated,
-    )))
-}
-
-fn provider_model_description(
-    provider: &ProviderInfo,
-    model: Option<&ModelInfo>,
-    deprecated: bool,
-) -> String {
-    let mut parts = vec![format!("provider: {}", provider.display_name)];
-    if let Some(model) = model {
-        if let Some(context_window) = model.context_window {
-            parts.push(format!("context_window={context_window}"));
-        }
-        if let Some(max_output_tokens) = model.max_output_tokens {
-            parts.push(format!("max_output_tokens={max_output_tokens}"));
-        }
+    // 1) 权限模式选择器（仅当 session 装配了模式目录）。
+    if let Some(current_mode) = session.current_mode() {
+        let mode_options = session
+            .available_modes()
+            .into_iter()
+            .map(|m| {
+                let opt = SessionConfigSelectOption::new(SessionConfigValueId::new(m.id), m.name);
+                match m.description {
+                    Some(desc) => opt.description(Some(desc)),
+                    None => opt,
+                }
+            })
+            .collect::<Vec<_>>();
+        out.push(
+            SessionConfigOption::select(
+                MODE_CONFIG_ID,
+                "Permission mode",
+                SessionConfigValueId::new(current_mode),
+                mode_options,
+            )
+            .category(Some(SessionConfigOptionCategory::Mode))
+            .description(Some(
+                "工具调用的放行策略：只读 / 写前询问 / 全放行 / 全拒绝".to_string(),
+            )),
+        );
     }
-    if deprecated {
+
+    // 2) thought-level 选择器。顺序：default 在最前，其余按强度递增——与
+    //    OpenAI wire 枚举一致。
+    let current_effort = reasoning_value_id(session.current_reasoning_effort());
+    let effort_options = vec![
+        SessionConfigSelectOption::new(SessionConfigValueId::new(REASONING_DEFAULT_VALUE), "Default")
+            .description(Some("沿用 provider 默认，不下发 reasoning_effort".to_string())),
+        SessionConfigSelectOption::new(SessionConfigValueId::new("none"), "None"),
+        SessionConfigSelectOption::new(SessionConfigValueId::new("minimal"), "Minimal"),
+        SessionConfigSelectOption::new(SessionConfigValueId::new("low"), "Low"),
+        SessionConfigSelectOption::new(SessionConfigValueId::new("medium"), "Medium"),
+        SessionConfigSelectOption::new(SessionConfigValueId::new("high"), "High"),
+        SessionConfigSelectOption::new(SessionConfigValueId::new("xhigh"), "Extra high"),
+    ];
+    out.push(
+        SessionConfigOption::select(
+            THOUGHT_LEVEL_CONFIG_ID,
+            "Reasoning effort",
+            SessionConfigValueId::new(current_effort),
+            effort_options,
+        )
+        .category(Some(SessionConfigOptionCategory::ThoughtLevel))
+        .description(Some(
+            "OpenAI 兼容协议的思考强度等级；不支持的 provider 忽略".to_string(),
+        )),
+    );
+
+    out
+}
+
+/// 一个模型候选在 config-option 选择器里的描述串：`provider: X,
+/// context_window=…, max_output_tokens=…, deprecated`（缺的字段省略）。
+fn model_option_description(candidate: &ModelCandidate) -> String {
+    let mut parts = vec![format!("provider: {}", candidate.provider.display_name)];
+    if let Some(context_window) = candidate.model.context_window {
+        parts.push(format!("context_window={context_window}"));
+    }
+    if let Some(max_output_tokens) = candidate.model.max_output_tokens {
+        parts.push(format!("max_output_tokens={max_output_tokens}"));
+    }
+    if candidate.model.deprecated {
         parts.push("deprecated".to_string());
     }
     parts.join(", ")
@@ -449,7 +540,7 @@ impl ServeState {
             .await
         {
             Ok(session) => {
-                let models = session_model_state(session.as_ref()).await;
+                let config_options = session_config_options(session.as_ref()).await;
                 // 起持久 event pump：把本 session 全生命周期的事件（含 driver 自主续转
                 // turn）转成 session/update。§5.3。
                 spawn_session_pump(session.clone(), session.id().clone(), cx);
@@ -458,7 +549,9 @@ impl ServeState {
                     cwd = %cwd_for_log.display(),
                     "session created"
                 );
-                responder.respond(NewSessionResponse::new(session.id().clone()).models(models))
+                responder.respond(
+                    NewSessionResponse::new(session.id().clone()).config_options(config_options),
+                )
             }
             Err(err) => {
                 let acp_err = AcpError::CreateSession(err);
@@ -485,7 +578,7 @@ impl ServeState {
             .await
         {
             Ok(session) => {
-                let models = session_model_state(session.as_ref()).await;
+                let config_options = session_config_options(session.as_ref()).await;
                 for notification in replay_notifications(&session_id, &session.history_snapshot()) {
                     if let Err(err) = cx.send_notification(notification) {
                         tracing::warn!(?err, "failed to replay loaded session transcript");
@@ -498,7 +591,7 @@ impl ServeState {
                     cwd = %cwd_for_log.display(),
                     "session loaded"
                 );
-                responder.respond(LoadSessionResponse::new().models(models))
+                responder.respond(LoadSessionResponse::new().config_options(config_options))
             }
             Err(err) => {
                 let acp_err = match err {
@@ -513,10 +606,10 @@ impl ServeState {
         }
     }
 
-    async fn on_set_model(
+    async fn on_set_config_option(
         &self,
-        req: SetSessionModelRequest,
-        responder: agent_client_protocol::Responder<SetSessionModelResponse>,
+        req: SetSessionConfigOptionRequest,
+        responder: agent_client_protocol::Responder<SetSessionConfigOptionResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         let session_id = req.session_id.clone();
         let Some(session) = self.agent.session(&session_id) else {
@@ -528,15 +621,42 @@ impl ServeState {
             );
         };
 
-        match session.set_model(req.model_id.0.to_string()).await {
-            Ok(()) => responder.respond(SetSessionModelResponse::new()),
-            Err(err) => {
-                let acp_err = AcpError::SetModel(err);
-                tracing::warn!(
-                    session_id = %short_session_id(session.id()),
-                    error = %acp_err,
-                    "session/set_model failed"
-                );
+        let config_id = req.config_id.0.to_string();
+        let value = req.value.0.to_string();
+
+        // 设值成功后统一回带刷新过的完整配置项集合——协议要求
+        // SetSessionConfigOptionResponse 携带全量 config_options。
+        let invalid_value = || {
+            AcpError::InvalidConfigOption(format!(
+                "unknown value `{value}` for config option `{config_id}`"
+            ))
+        };
+        let apply_result = match config_id.as_str() {
+            // 模型：转调 session.set_model（与 deprecated `session/set_model`
+            // 同一后端）。未知 / 越界 model id → InvalidConfigOption。
+            MODEL_CONFIG_ID => session.set_model(value.clone()).await.map_err(|_| invalid_value()),
+            // 权限模式：转调 session.set_mode（与 deprecated `session/set_mode`
+            // 同一后端）。未知 mode id → InvalidConfigOption。
+            MODE_CONFIG_ID => session.set_mode(value.clone()).map_err(|_| invalid_value()),
+            // thought-level：解析成 ReasoningEffort 覆盖。
+            THOUGHT_LEVEL_CONFIG_ID => match parse_reasoning_value(&value) {
+                Ok(effort) => {
+                    session.set_reasoning_effort(effort);
+                    Ok(())
+                }
+                Err(()) => Err(invalid_value()),
+            },
+            _ => Err(AcpError::InvalidConfigOption(format!(
+                "unknown config option `{config_id}`"
+            ))),
+        };
+
+        match apply_result {
+            Ok(()) => responder.respond(SetSessionConfigOptionResponse::new(
+                session_config_options(session.as_ref()).await,
+            )),
+            Err(acp_err) => {
+                tracing::warn!(error = %acp_err, "session/set_config_option failed");
                 responder.respond_with_error(acp_err.into_wire_error())
             }
         }
@@ -634,8 +754,8 @@ where
         .on_receive_request(
             {
                 let state = state.clone();
-                async move |req: SetSessionModelRequest, responder, _cx| {
-                    state.on_set_model(req, responder).await
+                async move |req: SetSessionConfigOptionRequest, responder, _cx| {
+                    state.on_set_config_option(req, responder).await
                 }
             },
             agent_client_protocol::on_receive_request!(),

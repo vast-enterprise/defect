@@ -45,9 +45,9 @@ use crate::hooks::{HookCtx, HookEngine, NoopHookEngine};
 use crate::http::{HttpClient, NoopHttpClient};
 use crate::llm::{
     HostedCapabilities, LlmProvider, Message, ModelCandidate, ModelInfo, ProviderError,
-    ProviderErrorKind, ProviderInfo, ProviderRegistry,
+    ProviderErrorKind, ProviderInfo, ProviderRegistry, ReasoningEffort,
 };
-use crate::policy::{AskWritesPolicy, SandboxPolicy};
+use crate::policy::{AskWritesPolicy, ModeCatalog, SandboxPolicy};
 use crate::session::capabilities::{ResolvedSessionCapabilities, SessionCapabilitiesConfig};
 use crate::session::context::{Frontend, RunningContext};
 use crate::session::events::EventEmitter;
@@ -69,7 +69,12 @@ pub struct DefaultAgentCore {
     /// `docs/internal/session.md`。
     registry: Arc<ProviderRegistry>,
     process_tools: Arc<dyn ToolRegistry>,
+    /// 默认策略——**仅在未装配模式目录（`modes` 为 `None`）时**作为 session
+    /// 的 active policy。装配了目录时被目录的当前模式覆盖。
     policy: Arc<dyn SandboxPolicy>,
+    /// 权限模式目录模板。`Some` 时每个 session 各持一份克隆，可经
+    /// `session/set_mode` 独立切换；`None` 时退回 `policy` 单一不可切策略。
+    modes: Option<ModeCatalog>,
     config: RwLock<TurnConfig>,
     loader: Option<Arc<dyn SessionLoader>>,
     session_tools: Option<Arc<dyn SessionToolFactory>>,
@@ -106,6 +111,7 @@ pub struct DefaultAgentCoreBuilder {
     single_capabilities: SessionCapabilitiesConfig,
     process_tools: Option<Arc<dyn ToolRegistry>>,
     policy: Option<Arc<dyn SandboxPolicy>>,
+    modes: Option<ModeCatalog>,
     loader: Option<Arc<dyn SessionLoader>>,
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
@@ -145,6 +151,15 @@ impl DefaultAgentCoreBuilder {
 
     pub fn policy(mut self, policy: Arc<dyn SandboxPolicy>) -> Self {
         self.policy = Some(policy);
+        self
+    }
+
+    /// 注入权限模式目录。`Some` 时每个 session 暴露 ACP `SessionModeState`
+    /// 并支持 `session/set_mode`；目录的当前模式覆盖 [`Self::policy`] 作为
+    /// session 初始 active policy。不调用则 session 无模式切换、固定用
+    /// [`Self::policy`]（或默认 [`AskWritesPolicy`]）。
+    pub fn modes(mut self, modes: ModeCatalog) -> Self {
+        self.modes = Some(modes);
         self
     }
 
@@ -253,6 +268,7 @@ impl DefaultAgentCoreBuilder {
             policy: self
                 .policy
                 .unwrap_or_else(|| Arc::new(AskWritesPolicy::new()) as Arc<dyn SandboxPolicy>),
+            modes: self.modes,
             loader: self.loader,
             session_tools: self.session_tools,
             observers: self.observers,
@@ -319,6 +335,7 @@ impl AgentCore for DefaultAgentCore {
 
             // session 级取消令牌：driver loop 退出信号 + 后台任务取消令牌来源（同一个）。
             let session_cancel = CancellationToken::new();
+            let (policy, modes) = self.session_policy_state();
             let concrete = Arc::new(DefaultSession {
                 id: id.clone(),
                 cwd,
@@ -326,7 +343,8 @@ impl AgentCore for DefaultAgentCore {
                 tools: composite,
                 registry: self.registry.clone(),
                 provider_state: RwLock::new(initial),
-                policy: self.policy.clone(),
+                policy,
+                modes,
                 events: Arc::new(EventEmitter::new()),
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
@@ -411,6 +429,7 @@ impl AgentCore for DefaultAgentCore {
             };
 
             let session_cancel = CancellationToken::new();
+            let (policy, modes) = self.session_policy_state();
             let concrete = Arc::new(DefaultSession {
                 id: loaded.info.id.clone(),
                 cwd: loaded.info.cwd.clone(),
@@ -421,7 +440,8 @@ impl AgentCore for DefaultAgentCore {
                 )),
                 registry: self.registry.clone(),
                 provider_state: RwLock::new(initial),
-                policy: self.policy.clone(),
+                policy,
+                modes,
                 events: Arc::new(EventEmitter::new()),
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
@@ -493,6 +513,22 @@ impl DefaultAgentCore {
             hosted_capabilities: resolved.hosted,
         })
     }
+
+    /// 为一个新 session 派生初始 `(active policy, 模式目录)`。
+    ///
+    /// 装配了 [`ModeCatalog`] 时：每个 session 各持一份目录克隆（`current` 可
+    /// 独立切换），active policy = 目录当前模式的 policy。未装配时：active policy
+    /// = 进程级 `policy`，无目录（不可切）。
+    fn session_policy_state(&self) -> (RwLock<Arc<dyn SandboxPolicy>>, Option<Mutex<ModeCatalog>>) {
+        match &self.modes {
+            Some(catalog) => {
+                let catalog = catalog.clone();
+                let active = catalog.current_policy();
+                (RwLock::new(active), Some(Mutex::new(catalog)))
+            }
+            None => (RwLock::new(self.policy.clone()), None),
+        }
+    }
 }
 
 /// session 当前选中的真实 provider + 该 provider 的 hosted capability 解析结果。
@@ -516,7 +552,14 @@ pub struct DefaultSession {
     /// provider 时整体替换，保证 `(provider, hosted_capabilities)` 总是
     /// 自洽——不存在"provider 换了但 capabilities 没换"的中间态。
     provider_state: RwLock<SessionProviderState>,
-    policy: Arc<dyn SandboxPolicy>,
+    /// 当前生效的决策策略。`set_mode` 时原子替换（锁序：在 `modes` 之后）。
+    /// 用 `RwLock<Arc<_>>` 而非裸 `Arc`：per-session permission mode 需要运行时
+    /// 切换；`run_turn` 启动时 `.read().clone()` 快照一份给本轮，进行中的 turn
+    /// 不受后续切换影响（与 `set_model` 同语义）。
+    policy: RwLock<Arc<dyn SandboxPolicy>>,
+    /// 权限模式目录。`Some` 时支持 `session/set_mode` 与 ACP `SessionModeState`；
+    /// `None` 时 `policy` 固定不可切。`std::sync::Mutex` 仅短暂持锁、不跨 await。
+    modes: Option<Mutex<ModeCatalog>>,
     events: Arc<EventEmitter>,
     permissions: Arc<PermissionGate>,
     /// 单 turn 互斥 + cancel 通道。`Some(token)` 表示有 turn 在跑；
@@ -664,11 +707,20 @@ impl DefaultSession {
                 session_overlay.as_deref(),
             )
             .map_err(|err| TurnError::Internal(BoxError::new(err)))?;
+            // 快照本轮 active policy：进行中的 turn 用固定策略，期间
+            // `session/set_mode` 切换只影响后续 turn（与 set_model 同语义）。
+            // 用 owned `Arc` 而非借用——它要随 `ToolContext` 流给 `spawn_agent`，
+            // 让子 agent 包的是父此刻的真实策略而非陈旧的进程级默认。
+            let policy = self
+                .policy
+                .read()
+                .expect("DefaultSession policy rwlock poisoned")
+                .clone();
             let runner = TurnRunner {
                 history: self.history.as_ref(),
                 tools: self.tools.as_ref(),
                 provider: provider.as_ref(),
-                policy: self.policy.as_ref(),
+                policy,
                 events: self.events.clone(),
                 permissions: self.permissions.as_ref(),
                 cancel,
@@ -904,6 +956,66 @@ impl Session for DefaultSession {
             config.model = model_id;
             Ok(())
         })
+    }
+
+    fn current_mode(&self) -> Option<String> {
+        self.modes.as_ref().map(|m| {
+            m.lock()
+                .expect("DefaultSession modes mutex poisoned")
+                .current_id()
+                .to_string()
+        })
+    }
+
+    fn available_modes(&self) -> Vec<crate::session::ModeDescriptor> {
+        let Some(modes) = self.modes.as_ref() else {
+            return Vec::new();
+        };
+        modes
+            .lock()
+            .expect("DefaultSession modes mutex poisoned")
+            .modes()
+            .iter()
+            .map(|m| crate::session::ModeDescriptor {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                description: m.description.clone(),
+            })
+            .collect()
+    }
+
+    fn set_mode(&self, mode_id: String) -> Result<(), AgentError> {
+        let Some(modes) = self.modes.as_ref() else {
+            return Err(AgentError::ModeNotFound(mode_id));
+        };
+        // 锁序：modes 先于 policy（与 run_turn 的 read 路径无交叠——run_turn 只读
+        // policy）。两把锁都只短暂持有、不跨 await。
+        let mut catalog = modes.lock().expect("DefaultSession modes mutex poisoned");
+        if !catalog.set_current(&mode_id) {
+            return Err(AgentError::ModeNotFound(mode_id));
+        }
+        let active = catalog.current_policy();
+        *self
+            .policy
+            .write()
+            .expect("DefaultSession policy rwlock poisoned") = active;
+        Ok(())
+    }
+
+    fn current_reasoning_effort(&self) -> Option<ReasoningEffort> {
+        self.config
+            .read()
+            .expect("DefaultSession config rwlock poisoned")
+            .sampling
+            .reasoning_effort
+    }
+
+    fn set_reasoning_effort(&self, effort: Option<ReasoningEffort>) {
+        self.config
+            .write()
+            .expect("DefaultSession config rwlock poisoned")
+            .sampling
+            .reasoning_effort = effort;
     }
 
     fn subscribe(&self) -> EventStream {

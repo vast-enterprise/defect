@@ -18,8 +18,8 @@ use std::task::{Context, Poll};
 use defect_agent::error::BoxError;
 use defect_agent::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderError,
-    ProviderErrorKind, Role, StopReason, ThinkingConfig, ThinkingEcho, ToolChoice, ToolResultBody,
-    ToolResultContent, Usage,
+    ProviderErrorKind, ReasoningEffort, Role, StopReason, ThinkingConfig, ThinkingEcho, ToolChoice,
+    ToolResultBody, ToolResultContent, Usage,
 };
 use defect_agent::tool::ToolSchema;
 use futures::Stream;
@@ -149,7 +149,13 @@ pub fn encode_request_with_dialect(
                 req.sampling.stop_sequences.clone(),
             ))
         },
-        reasoning_effort: effort_override
+        // 优先级：per-session `sampling.reasoning_effort`（ACP thought-level，
+        // 运行时可切）> provider 级 `effort_override`（config 固定）> 从
+        // `thinking` 推导。前两者都直接物化等级；最后一档只能映射到 medium。
+        reasoning_effort: req
+            .sampling
+            .reasoning_effort
+            .or(effort_override)
             .map(encode_reasoning_effort)
             .or_else(|| encode_thinking(req.sampling.thinking)),
         tools: if req.tools.is_empty() {
@@ -523,21 +529,6 @@ fn encode_thinking(t: ThinkingConfig) -> Option<wire::ReasoningEffort> {
         )),
         _ => None,
     }
-}
-
-/// 公开等级枚举：与 OpenAI wire `reasoning_effort` 一一对应。
-///
-/// `xhigh` 仅 `gpt-5.1-codex-max` 之后支持；`none` 仅 `gpt-5.1` 之后支持。
-/// 协议层不区分模型，原样发送，由上游做模型校验。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningEffort {
-    None,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    Xhigh,
 }
 
 fn encode_reasoning_effort(effort: ReasoningEffort) -> wire::ReasoningEffort {

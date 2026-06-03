@@ -23,6 +23,6 @@ pub use model::{ModelInfo, ProtocolId, ProviderInfo};
 pub use provider::{LlmProvider, ProviderStream};
 pub use registry::{ModelCandidate, ProviderEntry, ProviderRegistry, ProviderRegistryError};
 pub use request::{
-    CompletionRequest, ImageData, Message, MessageContent, ProviderActivityKind, Role,
-    SamplingParams, ThinkingConfig, ToolChoice, ToolResultBody, ToolResultContent,
+    CompletionRequest, ImageData, Message, MessageContent, ProviderActivityKind, ReasoningEffort,
+    Role, SamplingParams, ThinkingConfig, ToolChoice, ToolResultBody, ToolResultContent,
 };
