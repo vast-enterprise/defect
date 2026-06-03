@@ -1,6 +1,0 @@
-//! 配置解析与合并。
-//!
-//! 加载用户配置、项目配置与命令行覆盖，输出 agent / provider / tool /
-//! sandbox 各层启动时所需的强类型配置对象。
-
-#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
