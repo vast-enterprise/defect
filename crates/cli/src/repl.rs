@@ -44,6 +44,115 @@ use owo_colors::OwoColorize;
 use tokio::io::{AsyncWriteExt, Stdout};
 use tokio::sync::mpsc;
 
+/// 开一个本机直跑的 session（fs/shell 都用 local 后端，frontend 标 Cli）。
+/// `resume = Some(id)` 恢复该 session，否则新建。供交互 REPL 与单轮
+/// [`run_once`] 共用。
+async fn open_session(
+    agent: &Arc<dyn AgentCore>,
+    cwd: &std::path::Path,
+    resume: Option<SessionId>,
+) -> anyhow::Result<Arc<dyn defect_agent::session::Session>> {
+    let fs = Arc::new(LocalFsBackend::new(cwd.to_path_buf()));
+    let shell = Arc::new(LocalShellBackend::new());
+    match resume {
+        Some(id) => agent
+            .load_session(id, fs, shell, Frontend::Cli)
+            .await
+            .map_err(|e| anyhow::anyhow!("load_session failed: {e}")),
+        None => {
+            let session_id = SessionId::new(new_session_id());
+            agent
+                .create_session(session_id, cwd.to_path_buf(), Vec::new(), fs, shell, Frontend::Cli)
+                .await
+                .map_err(|e| anyhow::anyhow!("create_session failed: {e}"))
+        }
+    }
+}
+
+/// 把恢复出的历史 transcript 朴素回放到终端（resume 时让用户看到上下文）。
+async fn replay_history(out: &mut Stdout, history: &[Message]) -> anyhow::Result<()> {
+    if history.is_empty() {
+        return Ok(());
+    }
+    write(
+        out,
+        &format!("— resumed {} message(s) —\n", history.len())
+            .dimmed()
+            .to_string(),
+    )
+    .await?;
+    for message in history {
+        render_history_message(out, message).await?;
+    }
+    Ok(())
+}
+
+/// 单轮无人值守模式 —— `defect --message <prompt>`。
+///
+/// 与交互 REPL 复用同一套渲染（[`LineEditor::render_event`]）：跑一个 turn，
+/// 把助手输出流式打到终端，turn 结束即返回（进程退出）。不读 stdin、不进 raw
+/// 模式、不排队后续行——只控制"跑完一轮就退出"的时机，输出形态与 REPL 一致。
+pub async fn run_once(
+    agent: Arc<dyn AgentCore>,
+    cwd: PathBuf,
+    prompt: String,
+    resume: Option<SessionId>,
+) -> anyhow::Result<()> {
+    let mut out = tokio::io::stdout();
+    let session = open_session(&agent, &cwd, resume).await?;
+
+    replay_history(&mut out, &session.history_snapshot()).await?;
+
+    // 循环外订阅一次，跨本轮排空（含 driver 自主续转 turn）——与交互 REPL /
+    // ACP event pump 同构。turn future 只给最终 StopReason，本轮内容经事件流推。
+    let mut events = session.subscribe();
+    let mut editor = LineEditor::new("› ".cyan().bold().to_string());
+
+    let prompt_blocks = vec![ContentBlock::Text(TextContent::new(prompt))];
+    let turn = session.run_turn(prompt_blocks);
+    tokio::pin!(turn);
+
+    let result = loop {
+        tokio::select! {
+            // biased + 先排事件：turn future 与事件流可能同时就绪（turn 飞快结束、
+            // 尾部 AssistantText/TurnEnded 已在 buffer 里）。先 poll 事件保证不漏渲染。
+            biased;
+            ev = events.next() => {
+                if let Some(ev) = ev {
+                    render_event_oneshot(&mut editor, &mut out, ev).await?;
+                }
+            }
+            r = &mut turn => break r,
+        }
+    };
+
+    // turn 已结束，但 buffer 里可能还有未 poll 的尾部事件——立即就绪的全排掉。
+    while let Some(Some(ev)) = events.next().now_or_never() {
+        render_event_oneshot(&mut editor, &mut out, ev).await?;
+    }
+    // 收尾：补换行让光标落到干净行。不重绘 prompt——单轮跑完即退出。
+    editor.finish_streaming(&mut out).await?;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("turn failed: {e}")),
+    }
+}
+
+/// 单轮模式下渲染一个事件：内容事件复用交互 REPL 的 [`LineEditor::render_event`]，
+/// 但**吞掉 `TurnEnded`**——它在交互态会触发 end_streaming 重绘 prompt（`› `），
+/// 单轮跑完即退出不需要那个尾巴；收尾换行由调用方的 finish_streaming 统一做。
+async fn render_event_oneshot(
+    editor: &mut LineEditor,
+    out: &mut Stdout,
+    event: AgentEvent,
+) -> anyhow::Result<()> {
+    if matches!(event, AgentEvent::TurnEnded { .. }) {
+        return Ok(());
+    }
+    editor.render_event(out, event).await
+}
+
 /// 跑一个交互 REPL，直到 stdin EOF（Ctrl-D）或读到 `:q` / `:quit` / `:exit`。
 ///
 /// `cwd` 是会话工作目录（本地 fs / shell 后端的根）。`resume = Some(id)` 时
@@ -55,22 +164,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let mut out = tokio::io::stdout();
 
-    // 本机直跑：fs/shell 都用 local 后端，frontend 标 Cli。
-    let fs = Arc::new(LocalFsBackend::new(cwd.clone()));
-    let shell = Arc::new(LocalShellBackend::new());
-    let session = match resume {
-        Some(id) => agent
-            .load_session(id, fs, shell, Frontend::Cli)
-            .await
-            .map_err(|e| anyhow::anyhow!("load_session failed: {e}"))?,
-        None => {
-            let session_id = SessionId::new(new_session_id());
-            agent
-                .create_session(session_id, cwd.clone(), Vec::new(), fs, shell, Frontend::Cli)
-                .await
-                .map_err(|e| anyhow::anyhow!("create_session failed: {e}"))?
-        }
-    };
+    let session = open_session(&agent, &cwd, resume).await?;
 
     let banner = format!(
         "defect repl — {} @ {}\n\
@@ -81,19 +175,7 @@ pub async fn run(
     write(&mut out, &banner.dimmed().to_string()).await?;
 
     // resume：把恢复出的历史 transcript 朴素回放到终端，让用户看到上下文。
-    let history = session.history_snapshot();
-    if !history.is_empty() {
-        write(
-            &mut out,
-            &format!("— resumed {} message(s) —\n", history.len())
-                .dimmed()
-                .to_string(),
-        )
-        .await?;
-        for message in &history {
-            render_history_message(&mut out, message).await?;
-        }
-    }
+    replay_history(&mut out, &session.history_snapshot()).await?;
 
     // 持久订阅：循环外订阅**一次**，跨所有 turn 排空——含 session driver 自发的
     // 自主续转 turn（后台 subagent 完成后消化结果那一轮）。这是与 ACP
@@ -587,6 +669,17 @@ impl LineEditor {
             self.streaming = false;
             self.redraw(out).await?;
         }
+        Ok(())
+    }
+
+    /// 单轮模式收尾：补换行让光标落到干净行，但**不重绘 prompt**（跑完即退出，
+    /// 没有下一行输入）。流式态与空闲态都安全调用。
+    async fn finish_streaming(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
+        if self.streaming && !self.at_line_start {
+            write(out, if self.tty { "\r\n" } else { "\n" }).await?;
+        }
+        self.streaming = false;
+        out.flush().await?;
         Ok(())
     }
 
