@@ -90,6 +90,9 @@ pub struct DefaultAgentCore {
     /// matcher（`docs/internal/hooks.md` §5）。CLI 入口装配；不显式注入时走
     /// [`NoopHookEngine`]，等价"未配置 hook = 主循环不变"。
     hook_engine: Arc<dyn HookEngine>,
+    /// 后台任务进度视图配置。所有 session 共享同一份（与进程级工具配置同档）。
+    /// 每个 session 建 `BackgroundTasks` 时传入。
+    background_progress: crate::session::BackgroundProgressConfig,
     sessions: DashMap<SessionId, Arc<dyn Session>>,
 }
 
@@ -118,6 +121,9 @@ pub struct DefaultAgentCoreBuilder {
     http: Option<Arc<dyn HttpClient>>,
     hook_engine: Option<Arc<dyn HookEngine>>,
     config: TurnConfig,
+    /// 后台任务进度视图配置（环容量 / 正文上限）。每个 session 的 `BackgroundTasks`
+    /// 据此建进度环。未设置 ⇒ [`BackgroundProgressConfig::default`]（鸟瞰、不灌正文）。
+    background_progress: crate::session::BackgroundProgressConfig,
 }
 
 impl DefaultAgentCoreBuilder {
@@ -180,6 +186,17 @@ impl DefaultAgentCoreBuilder {
 
     pub fn config(mut self, config: TurnConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// 设置后台任务进度视图配置（进度环容量 / 单 block 正文字符上限）。未调用时
+    /// 用默认（环 64、正文上限 0 = 只给摘要/元信息，不灌子 turn 正文）。CLI 装配期
+    /// 从 `[tools.background]` 投影注入。
+    pub fn background_progress(
+        mut self,
+        config: crate::session::BackgroundProgressConfig,
+    ) -> Self {
+        self.background_progress = config;
         self
     }
 
@@ -279,6 +296,7 @@ impl DefaultAgentCoreBuilder {
                 .hook_engine
                 .unwrap_or_else(|| Arc::new(NoopHookEngine) as Arc<dyn HookEngine>),
             config: RwLock::new(self.config),
+            background_progress: self.background_progress,
             sessions: DashMap::new(),
         }
     }
@@ -348,7 +366,10 @@ impl AgentCore for DefaultAgentCore {
                 events: Arc::new(EventEmitter::new()),
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
-                background: crate::session::BackgroundTasks::new(session_cancel.clone()),
+                background: crate::session::BackgroundTasks::new(
+                    session_cancel.clone(),
+                    self.background_progress,
+                ),
                 compaction_slot: crate::session::CompactionSlot::new(),
                 turn_freed: Arc::new(tokio::sync::Notify::new()),
                 session_cancel,
@@ -446,7 +467,10 @@ impl AgentCore for DefaultAgentCore {
                 events: Arc::new(EventEmitter::new()),
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
-                background: crate::session::BackgroundTasks::new(session_cancel.clone()),
+                background: crate::session::BackgroundTasks::new(
+                    session_cancel.clone(),
+                    self.background_progress,
+                ),
                 compaction_slot: crate::session::CompactionSlot::new(),
                 turn_freed: Arc::new(tokio::sync::Notify::new()),
                 session_cancel,

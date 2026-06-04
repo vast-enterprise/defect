@@ -1145,6 +1145,41 @@ fn tools_fetch_defaults_when_absent() {
 }
 
 #[test]
+fn loads_tools_background_section_into_effective_config() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[tools.background]
+ring_cap = 16
+block_text_limit = 200
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    let bg = &loaded.effective.tools.background;
+    assert_eq!(bg.ring_cap, 16);
+    assert_eq!(bg.block_text_limit, 200);
+}
+
+#[test]
+fn tools_background_defaults_when_absent() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    let bg = &loaded.effective.tools.background;
+    // 默认：环 64、正文上限 0（鸟瞰、不灌子 turn 正文）。
+    assert_eq!(bg.ring_cap, 64);
+    assert_eq!(bg.block_text_limit, 0);
+}
+
+#[test]
 fn arrays_replace_instead_of_append() {
     let mut base = toml::from_str::<toml::Value>(
         r#"

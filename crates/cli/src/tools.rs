@@ -14,7 +14,10 @@ use defect_agent::hooks::builtin::BuiltinRegistry;
 use defect_agent::llm::ProviderRegistry;
 use defect_agent::policy::SandboxPolicy;
 use defect_agent::session::{CompositeRegistry, StaticToolRegistry, ToolRegistry};
-use defect_agent::tool::{SkillEntry, SkillTool, SpawnAgentTool, SubagentProfile};
+use defect_agent::tool::{
+    CancelBackgroundTaskTool, InspectBackgroundTaskTool, SkillEntry, SkillTool, SpawnAgentTool,
+    SubagentProfile,
+};
 use defect_config::{LoadedConfig, ProfileSpec, SkillSpec};
 use defect_tools::{BashTool, EditFileTool, FetchTool, ReadFileTool, SearchTool, WriteFileTool};
 
@@ -153,9 +156,11 @@ pub fn project_skills(specs: &BTreeMap<String, SkillSpec>) -> BTreeMap<String, S
 /// （发现到任意 profile 时）与 `skill`（发现到任意 skill 时）放进一份 overlay
 /// registry，用 [`CompositeRegistry`] 叠在 base 之上。
 ///
-/// - `spawn_agent` 持有的"裁子集来源"是 **base 工具集**（不含这两个 overlay
+/// - `spawn_agent` 持有的"裁子集来源"是 **base 工具集**（不含这些 overlay
 ///   工具），所以子 agent 结构性拿不到 spawn_agent——禁递归；也拿不到 skill
-///   （skill 是顶层 agent 的能力，子 agent 走自己的 profile prompt）。
+///   （skill 是顶层 agent 的能力，子 agent 走自己的 profile prompt）；同样拿不到
+///   `inspect_background_task` / `cancel_background_task`（后台任务表是顶层 session
+///   的，子 agent 嵌套 turn 的 `ToolContext::background` 为 `None`）。
 /// - profile 与 skill 都空时不叠 overlay，返回纯 base。
 ///
 /// `base_prompt` 继承给子 agent（"你是会用工具的 agent"那段底座）；profile
@@ -197,6 +202,11 @@ pub fn build_process_tools_with_subagents(
             base_prompt,
         );
         overlay = overlay.insert(Arc::new(spawn));
+        // 后台任务控制面：查进度 / 提前中断。与 spawn_agent 同档——只有能派生后台
+        // subagent（has_profiles）时才有意义，且同样只叠进 overlay、不进子 agent 的
+        // 裁子集来源，故子 agent 结构性够不着（与禁递归同思路）。
+        overlay = overlay.insert(Arc::new(InspectBackgroundTaskTool::new()));
+        overlay = overlay.insert(Arc::new(CancelBackgroundTaskTool::new()));
     }
     if has_skills {
         let skill = SkillTool::new(Arc::new(skills.clone()));

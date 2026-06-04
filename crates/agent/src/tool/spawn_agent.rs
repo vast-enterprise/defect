@@ -294,11 +294,16 @@ impl Tool for SpawnAgentTool {
                     // projector 据"tool span 是否还在表里"天然区分前台(嵌套)/后台(相邻)。
                     // bridge 的 parent_events 是 session 级 EventEmitter，后台任务跑时仍活着。
                     bridge,
+                    // 后台路径才喂进度环——sink 在 spawn 闭包里拿到后注入（见下）。
+                    progress: None,
                 };
                 // spawn 给任务 mint 一个 session 级子 token——任务的取消生命周期独立于
-                // 发起它的 turn，turn 结束不会杀掉它。
+                // 发起它的 turn，turn 结束不会杀掉它。同时拿到进度 sink，把子 turn 的
+                // "最近几个 block" 喂进任务进度环，供主 agent 经 inspect_background_task 查看。
                 let label_for_log = parsed.profile.clone();
-                let task_id = bg.spawn(label, move |task_cancel| async move {
+                let task_id = bg.spawn(label, move |task_cancel, progress| async move {
+                    let mut deps = deps;
+                    deps.progress = Some(progress);
                     match run_subagent_core(parsed, deps, task_cancel).await {
                         Ok(answer) => crate::session::BackgroundResult::Completed(answer),
                         Err(err) => {
@@ -344,6 +349,8 @@ impl Tool for SpawnAgentTool {
                 // 同步路径：父 spawn_agent tool span 全程张开（阻塞等子 turn），
                 // 子事件可嵌套其下。
                 bridge,
+                // 同步路径无后台任务、无进度环可喂。
+                progress: None,
             };
             match run_subagent_core(parsed, deps, turn_cancel).await {
                 Ok(answer) => {
@@ -378,6 +385,10 @@ struct SubagentDeps {
     parent_model: String,
     /// subagent 事件桥：`Some` 时把子 turn 事件嵌套回父 trace。仅同步路径设置。
     bridge: Option<crate::tool::SubagentBridge>,
+    /// 进度环 sink：`Some` 时把子 turn 的"最近几个 block"流式喂进发起它的后台任务
+    /// 的进度环，供主 agent 经 `inspect_background_task` 查看。仅后台路径设置——同步
+    /// 路径父 spawn_agent 调用全程阻塞，没有"边跑边查"的需求。
+    progress: Option<crate::session::ProgressSink>,
 }
 
 /// 从原始 args 里尽力取 profile 名（仅供后台启动确认消息用，失败回退占位符）。
@@ -410,6 +421,7 @@ async fn run_subagent_core(
         http,
         parent_model,
         bridge,
+        progress,
     } = deps;
 
     let Some(profile) = profiles.get(&parsed.profile) else {
@@ -492,6 +504,21 @@ async fn run_subagent_core(
         })
     });
 
+    // 进度环 forwarder：与 bridge_task 同款——订阅子 emitter，把"最近几个 block"
+    // （assistant 文本 / 思考 / 工具调用起止）映射成 ProgressBlock 喂进任务进度环，供
+    // 主 agent 经 inspect_background_task 查看。仅后台路径设 `progress`（同步路径父调用
+    // 全程阻塞，无"边跑边查"需求）。与桥接 task 一样靠 `events` drop 后子流结束自然退出。
+    let progress_task = progress.map(|sink| {
+        let mut sub_events = events.subscribe();
+        tokio::spawn(async move {
+            while let Some(ev) = sub_events.next().await {
+                if let Some((kind, text)) = progress_block_of(&ev) {
+                    sink.push(kind, text);
+                }
+            }
+        })
+    });
+
     let permissions = PermissionGate::new();
     let sub_policy: Arc<dyn SandboxPolicy> = Arc::new(NonInteractivePolicy::new(policy));
     // profile 自己声明的 hook 引擎；未声明 ⇒ NoopHookEngine（行为同改动前）。
@@ -554,6 +581,9 @@ async fn run_subagent_core(
     if let Some(task) = bridge_task {
         let _ = task.await;
     }
+    if let Some(task) = progress_task {
+        let _ = task.await;
+    }
 
     if let Err(err) = run_result {
         return Err(ToolError::Execution(BoxError::new(io_err(format!(
@@ -563,6 +593,39 @@ async fn run_subagent_core(
 
     // 取最后一条 assistant 消息的文本作为结果。
     Ok(last_assistant_text(&history.snapshot()))
+}
+
+/// 把一个子 turn 事件映射成进度环里的一个 block（类别 + 文本摘要）。
+///
+/// 只挑"最近几个 block"语义下有意义的几类：assistant 文本 / 思考增量、工具调用起止。
+/// 其余事件（turn 边界、LLM 调用、策略决策等）返回 `None`，不进环——保持环里全是
+/// 对"这个 subagent 此刻在干嘛"有信息量的条目。
+fn progress_block_of(ev: &AgentEvent) -> Option<(crate::session::ProgressKind, String)> {
+    use crate::session::ProgressKind;
+    let block_text = |c: &ContentBlock| match c {
+        ContentBlock::Text(t) => Some(t.text.clone()),
+        _ => None,
+    };
+    match ev {
+        AgentEvent::AssistantText { content } => {
+            block_text(content).map(|t| (ProgressKind::AssistantText, t))
+        }
+        AgentEvent::AssistantThought { content } => {
+            block_text(content).map(|t| (ProgressKind::Thought, t))
+        }
+        AgentEvent::ToolCallStarted { name, fields, .. } => {
+            let title = fields.title.clone().unwrap_or_else(|| name.clone());
+            Some((ProgressKind::ToolStart, title))
+        }
+        AgentEvent::ToolCallFinished { fields, .. } => {
+            let title = fields
+                .title
+                .clone()
+                .unwrap_or_else(|| "tool call finished".to_string());
+            Some((ProgressKind::ToolFinish, title))
+        }
+        _ => None,
+    }
 }
 
 /// 从历史里取**最后一条** [`Role::Assistant`] 消息，拼接其所有 `Text` 片段

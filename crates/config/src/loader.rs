@@ -23,7 +23,7 @@ use crate::types::{
     ProviderKind, ProviderSection, SandboxConfig, SandboxMode, SearchToolConfig, ToolsConfig,
     TracingConfig, USER_CONFIG_RELATIVE,
 };
-use defect_agent::session::WebSearchCapabilityConfig;
+use defect_agent::session::{BackgroundProgressConfig, WebSearchCapabilityConfig};
 
 /// 加载并合并 `defect` 的有效配置。
 ///
@@ -348,6 +348,18 @@ fn build_effective_config(
         })
         .unwrap_or(search_default);
 
+    let background_default = BackgroundProgressConfig::default();
+    let background = config
+        .tools
+        .background
+        .map(|cfg| BackgroundProgressConfig {
+            ring_cap: cfg.ring_cap.unwrap_or(background_default.ring_cap),
+            block_text_limit: cfg
+                .block_text_limit
+                .unwrap_or(background_default.block_text_limit),
+        })
+        .unwrap_or(background_default);
+
     Ok(EffectiveConfig {
         cli: CliConfig { provider, model },
         turn,
@@ -401,6 +413,7 @@ fn build_effective_config(
                 .unwrap_or_default(),
             fetch,
             search,
+            background,
         },
         sandbox: SandboxConfig {
             mode: config.sandbox.mode.unwrap_or(SandboxMode::AskWrites),

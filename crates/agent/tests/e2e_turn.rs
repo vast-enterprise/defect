@@ -1213,7 +1213,7 @@ impl Tool for BgSpawnTool {
             let mut fields = ToolCallUpdateFields::default();
             let text = match bg {
                 Some(bg) => {
-                    let id = bg.spawn("worker".to_string(), |_cancel| async move {
+                    let id = bg.spawn("worker".to_string(), |_cancel, _progress| async move {
                         defect_agent::session::BackgroundResult::Completed(
                             "THE-BACKGROUND-ANSWER".to_string(),
                         )
