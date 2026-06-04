@@ -3,7 +3,9 @@ use std::fmt;
 use std::path::PathBuf;
 
 use defect_agent::error::BoxError;
-use defect_agent::session::{SessionCapabilitiesConfig, TurnConfig, WebSearchCapabilityConfig};
+use defect_agent::session::{
+    BackgroundProgressConfig, SessionCapabilitiesConfig, TurnConfig, WebSearchCapabilityConfig,
+};
 use serde::{Deserialize, Serialize};
 use toml::Value as TomlValue;
 
@@ -458,6 +460,10 @@ pub struct ToolsConfig {
     /// 与 `[capabilities.web_search]` 相互独立，由 `enabled` 单独决定是否注册。
     /// 详见 `docs/internal/tools-search.md`。
     pub search: SearchToolConfig,
+    /// `[tools.background]` 段。后台 subagent 进度视图配置（进度环容量 / 单 block
+    /// 正文字符上限）——主 agent 用 `inspect_background_task` 看到的"最近几个 block"。
+    /// 真相源在 agent 侧（[`BackgroundProgressConfig`]），这里直接复用。
+    pub background: BackgroundProgressConfig,
 }
 
 /// 本地 `fetch` 工具的配置。详见 `docs/internal/tools-fetch.md` §7。
@@ -950,6 +956,17 @@ pub(crate) struct ToolsSection {
     /// `[tools.search]`：本地 `search` tool（grep/glob）参数。是否注册仅
     /// 取决于 `enabled`，与 `[capabilities.web_search]` 完全独立。
     pub(crate) search: Option<SearchToolSection>,
+    /// `[tools.background]`：后台 subagent 进度视图（环容量 / 正文上限）。
+    pub(crate) background: Option<BackgroundToolSection>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BackgroundToolSection {
+    /// 每个后台任务进度环的容量（block 数）。缺省 64。
+    pub(crate) ring_cap: Option<usize>,
+    /// 单 block 自由正文（assistant/thought）的字符上限。缺省 0 = 只留摘要/元信息。
+    pub(crate) block_text_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

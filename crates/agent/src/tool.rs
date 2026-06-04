@@ -32,8 +32,10 @@ use crate::http::HttpClient;
 use crate::session::EventEmitter;
 use crate::shell::ShellBackend;
 
+mod background_tasks;
 mod skill;
 mod spawn_agent;
+pub use background_tasks::{CancelBackgroundTaskTool, InspectBackgroundTaskTool};
 pub use skill::{SkillEntry, SkillTool, SkillTriggers};
 pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
 

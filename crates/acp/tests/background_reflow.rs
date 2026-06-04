@@ -186,7 +186,7 @@ impl Tool for BgTool {
             let mut fields = ToolCallUpdateFields::default();
             let text = match bg {
                 Some(bg) => {
-                    bg.spawn("worker".to_string(), |_cancel| async move {
+                    bg.spawn("worker".to_string(), |_cancel, _progress| async move {
                         defect_agent::session::BackgroundResult::Completed(MARKER.to_string())
                     });
                     "started background task".to_string()

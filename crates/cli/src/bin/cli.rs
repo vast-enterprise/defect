@@ -199,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
             build_default_mcp_servers(&config),
         )))
         .config(turn_config)
+        .background_progress(config.effective.tools.background)
         .http(http_client)
         .hook_engine(hook_engine);
     if let Some(langfuse) = langfuse {
