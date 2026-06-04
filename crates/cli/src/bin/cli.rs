@@ -11,6 +11,7 @@
 use std::env;
 use std::sync::Arc;
 
+use agent_client_protocol_schema::SessionId;
 use clap::Parser;
 use defect_agent::hooks::builtin::BuiltinRegistry;
 use defect_agent::session::{AgentCore, DefaultAgentCore};
@@ -24,7 +25,7 @@ use defect_cli::{
     http_stack::build_http_stack_config,
     mcp_servers::build_default_mcp_servers,
     observability,
-    paths::default_sessions_root,
+    paths::{default_sessions_root, local_sessions_root},
     policy::{build_mode_catalog, build_policy},
     providers::build_registry,
     tools::{
@@ -42,8 +43,9 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = CliArgs::parse();
     let load_opts = LoadConfigOptions {
-        cwd,
+        cwd: cwd.clone(),
         cli: cli.to_overrides()?,
+        local: cli.local,
         ..LoadConfigOptions::default()
     };
     let config = defect_config::load_config(load_opts.clone())
@@ -163,7 +165,34 @@ async fn main() -> anyhow::Result<()> {
         )
         .map_err(|e| anyhow::anyhow!("subagent hook engine build failed: {e}"))?
     };
-    let storage = Arc::new(StorageObserver::new(default_sessions_root()?));
+    let sessions_root = if cli.local {
+        local_sessions_root(&cwd)
+    } else {
+        default_sessions_root()?
+    };
+    let storage = Arc::new(StorageObserver::new(sessions_root));
+
+    // 解析 `--resume` 目标 session id：带 id 用其；裸 `--resume` 取当前 cwd
+    // 最近活跃的 session。找不到 ⇒ hard fail（用户显式要求 resume，静默退化成
+    // 新会话会让人困惑）。
+    let resume_session_id = match &cli.resume {
+        None => None,
+        Some(Some(id)) => Some(SessionId::new(id.clone())),
+        Some(None) => Some(
+            storage
+                .latest_session_id_for_cwd(&cwd)
+                .map_err(|e| anyhow::anyhow!("failed to scan sessions for resume: {e}"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no previous session found for {} to --resume",
+                        cwd.display()
+                    )
+                })?,
+        ),
+    };
+    if let Some(id) = &resume_session_id {
+        tracing::info!(session_id = %id.0, "resuming session");
+    }
 
     // 可观测性：langfuse 上报（默认关闭，需 [tracing.langfuse].enabled + key）。
     let langfuse = observability::build_langfuse_observer(
@@ -209,10 +238,12 @@ async fn main() -> anyhow::Result<()> {
     let agent = Arc::new(agent) as Arc<dyn AgentCore>;
 
     // `--repl`：进程内最小交互 REPL（feature-gated）。否则走 stdio ACP server。
+    // `--resume` 目标在两条路径上语义不同：REPL 直接 load_session；ACP 把它交给
+    // serve 层，在首个 `session/new` 时透明替换成 load（ACP 客户端驱动生命周期）。
     if cli.repl {
-        run_repl(agent).await?;
+        run_repl(agent, resume_session_id).await?;
     } else {
-        defect_acp::serve(agent).await?;
+        defect_acp::serve_with_resume(agent, resume_session_id).await?;
     }
     Ok(())
 }
@@ -220,13 +251,19 @@ async fn main() -> anyhow::Result<()> {
 /// 启动 REPL。`repl` feature 开启时跑真正的 REPL；裁掉时这个 flag 仍能
 /// 解析，但运行期 hard fail 提示重新带 feature 编译——不静默退化成 ACP。
 #[cfg(feature = "repl")]
-async fn run_repl(agent: Arc<dyn AgentCore>) -> anyhow::Result<()> {
+async fn run_repl(
+    agent: Arc<dyn AgentCore>,
+    resume: Option<SessionId>,
+) -> anyhow::Result<()> {
     let cwd = env::current_dir()?;
-    defect_cli::repl::run(agent, cwd).await
+    defect_cli::repl::run(agent, cwd, resume).await
 }
 
 #[cfg(not(feature = "repl"))]
-async fn run_repl(_agent: Arc<dyn AgentCore>) -> anyhow::Result<()> {
+async fn run_repl(
+    _agent: Arc<dyn AgentCore>,
+    _resume: Option<SessionId>,
+) -> anyhow::Result<()> {
     anyhow::bail!(
         "this binary was built without the `repl` feature; \
          rebuild with `--features repl` (on by default) to use --repl"

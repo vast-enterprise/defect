@@ -730,6 +730,10 @@ fn strip_quotes(s: &str) -> &str {
 /// `resolve_user_agents_dir`、[`crate::skills`] 同源优先级，**找不到时返回
 /// `None`**：用户没设 XDG/HOME 时用户层配置直接缺席，不该让整个程序跑不起来。
 fn resolve_user_config_path(opts: &LoadConfigOptions) -> Option<PathBuf> {
+    // `--local`：忽略全局/用户层配置——沙盒只认项目根 `.defect/`。
+    if opts.local {
+        return None;
+    }
     if let Some(xdg) = &opts.xdg_config_home {
         return Some(xdg.join(USER_CONFIG_RELATIVE));
     }
@@ -746,7 +750,7 @@ fn resolve_user_config_path(opts: &LoadConfigOptions) -> Option<PathBuf> {
     None
 }
 
-pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
+pub fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
     for dir in cwd.ancestors() {
         let git_dir = dir.join(".git");
         if git_dir.exists() {

@@ -423,15 +423,25 @@ struct ServeState {
     fs_mode: RwLock<FsMode>,
     /// shell 后端选择。Default = `Local`——同 [`Self::fs_mode`] 取保守降级。
     shell_mode: RwLock<ShellMode>,
+    /// `--resume` 目标。ACP 客户端驱动会话生命周期，CLI 无法直接发起 load，
+    /// 故把目标 id 暂存于此：**首个** `session/new` 透明改走 load_session 并
+    /// 回放该会话，之后清空（一次性）。`None` = 不 resume。
+    resume_target: RwLock<Option<SessionId>>,
 }
 
 impl ServeState {
-    fn new(agent: Arc<dyn AgentCore>) -> Self {
+    fn with_resume(agent: Arc<dyn AgentCore>, resume_target: Option<SessionId>) -> Self {
         Self {
             agent,
             fs_mode: RwLock::new(FsMode::Local),
             shell_mode: RwLock::new(ShellMode::Local),
+            resume_target: RwLock::new(resume_target),
         }
+    }
+
+    /// 取出并清空一次性 resume 目标。第二次起返回 `None`。
+    fn take_resume_target(&self) -> Option<SessionId> {
+        self.resume_target.write().ok().and_then(|mut g| g.take())
     }
 
     fn current_fs_mode(&self) -> FsMode {
@@ -529,6 +539,12 @@ impl ServeState {
         responder: agent_client_protocol::Responder<NewSessionResponse>,
         cx: ConnectionTo<Client>,
     ) -> Result<(), agent_client_protocol::Error> {
+        // `--resume`：首个 session/new 透明改走 load_session（一次性）。客户端
+        // 拿回的是被恢复的旧 session id，并在响应前收到回放的历史 transcript。
+        if let Some(target) = self.take_resume_target() {
+            return self.resume_on_session_new(target, req, responder, cx).await;
+        }
+
         let cwd_for_log = req.cwd.clone();
         let session_id = SessionId::new(new_session_id());
         let fs = self.fs_backend(&cx, &session_id, &req.cwd);
@@ -556,6 +572,59 @@ impl ServeState {
             Err(err) => {
                 let acp_err = AcpError::CreateSession(err);
                 tracing::warn!(error = %acp_err, "create_session failed");
+                responder.respond_with_error(acp_err.into_wire_error())
+            }
+        }
+    }
+
+    /// `--resume` 路径下的 `session/new`：加载目标 session，回放 transcript，
+    /// 把恢复出的（旧）session id 作为 `NewSessionResponse` 回给客户端。
+    ///
+    /// fs/shell 后端按本次 `session/new` 请求的 cwd 协商（resume 是在“此处此刻”
+    /// 继续旧对话，运行环境用当前连接的协商结果，而非旧会话落盘的 cwd）。
+    async fn resume_on_session_new(
+        &self,
+        target: SessionId,
+        req: NewSessionRequest,
+        responder: agent_client_protocol::Responder<NewSessionResponse>,
+        cx: ConnectionTo<Client>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let cwd_for_log = req.cwd.clone();
+        let fs = self.fs_backend(&cx, &target, &req.cwd);
+        let shell = self.shell_backend(&cx, &target, &req.cwd);
+        let frontend = self.frontend();
+        match self
+            .agent
+            .load_session(target.clone(), fs, shell, frontend)
+            .await
+        {
+            Ok(session) => {
+                let config_options = session_config_options(session.as_ref()).await;
+                for notification in
+                    replay_notifications(session.id(), &session.history_snapshot())
+                {
+                    if let Err(err) = cx.send_notification(notification) {
+                        tracing::warn!(?err, "failed to replay resumed session transcript");
+                    }
+                }
+                spawn_session_pump(session.clone(), session.id().clone(), cx);
+                tracing::info!(
+                    session_id = %short_session_id(session.id()),
+                    cwd = %cwd_for_log.display(),
+                    "session resumed via session/new"
+                );
+                responder.respond(
+                    NewSessionResponse::new(session.id().clone()).config_options(config_options),
+                )
+            }
+            Err(err) => {
+                let acp_err = match err {
+                    AgentError::SessionNotFound(id) => AcpError::SessionNotFound {
+                        session_id: id.0.to_string(),
+                    },
+                    other => AcpError::LoadSession(other),
+                };
+                tracing::warn!(error = %acp_err, "resume load_session failed");
                 responder.respond_with_error(acp_err.into_wire_error())
             }
         }
@@ -703,6 +772,16 @@ pub async fn serve(agent: Arc<dyn AgentCore>) -> Result<(), AcpError> {
     serve_on(agent, Stdio::new()).await
 }
 
+/// 同 [`serve`]，但带一次性 `--resume` 目标：首个 `session/new` 透明改走
+/// load_session 恢复该会话（见 [`ServeState::resume_on_session_new`]）。
+/// `resume = None` 时与 [`serve`] 等价。
+pub async fn serve_with_resume(
+    agent: Arc<dyn AgentCore>,
+    resume: Option<SessionId>,
+) -> Result<(), AcpError> {
+    serve_on_with_resume(agent, Stdio::new(), resume).await
+}
+
 /// 在自定义 transport 上跑同一套 ACP handler。
 ///
 /// 公共入口 [`serve`] 用 stdio；集成测试用 `Channel` 在进程内对接。
@@ -710,7 +789,19 @@ pub async fn serve_on<T>(agent: Arc<dyn AgentCore>, transport: T) -> Result<(), 
 where
     T: ConnectTo<Agent> + 'static,
 {
-    let state = Arc::new(ServeState::new(agent));
+    serve_on_with_resume(agent, transport, None).await
+}
+
+/// [`serve_on`] + 一次性 resume 目标。见 [`serve_with_resume`]。
+pub async fn serve_on_with_resume<T>(
+    agent: Arc<dyn AgentCore>,
+    transport: T,
+    resume: Option<SessionId>,
+) -> Result<(), AcpError>
+where
+    T: ConnectTo<Agent> + 'static,
+{
+    let state = Arc::new(ServeState::with_resume(agent, resume));
 
     Agent
         .builder()

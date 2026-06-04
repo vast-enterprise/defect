@@ -12,7 +12,7 @@ use tempfile::tempdir;
 
 use crate::{
     RecordProjector, SessionMeta, SessionRecord, SessionStore, SnapshotState, StorageError,
-    StoredRecord, StoredSnapshot,
+    StorageObserver, StoredRecord, StoredSnapshot,
 };
 
 #[test]
@@ -789,4 +789,54 @@ fn projector_ignores_non_replay_events() {
     .collect::<Vec<_>>();
 
     assert!(records.is_empty());
+}
+
+#[test]
+fn latest_session_id_for_cwd_picks_newest_matching() {
+    let dir = tempdir().expect("tempdir");
+    let observer = StorageObserver::new(dir.path().to_path_buf());
+
+    let cwd_a = dir.path().join("project-a");
+    let cwd_b = dir.path().join("project-b");
+    fs::create_dir_all(&cwd_a).expect("mkdir a");
+    fs::create_dir_all(&cwd_b).expect("mkdir b");
+
+    // 三个 session：两个在 cwd_a，一个在 cwd_b。
+    for (id, cwd) in [
+        ("sess-old", &cwd_a),
+        ("sess-new", &cwd_a),
+        ("sess-other", &cwd_b),
+    ] {
+        let session_id = SessionId::new(id);
+        let store = SessionStore::for_session(dir.path(), &session_id);
+        let meta = SessionMeta::new(session_id, cwd.clone(), Vec::new());
+        store.init(&meta).expect("init");
+    }
+
+    // 让 sess-new 的 journal 比 sess-old 新（重写以更新 mtime）。
+    let new_store = SessionStore::for_session(dir.path(), &SessionId::new("sess-new"));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(new_store.journal_path(), b"").expect("touch journal");
+
+    let latest = observer
+        .latest_session_id_for_cwd(&cwd_a)
+        .expect("scan ok")
+        .expect("some match");
+    assert_eq!(latest.0.as_ref(), "sess-new");
+
+    // 不匹配的 cwd → None。
+    let none = observer
+        .latest_session_id_for_cwd(&dir.path().join("project-c"))
+        .expect("scan ok");
+    assert!(none.is_none());
+}
+
+#[test]
+fn latest_session_id_for_cwd_missing_root_is_none() {
+    let dir = tempdir().expect("tempdir");
+    let observer = StorageObserver::new(dir.path().join("does-not-exist"));
+    let result = observer
+        .latest_session_id_for_cwd(dir.path())
+        .expect("missing root is not an error");
+    assert!(result.is_none());
 }

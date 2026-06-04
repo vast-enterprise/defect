@@ -36,6 +36,20 @@ pub struct CliArgs {
     #[arg(long = "config", value_name = "KEY=VALUE")]
     pub config_override: Vec<String>,
 
+    /// Resume a previous session. With a SESSION_ID, resume that session;
+    /// bare `--resume` resumes the most recently active session for the
+    /// current working directory. In ACP mode the resumed session is
+    /// returned on the first `session/new`; in `--repl` it is loaded
+    /// directly.
+    #[arg(long, value_name = "SESSION_ID")]
+    pub resume: Option<Option<String>>,
+
+    /// Sandbox mode: ignore global/user config and store all state
+    /// (config, sessions) under `<repo-root>/.defect/`. The user-level
+    /// `~/.config/defect` config, agents, and skills are skipped entirely.
+    #[arg(long)]
+    pub local: bool,
+
     /// Run a minimal in-process REPL on stdin/stdout instead of the ACP
     /// server. Requires the `repl` build feature (on by default); a binary
     /// built with `--no-default-features` rejects this flag at runtime.

@@ -19,6 +19,7 @@ fn test_options(root: &TempDir) -> LoadConfigOptions {
         cli: CliOverrides::default(),
         xdg_config_home: Some(root.path().join("xdg")),
         home_dir: None,
+        local: false,
     }
 }
 

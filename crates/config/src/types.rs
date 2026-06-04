@@ -179,6 +179,11 @@ pub struct LoadConfigOptions {
     pub cli: CliOverrides,
     pub xdg_config_home: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
+    /// `--local` 沙盒模式：忽略全局/用户层配置与用户级 agents/skills 目录，
+    /// 只认项目根 `.defect/`。`true` 时用户层一律缺席（见
+    /// `resolve_user_config_path` / `resolve_user_agents_dir` /
+    /// `resolve_user_skills_dir`）。
+    pub local: bool,
 }
 
 #[derive(Debug, Clone)]

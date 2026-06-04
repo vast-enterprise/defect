@@ -46,6 +46,53 @@ impl StorageObserver {
     pub fn sessions_root(&self) -> &Path {
         &self.sessions_root
     }
+
+    /// 找出 `cwd` 下最近活跃的 session id（用于 `--resume` 不带 id 时）。
+    ///
+    /// 扫 `sessions_root` 下每个 session 目录，读 `meta.json` 取 `cwd`，匹配
+    /// 给定 `cwd`（规整后逐字节比较）的候选里按 `journal.jsonl` 最后修改时间
+    /// 取最新者。没有匹配返回 `Ok(None)`。
+    ///
+    /// 单个 session 目录损坏（meta 读不出 / 解析失败）跳过而非整体失败——
+    /// 一份坏存档不该让 resume 完全不可用。
+    ///
+    /// # Errors
+    ///
+    /// `sessions_root` 存在但无法枚举时返回错误；目录不存在按"无候选"
+    /// （`Ok(None)`）处理。
+    pub fn latest_session_id_for_cwd(&self, cwd: &Path) -> Result<Option<SessionId>, StorageError> {
+        let target = fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+        let entries = match fs::read_dir(&self.sessions_root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(StorageError::Io(err)),
+        };
+
+        let mut best: Option<(std::time::SystemTime, SessionId)> = None;
+        for entry in entries {
+            let entry = entry?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let store = SessionStore::new(entry.path());
+            let Ok(meta) = store.load_meta() else {
+                continue; // 坏存档 / 无 meta：跳过
+            };
+            let meta_cwd =
+                fs::canonicalize(&meta.cwd).unwrap_or_else(|_| meta.cwd.clone());
+            if meta_cwd != target {
+                continue;
+            }
+            // 活跃度按 journal 最后修改时间排；取不到时间的退到 UNIX_EPOCH。
+            let mtime = fs::metadata(store.journal_path())
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if best.as_ref().is_none_or(|(best_mtime, _)| mtime >= *best_mtime) {
+                best = Some((mtime, meta.session_id));
+            }
+        }
+        Ok(best.map(|(_, id)| id))
+    }
 }
 
 impl SessionObserver for StorageObserver {

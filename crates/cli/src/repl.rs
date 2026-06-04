@@ -36,6 +36,7 @@ use agent_client_protocol_schema::{ContentBlock, SessionId, StopReason, TextCont
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use defect_agent::event::AgentEvent;
+use defect_agent::llm::{Message, MessageContent, Role};
 use defect_agent::session::{AgentCore, Frontend, TurnError, new_session_id};
 use defect_tools::{LocalFsBackend, LocalShellBackend};
 use futures::{FutureExt, StreamExt};
@@ -45,25 +46,31 @@ use tokio::sync::mpsc;
 
 /// 跑一个交互 REPL，直到 stdin EOF（Ctrl-D）或读到 `:q` / `:quit` / `:exit`。
 ///
-/// `cwd` 是会话工作目录（本地 fs / shell 后端的根）。
-pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> {
+/// `cwd` 是会话工作目录（本地 fs / shell 后端的根）。`resume = Some(id)` 时
+/// 恢复该 session（回放历史到终端）而非新建。
+pub async fn run(
+    agent: Arc<dyn AgentCore>,
+    cwd: PathBuf,
+    resume: Option<SessionId>,
+) -> anyhow::Result<()> {
     let mut out = tokio::io::stdout();
 
     // 本机直跑：fs/shell 都用 local 后端，frontend 标 Cli。
-    let session_id = SessionId::new(new_session_id());
     let fs = Arc::new(LocalFsBackend::new(cwd.clone()));
     let shell = Arc::new(LocalShellBackend::new());
-    let session = agent
-        .create_session(
-            session_id,
-            cwd.clone(),
-            Vec::new(),
-            fs,
-            shell,
-            Frontend::Cli,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("create_session failed: {e}"))?;
+    let session = match resume {
+        Some(id) => agent
+            .load_session(id, fs, shell, Frontend::Cli)
+            .await
+            .map_err(|e| anyhow::anyhow!("load_session failed: {e}"))?,
+        None => {
+            let session_id = SessionId::new(new_session_id());
+            agent
+                .create_session(session_id, cwd.clone(), Vec::new(), fs, shell, Frontend::Cli)
+                .await
+                .map_err(|e| anyhow::anyhow!("create_session failed: {e}"))?
+        }
+    };
 
     let banner = format!(
         "defect repl — {} @ {}\n\
@@ -72,6 +79,21 @@ pub async fn run(agent: Arc<dyn AgentCore>, cwd: PathBuf) -> anyhow::Result<()> 
         cwd.display(),
     );
     write(&mut out, &banner.dimmed().to_string()).await?;
+
+    // resume：把恢复出的历史 transcript 朴素回放到终端，让用户看到上下文。
+    let history = session.history_snapshot();
+    if !history.is_empty() {
+        write(
+            &mut out,
+            &format!("— resumed {} message(s) —\n", history.len())
+                .dimmed()
+                .to_string(),
+        )
+        .await?;
+        for message in &history {
+            render_history_message(&mut out, message).await?;
+        }
+    }
 
     // 持久订阅：循环外订阅**一次**，跨所有 turn 排空——含 session driver 自发的
     // 自主续转 turn（后台 subagent 完成后消化结果那一轮）。这是与 ACP
@@ -661,5 +683,34 @@ fn block_text(block: &ContentBlock) -> Option<String> {
 /// 往 stdout 写一段字符串。
 async fn write(out: &mut Stdout, s: &str) -> anyhow::Result<()> {
     out.write_all(s.as_bytes()).await?;
+    Ok(())
+}
+
+/// resume 时朴素回放一条历史消息：user/assistant 文本与思考、工具调用/结果各
+/// 给一行带前缀的摘要。纯展示，不影响会话状态。换行交给终端 cooked 模式
+/// （此时尚未进 raw）。
+async fn render_history_message(out: &mut Stdout, message: &Message) -> anyhow::Result<()> {
+    let prefix = match message.role {
+        Role::User => "user> ".cyan().bold().to_string(),
+        Role::Assistant => "asst> ".green().bold().to_string(),
+    };
+    for content in message.content.iter() {
+        match content {
+            MessageContent::Text { text } => {
+                write(out, &format!("{prefix}{text}\n")).await?;
+            }
+            MessageContent::Thinking { text, .. } => {
+                write(out, &format!("{prefix}{}\n", text.dimmed().italic())).await?;
+            }
+            MessageContent::ToolUse { name, .. } => {
+                write(out, &format!("  {} {}\n", "⚙".yellow(), name.yellow())).await?;
+            }
+            MessageContent::ToolResult { is_error, .. } => {
+                let label = if *is_error { "error" } else { "ok" };
+                write(out, &format!("  {} {label}\n", "↳".dimmed())).await?;
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }

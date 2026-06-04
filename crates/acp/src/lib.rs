@@ -15,5 +15,5 @@ pub mod shell;
 
 pub use echo_provider::EchoProvider;
 pub use fs::AcpFsBackend;
-pub use serve::{AcpError, serve, serve_on};
+pub use serve::{AcpError, serve, serve_on, serve_on_with_resume, serve_with_resume};
 pub use shell::AcpShellBackend;

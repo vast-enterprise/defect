@@ -11,10 +11,11 @@ use std::sync::Mutex;
 
 use agent_client_protocol::schema::{
     ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
-    ProtocolVersion, SessionNotification, SessionUpdate, StopReason as AcpStopReason, TextContent,
+    ProtocolVersion, SessionId, SessionNotification, SessionUpdate, StopReason as AcpStopReason,
+    TextContent,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectTo, Role};
-use defect_acp::{EchoProvider, serve_on};
+use defect_acp::{EchoProvider, serve_on, serve_on_with_resume};
 use defect_agent::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelInfo, ProtocolId,
     ProviderChunk, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
@@ -455,6 +456,165 @@ async fn load_session_round_trip() {
         .expect("client connection completed");
 
     assert_eq!(client_result, AcpStopReason::EndTurn);
+
+    server_handle.abort();
+    let _ = server_handle.await;
+}
+
+/// `--resume`：首个 `session/new` 被透明改写成 load_session——返回的是被恢复
+/// 的旧 session id，且响应前回放了旧 transcript；一次性消费后，第二个
+/// `session/new` 回到正常的新建路径。
+#[tokio::test]
+async fn resume_intercepts_first_session_new() {
+    let sessions_dir = tempfile::tempdir().expect("tempdir");
+
+    // 阶段一：正常建一个 session 跑一轮，落盘。用独立 server 实例。
+    let prompt_text = "remember this";
+    let persisted_id = {
+        let provider = Arc::new(EchoProvider::new());
+        let config = TurnConfig {
+            model: "echo".to_string(),
+            ..TurnConfig::default()
+        };
+        let storage = Arc::new(StorageObserver::new(sessions_dir.path().to_path_buf()));
+        let agent_core = DefaultAgentCore::builder()
+            .provider(provider)
+            .observe_session(storage.clone())
+            .session_loader(storage)
+            .config(config)
+            .build();
+        let agent_core: Arc<dyn AgentCore> = Arc::new(agent_core);
+
+        let (channel_a, channel_b) = Channel::duplex();
+        let server_handle = tokio::spawn(serve_on(
+            agent_core,
+            ChannelTransport::<Agent>::new(channel_b),
+        ));
+
+        let cwd = std::env::current_dir().expect("cwd available");
+        let id = Client
+            .builder()
+            .name("seed-client")
+            .connect_with(
+                ChannelTransport::<Client>::new(channel_a),
+                async move |cx| {
+                    cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task()
+                        .await?;
+                    let new_session = cx
+                        .send_request(NewSessionRequest::new(cwd))
+                        .block_task()
+                        .await?;
+                    let resp = cx
+                        .send_request(PromptRequest::new(
+                            new_session.session_id.clone(),
+                            vec![ContentBlock::Text(TextContent::new(
+                                prompt_text.to_string(),
+                            ))],
+                        ))
+                        .block_task()
+                        .await?;
+                    assert_eq!(resp.stop_reason, AcpStopReason::EndTurn);
+                    Ok(new_session.session_id)
+                },
+            )
+            .await
+            .expect("seed connection completed");
+
+        server_handle.abort();
+        let _ = server_handle.await;
+        id
+    };
+
+    // 阶段二：新 server 带 resume 目标。首个 session/new 应恢复旧 session。
+    let provider = Arc::new(EchoProvider::new());
+    let config = TurnConfig {
+        model: "echo".to_string(),
+        ..TurnConfig::default()
+    };
+    let storage = Arc::new(StorageObserver::new(sessions_dir.path().to_path_buf()));
+    let agent_core = DefaultAgentCore::builder()
+        .provider(provider)
+        .observe_session(storage.clone())
+        .session_loader(storage)
+        .config(config)
+        .build();
+    let agent_core: Arc<dyn AgentCore> = Arc::new(agent_core);
+
+    let (channel_a, channel_b) = Channel::duplex();
+    let resume_target = SessionId::new(persisted_id.0.to_string());
+    let server_handle = tokio::spawn(serve_on_with_resume(
+        agent_core,
+        ChannelTransport::<Agent>::new(channel_b),
+        Some(resume_target),
+    ));
+
+    let cwd = std::env::current_dir().expect("cwd available");
+    let updates: Arc<Mutex<Vec<SessionUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let updates_for_handler = updates.clone();
+    let expected_id = persisted_id.0.to_string();
+
+    Client
+        .builder()
+        .name("resume-client")
+        .on_receive_notification(
+            async move |notif: SessionNotification, _cx| {
+                updates_for_handler
+                    .lock()
+                    .expect("updates mutex")
+                    .push(notif.update);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .connect_with(
+            ChannelTransport::<Client>::new(channel_a),
+            async move |cx| {
+                cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .block_task()
+                    .await?;
+
+                // 首个 session/new → 透明 resume：返回旧 id。
+                let resumed = cx
+                    .send_request(NewSessionRequest::new(cwd.clone()))
+                    .block_task()
+                    .await?;
+                assert_eq!(
+                    resumed.session_id.0.as_ref(),
+                    expected_id.as_str(),
+                    "first session/new under --resume should return the resumed session id"
+                );
+
+                let replayed = updates
+                    .lock()
+                    .expect("updates mutex")
+                    .iter()
+                    .filter_map(|update| match update {
+                        SessionUpdate::UserMessageChunk(chunk) => Some(&chunk.content),
+                        _ => None,
+                    })
+                    .filter_map(|content| match content {
+                        ContentBlock::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .any(|text| text == prompt_text);
+                assert!(replayed, "resume should replay prior transcript");
+
+                // 第二个 session/new → 一次性已消费，回到正常新建（新 id）。
+                let fresh = cx
+                    .send_request(NewSessionRequest::new(cwd.clone()))
+                    .block_task()
+                    .await?;
+                assert_ne!(
+                    fresh.session_id.0.as_ref(),
+                    expected_id.as_str(),
+                    "second session/new should create a fresh session, not resume again"
+                );
+                Ok(())
+            },
+        )
+        .await
+        .expect("resume connection completed");
 
     server_handle.abort();
     let _ = server_handle.await;

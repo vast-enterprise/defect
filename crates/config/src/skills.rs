@@ -279,6 +279,10 @@ fn compile_globs(
 /// 同源优先级（XDG_CONFIG_HOME → HOME/.config）；找不到时返回 `None`（用户没设
 /// XDG/HOME 时用户层 skill 直接缺席，不 hard error）。
 fn resolve_user_skills_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
+    // `--local`：忽略用户级 skills 目录。
+    if opts.local {
+        return None;
+    }
     if let Some(xdg) = &opts.xdg_config_home {
         return Some(xdg.join(USER_SKILLS_RELATIVE));
     }

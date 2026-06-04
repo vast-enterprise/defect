@@ -370,6 +370,10 @@ fn parse_profile_file(
 /// `resolve_user_config_path` 同源优先级，但**找不到时返回 `None`**（用户
 /// 没设 XDG/HOME 时用户层 profile 直接缺席，不像主配置那样 hard error）。
 fn resolve_user_agents_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
+    // `--local`：忽略用户级 agents 目录。
+    if opts.local {
+        return None;
+    }
     if let Some(xdg) = &opts.xdg_config_home {
         return Some(xdg.join(USER_AGENTS_RELATIVE));
     }
