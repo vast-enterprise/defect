@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use agent_client_protocol_schema::{ContentBlock, TextContent};
 use futures::StreamExt;
+use rand::RngExt;
 use serde_json::Value as JsonValue;
 use tracing::Instrument;
 
@@ -110,7 +111,7 @@ impl TurnRunner<'_> {
                     tracing::warn!(error = %err, ?hint, "llm call failed permanently");
                     return LlmAttempt::Failed(err);
                 }
-                if let Some(delay) = retry_delay(hint) {
+                if let Some(delay) = retry_delay(hint, attempt) {
                     tracing::info!(
                         ?hint,
                         delay_ms = delay.as_millis() as u64,
@@ -344,16 +345,83 @@ fn add_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     }
 }
 
-fn retry_delay(hint: RetryHint) -> Option<Duration> {
+/// `attempt` 是**刚刚失败**那次的次数（从 1 起），用于推算退避指数。
+fn retry_delay(hint: RetryHint, attempt: u32) -> Option<Duration> {
     match hint {
         RetryHint::No => None,
         RetryHint::Immediate => Some(Duration::from_millis(0)),
         RetryHint::After(d) => Some(d),
-        RetryHint::Backoff => Some(Duration::from_millis(500)),
+        // 服务端无建议时（含 529 overloaded / 5xx / timeout）走指数退避 + jitter，
+        // 而非固定短延迟——过载是按时间窗概率性发生的，固定 500ms×N 几乎必然在
+        // 同一波过载里连续撞墙。公式对齐 `defect-http` 的 transport 退避层。
+        RetryHint::Backoff => Some(backoff_delay(attempt)),
         RetryHint::AfterAction(_) => Some(Duration::from_millis(0)),
     }
 }
 
+/// `BACKOFF_INITIAL * 2^(attempt-1)`，加 ±25% jitter，封顶 [`BACKOFF_MAX`]。
+/// 与 `defect-http` 的 transport 重试层同款（`initial * 2^n ± 25%`）。
+fn backoff_delay(attempt: u32) -> Duration {
+    // attempt 从 1 起：第 1 次失败用 2^0 = initial，第 2 次 2^1，依此类推。
+    let exp = attempt.saturating_sub(1).min(20);
+    let base_nanos = BACKOFF_INITIAL.as_nanos().saturating_mul(1u128 << exp);
+    let cap_nanos = BACKOFF_MAX.as_nanos();
+    let clamped = base_nanos.min(cap_nanos);
+
+    let mut rng = rand::rng();
+    let factor: f64 = 1.0 + rng.random_range(-BACKOFF_JITTER_FRAC..BACKOFF_JITTER_FRAC);
+    let nanos = (clamped as f64 * factor).round();
+    let nanos = nanos.clamp(0.0, cap_nanos as f64) as u128;
+    Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+}
+
+/// 退避基准：第 1 次重试约等这么久，之后指数翻倍。
+const BACKOFF_INITIAL: Duration = Duration::from_millis(500);
+/// 退避封顶——避免 attempt 很大时睡太久。
+const BACKOFF_MAX: Duration = Duration::from_secs(16);
+/// jitter 幅度：±25%，打散同一波过载里多个请求的重试时刻。
+const BACKOFF_JITTER_FRAC: f64 = 0.25;
+
 fn empty_stream() -> ProviderStream {
     Box::pin(futures::stream::empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_backoff_hints_unchanged() {
+        assert_eq!(retry_delay(RetryHint::No, 1), None);
+        assert_eq!(retry_delay(RetryHint::Immediate, 5), Some(Duration::ZERO));
+        let d = Duration::from_secs(7);
+        assert_eq!(retry_delay(RetryHint::After(d), 3), Some(d));
+    }
+
+    #[test]
+    fn backoff_grows_exponentially_within_jitter() {
+        // attempt 1 → ~500ms ±25% → [375, 625]ms
+        for _ in 0..100 {
+            let d = backoff_delay(1);
+            assert!(
+                d >= Duration::from_millis(374) && d <= Duration::from_millis(626),
+                "attempt 1 out of jitter range: {d:?}"
+            );
+        }
+        // attempt 3 → ~2000ms ±25% → [1500, 2500]ms
+        for _ in 0..100 {
+            let d = backoff_delay(3);
+            assert!(
+                d >= Duration::from_millis(1499) && d <= Duration::from_millis(2501),
+                "attempt 3 out of jitter range: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn backoff_caps() {
+        for _ in 0..100 {
+            assert!(backoff_delay(40) <= BACKOFF_MAX, "cap broken");
+        }
+    }
 }

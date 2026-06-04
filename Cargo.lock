@@ -1209,6 +1209,7 @@ dependencies = [
  "futures",
  "globset",
  "os_info",
+ "rand",
  "serde",
  "serde_json",
  "tempfile",

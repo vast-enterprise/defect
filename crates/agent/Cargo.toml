@@ -13,6 +13,7 @@ futures.workspace = true
 # 与 defect-tools 的 search 同款（ripgrep 栈）。
 globset = "0.4"
 os_info.workspace = true
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
