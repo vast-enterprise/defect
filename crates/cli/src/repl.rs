@@ -308,16 +308,27 @@ enum KeyMsg {
 ///
 /// 非 TTY（管道 / 重定向）时退化为逐行读，每行发一条 [`KeyMsg::Line`]。
 ///
-/// Drop 时把 raw 模式还原（持有 [`RawMode`] guard）。线程在 channel 接收端关闭
-/// （send 失败）或读到 EOF 时退出。
+/// **raw 模式由本结构（主 task 侧）持有 [`RawMode`] guard**，而非读键线程——
+/// 这是退出时终端不被搞乱的关键：Ctrl-D / `:q` 退出时读键线程通常仍**阻塞在
+/// `crossterm::event::read()`**（读完一个键就回去等下一个，从不主动结束），若把
+/// guard 放在那条线程的栈上，进程退出时它从没被 drop，`disable_raw_mode()` 不跑，
+/// 终端就停在 raw 模式（无回显、光标错位）。把 guard 挂在主 task 返回时会 drop 的
+/// `InputReader` 上，无论正常退出还是 unwind，`disable_raw_mode()` 都会执行。
+/// 这些调用作用于全局 tty，跨线程安全——读键线程仍阻塞着也能把终端还原。
 struct InputReader {
     handle: Option<std::thread::JoinHandle<()>>,
+    /// raw 模式 guard（仅 TTY）。drop 时还原终端，见结构体文档。
+    _raw: Option<RawMode>,
 }
 
 impl InputReader {
     fn spawn(tx: mpsc::Sender<KeyMsg>) -> Self {
+        let tty = std::io::stdin().is_terminal();
+        // 在主 task 侧进 raw（仅 TTY），guard 由 InputReader 持有。进不去就退化：
+        // 不持 guard，读键线程照跑（crossterm 在非 raw 下仍能读，只是行为降级）。
+        let raw = if tty { RawMode::enable().ok() } else { None };
         let handle = std::thread::spawn(move || {
-            if std::io::stdin().is_terminal() {
+            if tty {
                 read_keys_raw(&tx);
             } else {
                 read_lines_cooked(&tx);
@@ -325,17 +336,17 @@ impl InputReader {
         });
         Self {
             handle: Some(handle),
+            _raw: raw,
         }
     }
 }
 
 impl Drop for InputReader {
     fn drop(&mut self) {
-        // 主 task 已退出、receiver 已 drop——读键线程下次 send 会失败而退出。
-        // crossterm 的 read() 可能正阻塞着；不强杀（无可移植手段），随进程退出回收。
-        // raw 模式由线程内的 RawMode guard 在线程结束时还原。
+        // raw 模式在此还原：`_raw` guard 随本结构 drop 调用 disable_raw_mode()。
+        // 读键线程可能仍阻塞在 read()——不 join、不强杀（无可移植手段），随进程退出
+        // 回收；终端状态已由上面的 guard 在本（主）线程还原，与那条线程是否结束无关。
         if let Some(h) = self.handle.take() {
-            // 不 join：read() 可能仍阻塞在等键。线程是 daemon 语义，进程退出即收。
             drop(h);
         }
     }
@@ -345,10 +356,9 @@ impl Drop for InputReader {
 /// 主 task 维护，这里只把按键**原样**转发（除回车/Ctrl-C/Ctrl-D 解释成控制消息）。
 /// Ctrl-D 的"仅空缓冲才 EOF"语义需要 buffer 状态，所以这里跟踪一个**长度镜像**。
 fn read_keys_raw(tx: &mpsc::Sender<KeyMsg>) {
-    let _raw = match RawMode::enable() {
-        Ok(g) => g,
-        Err(_) => return, // 进不了 raw 模式（无终端）——放弃，主 task 会因 channel 关闭而退出
-    };
+    // raw 模式已由调用方（`InputReader::spawn`）在主 task 侧开启并持有 guard——
+    // 不在本线程持有，否则线程阻塞在 read() 时进程退出，guard 永不 drop，终端
+    // 停在 raw 模式（见 `InputReader` 文档）。这里只管读键。
     // buffer 长度镜像：仅用于判定 Ctrl-D（空缓冲 = EOF）与退格是否有内容可删。
     // 真正的 buffer 内容在主 task 的 LineEditor 里。
     let mut len = 0usize;
