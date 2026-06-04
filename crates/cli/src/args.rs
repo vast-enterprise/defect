@@ -55,13 +55,6 @@ pub struct CliArgs {
     /// built with `--no-default-features` rejects this flag at runtime.
     #[arg(long)]
     pub repl: bool,
-
-    /// Run a single prompt turn headlessly and exit. The assistant output is
-    /// streamed to stdout; the process exits when the turn ends. Combine with
-    /// `--resume` to continue a previous session. Mutually exclusive with
-    /// `--repl`.
-    #[arg(long, value_name = "PROMPT", conflicts_with = "repl")]
-    pub message: Option<String>,
 }
 
 impl CliArgs {

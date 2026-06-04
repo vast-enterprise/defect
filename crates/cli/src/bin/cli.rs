@@ -105,13 +105,7 @@ async fn main() -> anyhow::Result<()> {
         profile = cli.profile.as_deref().unwrap_or("<none>"),
         sandbox = ?sandbox_mode,
         "starting defect {}",
-        if cli.message.is_some() {
-            "one-shot --message"
-        } else if cli.repl {
-            "repl on stdio"
-        } else {
-            "ACP server on stdio"
-        }
+        if cli.repl { "repl on stdio" } else { "ACP server on stdio" }
     );
 
     let http_client =
@@ -243,44 +237,15 @@ async fn main() -> anyhow::Result<()> {
     let agent = builder.build();
     let agent = Arc::new(agent) as Arc<dyn AgentCore>;
 
-    // 三条出口（优先级：--message > --repl > ACP server）：
-    // - `--message`：跑单轮 prompt，输出到 stdout，turn 结束即退出（headless）。
-    // - `--repl`：进程内最小交互 REPL（feature-gated）。
-    // - 默认：stdio ACP server。
-    // `--resume` 目标在各路径语义不同：oneshot / REPL 直接 load_session；ACP 把它
-    // 交给 serve 层，在首个 `session/new` 时透明替换成 load（ACP 客户端驱动生命周期）。
-    if let Some(message) = cli.message {
-        run_once(agent, message, resume_session_id).await?;
-    } else if cli.repl {
+    // `--repl`：进程内最小交互 REPL（feature-gated）。否则走 stdio ACP server。
+    // `--resume` 目标在两条路径上语义不同：REPL 直接 load_session；ACP 把它交给
+    // serve 层，在首个 `session/new` 时透明替换成 load（ACP 客户端驱动生命周期）。
+    if cli.repl {
         run_repl(agent, resume_session_id).await?;
     } else {
         defect_acp::serve_with_resume(agent, resume_session_id).await?;
     }
     Ok(())
-}
-
-/// 跑单轮 prompt（`--message`）。与 `--repl` 同样由 `repl` feature gate——单轮
-/// 渲染复用 REPL 的事件渲染器（着色 + 流式），裁掉 feature 时运行期 hard fail。
-#[cfg(feature = "repl")]
-async fn run_once(
-    agent: Arc<dyn AgentCore>,
-    message: String,
-    resume: Option<SessionId>,
-) -> anyhow::Result<()> {
-    let cwd = env::current_dir()?;
-    defect_cli::repl::run_once(agent, cwd, message, resume).await
-}
-
-#[cfg(not(feature = "repl"))]
-async fn run_once(
-    _agent: Arc<dyn AgentCore>,
-    _message: String,
-    _resume: Option<SessionId>,
-) -> anyhow::Result<()> {
-    anyhow::bail!(
-        "this binary was built without the `repl` feature; \
-         rebuild with `--features repl` (on by default) to use --message"
-    )
 }
 
 /// 启动 REPL。`repl` feature 开启时跑真正的 REPL；裁掉时这个 flag 仍能
