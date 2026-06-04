@@ -55,7 +55,9 @@ pub use tool_registry::{CompositeRegistry, StaticToolRegistry, StaticToolRegistr
 /// 一个 `RequestAuditTracker` 实例。它对外不公开（诊断用内部状态），但同 crate
 /// 的 `crate::tool::spawn_agent` 要能 `new()`。
 pub(crate) use turn::RequestAuditTracker;
-pub use turn::{BasePromptConfig, PromptConfig, TurnConfig, TurnRequestLimit, TurnRunner};
+pub use turn::{
+    BasePromptConfig, CompactionSlot, PromptConfig, TurnConfig, TurnRequestLimit, TurnRunner,
+};
 
 /// 进程级 agent 根对象。
 ///
@@ -318,6 +320,23 @@ pub trait History: Send + Sync {
     /// 压缩后整体替换消息列表。turn 主循环算好「摘要 + 保留尾部」的新列表后
     /// 调它回写。实现应同时重置 token 估算基线（旧的真实 token 已不适用新列表）。
     fn replace(&self, messages: Vec<Message>);
+
+    /// 前缀替换：用 `summary` 这一条消息换掉**当前**列表最前面 `drop_count` 条，
+    /// 保留其后全部。返回实际丢弃的消息数（`drop_count` 被 clamp 到当前长度）。
+    ///
+    /// 这是**后台压缩**回写的原语：后台任务在某时刻的 snapshot 上算出
+    /// `drop_count`（= 待摘要前缀长度）与 `summary`，但摘要 LLM 调用耗时期间，
+    /// 前台 turn 仍在往**尾部** `append`。回写时绝不能 `replace(整表)`——那会冲掉
+    /// 这期间新增的尾部消息。`splice_prefix` 只动**当前**列表的前 `drop_count` 条，
+    /// 保留 `drop_count..` 的全部（含期间新增的尾部），故回写正确。
+    ///
+    /// **并发不变式**（务必维持）：`drop_count` 在旧 snapshot 上算得、对**当前**列表
+    /// 合法，前提是「飞行期间只发生尾插（`append`）与原地内容替换（微压缩
+    /// `replace` 同长度重建），不增删中段消息」。唯一会删中段的操作是压缩本身，
+    /// 而压缩**单飞**（同时至多一个在跑）——故该不变式成立。
+    ///
+    /// 同 [`Self::replace`]，回写后重置 token 基线（新前缀的真实 token 未知）。
+    fn splice_prefix(&self, drop_count: usize, summary: Message) -> usize;
 
     /// 喂入上一次 LLM 调用的真实输入 token 数
     /// （`input + cache_read + cache_creation`）。作为 [`Self::token_estimate`]

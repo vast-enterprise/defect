@@ -37,6 +37,14 @@ mod request_audit;
 #[path = "turn/compact.rs"]
 mod compact;
 
+#[path = "turn/microcompact.rs"]
+mod microcompact;
+
+#[path = "turn/compaction_slot.rs"]
+mod compaction_slot;
+
+pub use compaction_slot::CompactionSlot;
+
 #[path = "turn/content.rs"]
 mod content;
 
@@ -105,10 +113,27 @@ pub struct TurnConfig {
     /// [`Self::compact_ratio`] 推算。`None` 则按 ratio 自动推算。
     pub compact_threshold_tokens: Option<u64>,
     /// 压缩阈值占模型 `context_window` 的比例（如 `0.85` = 用量过 85% 触发）。
-    /// `None` = 不按比例自动压缩（且无绝对值时本 turn 完全不压缩）。
-    /// 仅在 `compact_threshold_tokens` 为 `None` 且模型公开 `context_window`
-    /// 时生效。详见 `session/turn/compact.rs`。
+    /// 这是 **hard 水位**：到这一档若无后台压缩在飞，turn 主循环**同步**压缩兜底
+    /// （阻塞本轮，但保证不超上下文）。`None` = 不按比例自动压缩（且无绝对值时
+    /// 本 turn 完全不压缩）。仅在 `compact_threshold_tokens` 为 `None` 且模型公开
+    /// `context_window` 时生效。详见 `session/turn/compact.rs`。
     pub compact_ratio: Option<f64>,
+    /// **后台全量压缩**开关。`true` 时一旦越过 [`Self::compact_soft_ratio`] 推出的
+    /// soft 水位，就**异步**起一次摘要压缩（不阻塞本轮）；趁还没撞 hard 水位悄悄把
+    /// 历史压下去。关闭时只保留 hard 水位的同步压缩。详见
+    /// `session/turn/compaction_slot.rs`。
+    pub background_compact_enabled: bool,
+    /// 后台压缩的 **soft 水位**占 `context_window` 的比例（默认 `0.7`）。须 `<`
+    /// `compact_ratio`（hard）才有意义——留出 soft→hard 之间的窗口给后台摘要跑完。
+    /// 仅在 `background_compact_enabled` 且能推出阈值时生效。
+    pub compact_soft_ratio: Option<f64>,
+    /// **微压缩**开关。`true` 时每轮在最低水位 [`Self::microcompact_ratio`] 之上先做
+    /// 一次微压缩（清理较旧轮次里的超大 tool_result，不调 LLM、不删消息），把昂贵的
+    /// 全量压缩推后。详见 `session/turn/microcompact.rs`。
+    pub microcompact_enabled: bool,
+    /// 微压缩的水位占 `context_window` 的比例（默认 `0.6`）。通常 `<` soft 水位——
+    /// 微压缩是最便宜的第一道防线。仅在 `microcompact_enabled` 且能推出阈值时生效。
+    pub microcompact_ratio: Option<f64>,
     pub max_llm_retries: u32,
     /// `0` = 不限。v0 默认不限。
     pub max_concurrent_tools: usize,
@@ -131,9 +156,15 @@ impl Default for TurnConfig {
                 expand_on_progress: true,
             },
             compact_threshold_tokens: None,
-            // 默认按 context_window 的 85% 触发——留 ~15% 给摘要输出与浮动，
-            // 落在 codex(90%)/Claude(~93%)/opencode(window-20k) 的合理区间内。
+            // 默认按 context_window 的 85% 触发（hard 水位）——留 ~15% 给摘要输出与
+            // 浮动，落在 codex(90%)/Claude(~93%)/opencode(window-20k) 的合理区间内。
             compact_ratio: Some(0.85),
+            // 后台压缩默认开：soft=0.7 起异步摘要，赶在 hard=0.85 之前压完。
+            background_compact_enabled: true,
+            compact_soft_ratio: Some(0.7),
+            // 微压缩默认开：0.6 起清旧的大 tool_result，最便宜的第一道防线。
+            microcompact_enabled: true,
+            microcompact_ratio: Some(0.6),
             max_llm_retries: 3,
             max_concurrent_tools: 0,
             max_hook_continues: DEFAULT_MAX_HOOK_CONTINUES,
@@ -201,6 +232,19 @@ pub struct TurnRunner<'a> {
     /// （经 [`crate::tool::ToolContext::background`] 注入给工具）；嵌套子 agent
     /// turn 传 `None`，结构性禁止后台任务自我繁殖。详见 `docs/proposals/task-arrange.md`。
     pub background: Option<crate::session::BackgroundTasks>,
+    /// session 级后台压缩槽（single-flight）。`Some` 时后台全量压缩可用——越 soft
+    /// 水位即异步起一次摘要压缩，不阻塞本轮。嵌套子 agent turn 传 `None`（子 agent
+    /// 上下文短、且不应自繁衍后台任务）。需要 `Arc<dyn History>`/`Arc<dyn LlmProvider>`
+    /// 才能让任务跨 turn `'static` 持有，故同时要求 `history_arc`/`provider_arc`。
+    pub compaction_slot: Option<crate::session::CompactionSlot>,
+    /// `compaction_slot` 用的 history `Arc`（与 `history` 借用指向同一对象）。后台
+    /// 压缩任务持它跨 turn。`None` 时后台压缩不可用，降级为仅同步压缩。
+    pub history_arc: Option<Arc<dyn History>>,
+    /// `compaction_slot` 用的 provider `Arc`。同上。
+    pub provider_arc: Option<Arc<dyn LlmProvider>>,
+    /// session 级取消令牌——后台压缩任务的取消令牌从它派生（独立于 turn cancel，
+    /// 随 session 终结而取消）。`None` 时后台压缩用 turn 的 `cancel`（子 agent 路径）。
+    pub session_cancel: Option<CancellationToken>,
     /// 本 turn 输入的摄入来源——决定 `before_ingest` step 信封的 `source` 字段。
     /// 用户 turn = `User`；session driver 起的后台续转 turn = `Background`（§5.1）。
     pub ingest_source: crate::hooks::step::IngestSource,
@@ -293,7 +337,7 @@ impl<'a> TurnRunner<'a> {
                 return Ok(turn_outcome(&state, AcpStopReason::Cancelled));
             }
 
-            self.maybe_compact().await?;
+            self.manage_context().await?;
 
             let mut req = self.build_request();
 
@@ -471,27 +515,147 @@ impl<'a> TurnRunner<'a> {
         req
     }
 
-    /// 压缩触发判定 + 编排。详见 `session/turn/compact.rs`。
+    /// 分层上下文管理：micro → soft（后台）→ hard（同步兜底）。每轮主循环开头调用。
     ///
-    /// 阈值解析顺序：
-    /// 1. `compact_threshold_tokens`（绝对值）显式覆盖；
-    /// 2. 否则按 `model_info(model).context_window * compact_ratio` 自动推算；
-    /// 3. 两者都拿不到 → 不压缩（保持 v0 语义）。
-    async fn maybe_compact(&self) -> Result<(), TurnError> {
-        let Some(threshold) = self.compact_threshold() else {
+    /// 三档水位（详见 `compact_thresholds`）：
+    /// 1. **micro**（默认 0.6·window）：开启微压缩则先清旧的大 tool_result——不调
+    ///    LLM、不删消息、几乎零延迟，把昂贵的全量压缩推后。
+    /// 2. **soft**（默认 0.7·window）：开启后台压缩则**异步**起一次摘要压缩，turn
+    ///    不阻塞，趁还没撞 hard 悄悄压下去（single-flight，已有在飞则不重复起）。
+    /// 3. **hard**（默认 0.85·window，= 旧 `compact_ratio` 语义）：到这一档必须把
+    ///    历史压下去——已有后台压缩在飞则 `await` 它落地；否则**同步**压缩兜底。
+    ///
+    /// micro/soft 需要模型公开 `context_window`；hard 还支持 `compact_threshold_tokens`
+    /// 绝对值覆盖。任何一档拿不到阈值即跳过该档（保持「无信息不压」的保守语义）。
+    async fn manage_context(&self) -> Result<(), TurnError> {
+        let thresholds = self.compact_thresholds();
+        // 三档全无 → 本 turn 完全不主动压缩（保持 v0 语义）。
+        if thresholds.is_empty() {
             return Ok(());
-        };
+        }
         let Some(estimate) = self.history.token_estimate() else {
             return Ok(());
         };
-        if estimate < threshold {
+
+        // ① micro：同步、最便宜。可能把 estimate 削到 soft/hard 之下，故压完重取。
+        let estimate = if self.config.microcompact_enabled
+            && thresholds.micro.is_some_and(|t| estimate >= t)
+        {
+            self.run_microcompact().await;
+            self.history.token_estimate().unwrap_or(estimate)
+        } else {
+            estimate
+        };
+
+        // ② soft：越线即异步起后台压缩，不阻塞本轮。
+        if self.config.background_compact_enabled
+            && let (Some(soft), Some(hard)) = (thresholds.soft, thresholds.hard)
+            && estimate >= soft
+            && estimate < hard
+        {
+            self.spawn_background_compaction(hard).await;
+            // 不阻塞——本轮继续装配请求；摘要落地是下一轮（或更晚）的事。
             return Ok(());
         }
 
-        // before Compact hook：hook 可 `Skip` 否决本次压缩（变更型 step，无"填产出"）。
+        // ③ hard：必须压下去。
+        if let Some(hard) = thresholds.hard
+            && estimate >= hard
+        {
+            self.compact_hard(estimate, hard).await?;
+        }
+        Ok(())
+    }
+
+    /// 跑一次微压缩并回写（`replace`）。最佳努力：无可清理项就什么都不做。
+    async fn run_microcompact(&self) {
+        let messages = self.history.snapshot();
+        let Some((rebuilt, report)) = microcompact::run(&messages) else {
+            return;
+        };
+        self.history.replace(rebuilt);
+        tracing::info!(
+            cleared = report.cleared,
+            tokens_before = report.tokens_before,
+            tokens_after = report.tokens_after,
+            "context microcompacted"
+        );
+        self.events
+            .emit(AgentEvent::ContextMicrocompacted {
+                tokens_before: report.tokens_before,
+                tokens_after: report.tokens_after,
+                cleared: report.cleared,
+            })
+            .await;
+    }
+
+    /// 越 soft 水位时异步起一次后台全量压缩（single-flight）。需要 slot 与
+    /// history/provider 的 `Arc`（顶层 turn 才有；子 agent turn 无 → 静默跳过，
+    /// 留给 hard 水位的同步压缩兜底）。
+    async fn spawn_background_compaction(&self, hard_threshold: u64) {
+        let (Some(slot), Some(history_arc), Some(provider_arc)) = (
+            self.compaction_slot.as_ref(),
+            self.history_arc.as_ref(),
+            self.provider_arc.as_ref(),
+        ) else {
+            return;
+        };
+        if slot.is_in_flight() {
+            return; // single-flight：已有一个在压，不重复起。
+        }
+
+        // 后台压缩的取消令牌独立于 turn cancel——摘要应能跑完即便发起它的 turn 已结束；
+        // 但随 session 终结而取消。子 agent 路径无 session_cancel，退回 turn cancel。
+        let cancel = self
+            .session_cancel
+            .clone()
+            .unwrap_or_else(|| self.cancel.clone())
+            .child_token();
+        let ctx = compact::CompactionCtx {
+            provider: provider_arc.clone(),
+            model: self.config.model.clone(),
+            sampling: self.config.sampling.clone(),
+            tools: self.tools.schemas(),
+            cancel,
+        };
+        let events = self.events.clone();
+        let on_done: Arc<
+            dyn Fn(crate::session::CompactionReport) -> futures::future::BoxFuture<'static, ()>
+                + Send
+                + Sync,
+        > = Arc::new(move |report| {
+            // 返回 future 让 emit 在压缩任务体内 await——不另起游离任务，事件发送受
+            // 压缩任务的 cancel/track 约束。
+            let events = events.clone();
+            Box::pin(async move {
+                events
+                    .emit(AgentEvent::ContextCompressed {
+                        tokens_before: report.tokens_before,
+                        tokens_after: report.tokens_after,
+                    })
+                    .await;
+            })
+        });
+        let started = slot.try_spawn(history_arc.clone(), ctx, hard_threshold, on_done);
+        if started {
+            tracing::info!(hard_threshold, "background compaction started");
+        }
+    }
+
+    /// hard 水位兜底：已有后台压缩在飞则等它落地；否则同步压缩。
+    async fn compact_hard(&self, estimate: u64, hard: u64) -> Result<(), TurnError> {
+        // 后台已在飞 → 等它落地，省一次重复摘要。
+        if let Some(slot) = self.compaction_slot.as_ref()
+            && slot.is_in_flight()
+        {
+            slot.await_in_flight().await;
+            return Ok(());
+        }
+
+        // before Compact hook：hook 可 `Skip` 否决本次压缩（变更型 step）。
         let mut before = crate::hooks::step::BeforeCompact {
             token_estimate: estimate,
-            threshold,
+            threshold: hard,
         };
         if let crate::hooks::step::HookControl::Skip =
             self.hooks.dispatch(&mut before, self.hook_ctx()).await
@@ -500,7 +664,8 @@ impl<'a> TurnRunner<'a> {
             return Ok(());
         }
 
-        let Some(report) = compact::run(self, threshold).await? else {
+        let ctx = self.sync_compaction_ctx();
+        let Some(report) = compact::run_sync(self.history, &ctx, hard).await else {
             // 没有安全的压缩边界（如单个超长轮次）——本次跳过，不发事件。
             return Ok(());
         };
@@ -524,19 +689,42 @@ impl<'a> TurnRunner<'a> {
         Ok(())
     }
 
-    /// 解析本 turn 的压缩阈值（token 数）。`None` = 本 turn 不主动压缩。
-    fn compact_threshold(&self) -> Option<u64> {
-        if let Some(explicit) = self.config.compact_threshold_tokens {
-            return Some(explicit);
+    /// 同步压缩用的 [`compact::CompactionCtx`]——provider 走借用包成的临时 `Arc` 不
+    /// 现实（trait object 借用无法 `Arc`），故同步路径要求 `provider_arc`；缺它时退回
+    /// 不可能（顶层总有，子 agent 走 `provider` 借用——见 `sync_compaction_ctx` 实现）。
+    fn sync_compaction_ctx(&self) -> compact::CompactionCtx {
+        compact::CompactionCtx {
+            provider: self
+                .provider_arc
+                .clone()
+                .expect("sync compaction requires provider_arc"),
+            model: self.config.model.clone(),
+            sampling: self.config.sampling.clone(),
+            tools: self.tools.schemas(),
+            cancel: self.cancel.clone(),
         }
-        let ratio = self.config.compact_ratio?;
-        let context_window = self
+    }
+
+    /// 解析本 turn 的三档压缩阈值（token 数）。任意一档为 `None` 表示该档不触发。
+    fn compact_thresholds(&self) -> CompactThresholds {
+        let window = self
             .provider
-            .model_info(&self.config.model)?
-            .context_window?;
-        // ratio 落在 (0, 1]；context_window * ratio 向下取整。
-        let threshold = (context_window as f64 * ratio).floor() as u64;
-        (threshold > 0).then_some(threshold)
+            .model_info(&self.config.model)
+            .and_then(|m| m.context_window);
+
+        // hard：绝对值覆盖优先，否则 ratio·window。
+        let hard = self.config.compact_threshold_tokens.or_else(|| {
+            let ratio = self.config.compact_ratio?;
+            ratio_threshold(window?, ratio)
+        });
+        // micro/soft 只能从 window 推（绝对值覆盖只作用于 hard）。
+        let from_ratio =
+            |ratio: Option<f64>| ratio.and_then(|r| window.and_then(|w| ratio_threshold(w, r)));
+        CompactThresholds {
+            micro: from_ratio(self.config.microcompact_ratio),
+            soft: from_ratio(self.config.compact_soft_ratio),
+            hard,
+        }
     }
 
     pub(super) fn hook_ctx(&self) -> HookCtx<'_> {
@@ -550,6 +738,27 @@ impl<'a> TurnRunner<'a> {
 struct TurnOutcome {
     reason: AcpStopReason,
     usage: Usage,
+}
+
+/// 三档压缩水位（token 数）。每档 `None` = 该档本 turn 不触发。
+#[derive(Clone, Copy)]
+struct CompactThresholds {
+    micro: Option<u64>,
+    soft: Option<u64>,
+    hard: Option<u64>,
+}
+
+impl CompactThresholds {
+    /// 三档全无——本 turn 完全不主动压缩。
+    fn is_empty(&self) -> bool {
+        self.micro.is_none() && self.soft.is_none() && self.hard.is_none()
+    }
+}
+
+/// `context_window * ratio` 向下取整。`ratio` 落在 `(0, 1]`。`0` → `None`（不触发）。
+fn ratio_threshold(context_window: u64, ratio: f64) -> Option<u64> {
+    let threshold = (context_window as f64 * ratio).floor() as u64;
+    (threshold > 0).then_some(threshold)
 }
 
 /// `before turn-end` hook 强制续命次数的**默认**上限。可被

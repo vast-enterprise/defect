@@ -216,7 +216,12 @@ text = "model-specific guidance"
 [turn]
 request_limit = 32
 max_llm_retries = 2
-compact_threshold_tokens = 120000
+compact_threshold_tokens = 120000   # hard 水位绝对值覆盖（否则 compact_ratio·window）
+compact_ratio = 0.85                 # hard 水位：到此同步压缩兜底
+background_compact_enabled = true    # 越 soft 水位异步起摘要压缩，不阻塞当轮
+compact_soft_ratio = 0.7             # soft 水位
+microcompact_enabled = true          # 越 micro 水位清旧的大 tool_result，不调 LLM
+microcompact_ratio = 0.6             # micro 水位
 max_hook_continues = 3   # before-turn-end hook 强制续命硬上限（防 hook 无限 Continue）
 
 [providers.anthropic]

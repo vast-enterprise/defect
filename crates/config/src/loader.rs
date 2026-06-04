@@ -266,6 +266,18 @@ fn build_effective_config(
     if let Some(compact_ratio) = config.turn.compact_ratio {
         turn.compact_ratio = Some(compact_ratio);
     }
+    if let Some(background_compact_enabled) = config.turn.background_compact_enabled {
+        turn.background_compact_enabled = background_compact_enabled;
+    }
+    if let Some(compact_soft_ratio) = config.turn.compact_soft_ratio {
+        turn.compact_soft_ratio = Some(compact_soft_ratio);
+    }
+    if let Some(microcompact_enabled) = config.turn.microcompact_enabled {
+        turn.microcompact_enabled = microcompact_enabled;
+    }
+    if let Some(microcompact_ratio) = config.turn.microcompact_ratio {
+        turn.microcompact_ratio = Some(microcompact_ratio);
+    }
     if let Some(max_llm_retries) = config.turn.max_llm_retries {
         turn.max_llm_retries = max_llm_retries;
     }
@@ -275,6 +287,7 @@ fn build_effective_config(
     if let Some(max_hook_continues) = config.turn.max_hook_continues {
         turn.max_hook_continues = max_hook_continues;
     }
+    validate_compact_ratios(path, &turn)?;
     if turn.sampling == SamplingParams::default() {
         // 保持 default sampling 显式落在 effective config 中，方便后续扩字段。
     }
@@ -430,6 +443,60 @@ fn build_effective_config(
         },
         hooks,
     })
+}
+
+/// 校验三档压缩水位比例：各 ratio 须落在 `(0, 1]`，且 `micro ≤ soft < hard`
+/// （只在实际设置了的档之间约束）。倒挂 / 越界一律 [`ConfigError::Invalid`] hard
+/// fail——不静默纠偏，避免"配出别扭水位却照跑"。详见 turn-loop.md §4。
+fn validate_compact_ratios(path: &Path, turn: &TurnConfig) -> Result<(), ConfigError> {
+    let invalid = |message: String| ConfigError::Invalid {
+        path: path.to_path_buf(),
+        message,
+    };
+    // 各 ratio 的取值域。
+    for (name, ratio) in [
+        ("microcompact_ratio", turn.microcompact_ratio),
+        ("compact_soft_ratio", turn.compact_soft_ratio),
+        ("compact_ratio", turn.compact_ratio),
+    ] {
+        if let Some(r) = ratio
+            && !(r > 0.0 && r <= 1.0)
+        {
+            return Err(invalid(format!(
+                "[turn].{name} must be in (0, 1], got {r}"
+            )));
+        }
+    }
+    // 仅对开启的档做排序约束：micro ≤ soft < hard。
+    let micro = turn.microcompact_enabled.then_some(turn.microcompact_ratio).flatten();
+    let soft = turn
+        .background_compact_enabled
+        .then_some(turn.compact_soft_ratio)
+        .flatten();
+    let hard = turn.compact_ratio;
+    if let (Some(soft), Some(hard)) = (soft, hard)
+        && soft >= hard
+    {
+        return Err(invalid(format!(
+            "[turn].compact_soft_ratio ({soft}) must be < compact_ratio ({hard}); \
+             soft 水位须严格低于 hard，才能留出后台压缩窗口"
+        )));
+    }
+    if let (Some(micro), Some(soft)) = (micro, soft)
+        && micro > soft
+    {
+        return Err(invalid(format!(
+            "[turn].microcompact_ratio ({micro}) must be ≤ compact_soft_ratio ({soft})"
+        )));
+    }
+    if let (Some(micro), Some(hard)) = (micro, hard)
+        && micro >= hard
+    {
+        return Err(invalid(format!(
+            "[turn].microcompact_ratio ({micro}) must be < compact_ratio ({hard})"
+        )));
+    }
+    Ok(())
 }
 
 fn raw_provider_config<'a>(

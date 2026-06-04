@@ -88,6 +88,31 @@ impl History for VecHistory {
         inner.est_since_baseline = 0;
     }
 
+    fn splice_prefix(&self, drop_count: usize, summary: Message) -> usize {
+        let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
+        // 不变式校验：`drop_count` 在某时刻的 snapshot 上算得，回写时列表只该因尾插
+        // （append）/ 原地替换变得**不更短**——若当前比 drop_count 还短，说明飞行期间
+        // 有人删了中段消息（违反 single-flight 不变式，见 session.rs 文档）。debug 下
+        // 炸出来定位 bug；release 下靠下面的 clamp 兜底不 panic。
+        debug_assert!(
+            drop_count <= inner.messages.len(),
+            "splice_prefix invariant violated: drop_count={drop_count} > current len={}; \
+             history shrank mid-flight (concurrent mid-list deletion?)",
+            inner.messages.len()
+        );
+        // clamp 到当前长度——并发尾插只会让列表更长，drop_count 不该越界，
+        // 但 clamp 是廉价的安全网（极端竞态下旧 snapshot 比当前还长亦不 panic）。
+        let drop_count = drop_count.min(inner.messages.len());
+        let tail = inner.messages.split_off(drop_count);
+        inner.messages = Vec::with_capacity(tail.len() + 1);
+        inner.messages.push(summary);
+        inner.messages.extend(tail);
+        // 同 replace：新前缀真实 token 数未知，等下一次 LLM 调用回报。
+        inner.last_real_input = None;
+        inner.est_since_baseline = 0;
+        drop_count
+    }
+
     fn record_input_tokens(&self, tokens: u64) {
         let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
         inner.last_real_input = Some(tokens);

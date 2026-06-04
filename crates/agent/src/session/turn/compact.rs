@@ -16,16 +16,19 @@
 //! 失败（无安全边界 / provider 出错 / 摘要为空 / 取消）一律**最佳努力**降级：
 //! 跳过本次压缩、不杀 turn——大不了下一次真实调用自己撞上下文上限。
 
+use std::sync::Arc;
+
 use futures::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 use crate::llm::{
-    CompletionRequest, HostedCapabilities, Message, MessageContent, ProviderChunk, Role,
-    SamplingParams, StopReason, ThinkingConfig, ToolChoice, ToolResultBody, ToolResultContent,
+    CompletionRequest, HostedCapabilities, LlmProvider, Message, MessageContent, ProviderChunk,
+    Role, SamplingParams, StopReason, ThinkingConfig, ToolChoice, ToolResultBody,
+    ToolResultContent,
 };
 use crate::session::history::estimate_message_tokens;
-use crate::session::{CompactionReport, TurnError};
-
-use super::TurnRunner;
+use crate::session::CompactionReport;
+use crate::tool::ToolSchema;
 
 /// 保留尾部的 token 预算下限 / 上限（对齐 opencode 的 2k–8k）。
 const MIN_TAIL_TOKENS: u64 = 2_000;
@@ -82,61 +85,92 @@ Critical facts, data, snippets, or references needed to continue.
 ## Relevant Files
 `path` — why it matters (one per line).";
 
-/// 执行一次压缩。返回 `Ok(Some(report))` 表示压缩成功（调用方据此发
-/// `ContextCompressed` 事件）；`Ok(None)` 表示本次最佳努力跳过。
-pub(super) async fn run(
-    runner: &TurnRunner<'_>,
-    threshold: u64,
-) -> Result<Option<CompactionReport>, TurnError> {
-    let messages = runner.history.snapshot();
-    let tail_budget = (threshold / 4).clamp(MIN_TAIL_TOKENS, MAX_TAIL_TOKENS);
+/// 压缩任务的不可变上下文——从 [`super::TurnRunner`] 抽出的、做一次摘要所需的
+/// 最小依赖集，全为 owned / `Arc`，故可被 `tokio::spawn` 的**后台**压缩任务持有
+/// （`'static`）。同步兜底路径也走它，两条路径共用同一份摘要逻辑。
+#[derive(Clone)]
+pub(crate) struct CompactionCtx {
+    pub provider: Arc<dyn LlmProvider>,
+    pub model: String,
+    pub sampling: SamplingParams,
+    pub tools: Vec<ToolSchema>,
+    pub cancel: CancellationToken,
+}
 
-    let Some(boundary) = select_boundary(&messages, tail_budget) else {
+/// 一次压缩的计划：在某个 snapshot 上选好边界后的产物。`drop_count` 即 head 长度
+/// （= 待摘要并丢弃的前缀消息数），回写时交给 `History::splice_prefix`。
+pub(super) struct CompactionPlan {
+    /// 待摘要的前缀（head）。
+    pub head: Vec<Message>,
+    /// 上一轮压缩摘要（若 head 里检出），用于增量合并。
+    pub prev_summary: Option<String>,
+    /// 丢弃的前缀长度。
+    pub drop_count: usize,
+    /// 压缩前整段（head+tail）的 token 估算。
+    pub tokens_before: u64,
+}
+
+/// 纯计算：在 `messages` 上按 `threshold` 选边界，切出 head。`None` = 无安全边界
+/// （如单个超长轮次 / 仅一个轮次），调用方据此跳过。不碰 `History`、不调 LLM。
+pub(super) fn plan(messages: &[Message], threshold: u64) -> Option<CompactionPlan> {
+    let tail_budget = (threshold / 4).clamp(MIN_TAIL_TOKENS, MAX_TAIL_TOKENS);
+    let Some(boundary) = select_boundary(messages, tail_budget) else {
         tracing::warn!(
             messages = messages.len(),
             tail_budget,
             "compaction skipped: no safe turn boundary to summarize before"
         );
-        return Ok(None);
+        return None;
     };
-
-    let (head, tail) = messages.split_at(boundary);
+    let (head, _tail) = messages.split_at(boundary);
     let prev_summary = extract_previous_summary(head);
+    Some(CompactionPlan {
+        head: head.to_vec(),
+        prev_summary,
+        drop_count: boundary,
+        tokens_before: estimate_total(messages),
+    })
+}
 
-    let Some(summary) = summarize(runner, head, prev_summary.as_deref()).await else {
-        // summarize 内部已 warn（取消 / provider 错 / 空摘要）。
-        return Ok(None);
-    };
-
-    let tokens_before = estimate_total(&messages);
-
-    let summary_msg = Message {
+/// 把摘要文本包成合成的 assistant 摘要消息（带 [`SUMMARY_PREFIX`]）。
+pub(super) fn summary_message(summary: &str) -> Message {
+    Message {
         role: Role::Assistant,
         content: vec![MessageContent::Text {
             text: format!("{SUMMARY_PREFIX}\n{summary}"),
         }]
         .into(),
-    };
-    let mut rebuilt = Vec::with_capacity(tail.len() + 1);
-    rebuilt.push(summary_msg);
-    rebuilt.extend(tail.iter().cloned());
+    }
+}
 
-    let tokens_after = estimate_total(&rebuilt);
-    runner.history.replace(rebuilt);
+/// 同步压缩（hard 水位兜底 / 后台关闭时）：在 turn 主循环里阻塞跑完一次压缩并回写。
+/// 返回 `Some(report)` 表示成功（调用方发 `ContextCompressed`）；`None` 最佳努力跳过。
+///
+/// 用 `splice_prefix(plan.drop_count, ..)` 而非 `replace`：与后台路径同一回写原语，
+/// 语义统一——这里 snapshot 与回写之间没有并发尾插，`drop_count` 等价于整表前缀。
+pub(super) async fn run_sync(
+    history: &dyn crate::session::History,
+    ctx: &CompactionCtx,
+    threshold: u64,
+) -> Option<CompactionReport> {
+    let messages = history.snapshot();
+    let plan = plan(&messages, threshold)?;
+    let summary = summarize(ctx, &plan.head, plan.prev_summary.as_deref()).await?;
+    let summary_msg = summary_message(&summary);
+
+    history.splice_prefix(plan.drop_count, summary_msg);
+    let tokens_after = estimate_total(&history.snapshot());
 
     tracing::info!(
-        boundary,
-        head_messages = head.len(),
-        tail_messages = tail.len(),
-        tokens_before,
+        drop_count = plan.drop_count,
+        tokens_before = plan.tokens_before,
         tokens_after,
-        "context compacted"
+        "context compacted (sync)"
     );
-
-    Ok(Some(CompactionReport {
-        tokens_before,
+    Some(CompactionReport {
+        tokens_before: plan.tokens_before,
         tokens_after,
-    }))
+    })
 }
 
 /// 选保留边界：返回**第一条要保留**的消息下标（tail 起点）。
@@ -185,7 +219,10 @@ fn select_boundary(messages: &[Message], tail_budget: u64) -> Option<usize> {
 }
 
 /// 是否「轮次起点」：真实用户输入消息。
-fn is_turn_start(msg: &Message) -> bool {
+///
+/// `pub(super)`：微压缩（`session/turn/microcompact.rs`）复用同一把轮次尺子，
+/// 避免两处「轮次起点」判定漂移。
+pub(super) fn is_turn_start(msg: &Message) -> bool {
     msg.role == Role::User
         && msg
             .content
@@ -226,8 +263,8 @@ fn extract_previous_summary(head: &[Message]) -> Option<String> {
 
 /// 对 head 跑一次「只产文本」的摘要子请求，返回摘要正文。
 /// 任何失败（取消 / provider 错 / 空）→ `None`（调用方降级跳过）。
-async fn summarize(
-    runner: &TurnRunner<'_>,
+pub(super) async fn summarize(
+    ctx: &CompactionCtx,
     head: &[Message],
     prev_summary: Option<&str>,
 ) -> Option<String> {
@@ -241,22 +278,22 @@ async fn summarize(
     });
 
     let req = CompletionRequest {
-        model: runner.config.model.clone(),
+        model: ctx.model.clone(),
         system: Some(SUMMARIZER_SYSTEM.into()),
         messages,
         // 带上 tools schema 让 head 里的 tool_use/tool_result 历史在 wire 上合法，
         // 但 tool_choice=None 禁止摘要模型真去调工具——它只该产文本。
-        tools: runner.tools.schemas(),
+        tools: ctx.tools.clone(),
         tool_choice: ToolChoice::None,
         sampling: SamplingParams {
             // 摘要不需要思考链，关掉省 token。
             thinking: ThinkingConfig::Disabled,
-            ..runner.config.sampling.clone()
+            ..ctx.sampling.clone()
         },
         hosted_capabilities: HostedCapabilities::default(),
     };
 
-    let mut stream = match runner.provider.complete(req, runner.cancel.clone()).await {
+    let mut stream = match ctx.provider.complete(req, ctx.cancel.clone()).await {
         Ok(s) => s,
         Err(err) => {
             tracing::warn!(error = %err, "compaction summarize failed: provider error");
@@ -268,7 +305,7 @@ async fn summarize(
     loop {
         tokio::select! {
             biased;
-            () = runner.cancel.cancelled() => {
+            () = ctx.cancel.cancelled() => {
                 tracing::warn!("compaction summarize cancelled");
                 return None;
             }

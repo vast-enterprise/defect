@@ -206,7 +206,12 @@ impl TraceProjector {
             AgentEvent::ContextCompressed {
                 tokens_before,
                 tokens_after,
-            } => self.on_context_compressed(tokens_before, tokens_after, now, new_id),
+            } => self.on_context_compressed(tokens_before, tokens_after, None, now, new_id),
+            AgentEvent::ContextMicrocompacted {
+                tokens_before,
+                tokens_after,
+                cleared,
+            } => self.on_context_compressed(tokens_before, tokens_after, Some(cleared), now, new_id),
             AgentEvent::TurnEnded { reason, usage } => {
                 self.on_turn_ended(reason, usage, now, new_id)
             }
@@ -474,10 +479,13 @@ impl TraceProjector {
         )]
     }
 
+    /// `cleared` 为 `Some` 表示微压缩（清理 tool_result，无 LLM）；`None` 表示全量
+    /// 摘要压缩。两者投成同形观测，仅 name/metadata 区分。
     fn on_context_compressed(
         &mut self,
         tokens_before: u64,
         tokens_after: u64,
+        cleared: Option<usize>,
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
@@ -487,11 +495,19 @@ impl TraceProjector {
         let mut meta = serde_json::Map::new();
         meta.insert("tokens_before".into(), tokens_before.into());
         meta.insert("tokens_after".into(), tokens_after.into());
+        if let Some(cleared) = cleared {
+            meta.insert("cleared_tool_results".into(), cleared.into());
+        }
+        let name = if cleared.is_some() {
+            "context_microcompaction"
+        } else {
+            "context_compaction"
+        };
 
         let body = ObservationBody {
             id: new_id(),
             trace_id: turn.trace_id.clone(),
-            name: Some("context_compaction".into()),
+            name: Some(name.into()),
             start_time: Some(now.to_string()),
             metadata: Some(serde_json::Value::Object(meta)),
             environment: Some(DEFAULT_ENVIRONMENT.into()),

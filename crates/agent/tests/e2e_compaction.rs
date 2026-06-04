@@ -46,12 +46,19 @@ fn caps() -> Capabilities {
 struct RecordingProvider {
     /// 每次 complete 收到的 (tool_choice_is_none, message_count)。
     seen: Mutex<Vec<(bool, usize)>>,
+    /// model_info 报告的 context_window——决定三档压缩阈值。
+    context_window: u64,
 }
 
 impl RecordingProvider {
     fn new() -> Self {
+        Self::with_context_window(100)
+    }
+
+    fn with_context_window(context_window: u64) -> Self {
         Self {
             seen: Mutex::new(Vec::new()),
+            context_window,
         }
     }
 }
@@ -74,12 +81,12 @@ impl LlmProvider for RecordingProvider {
     }
 
     fn model_info(&self, model_id: &str) -> Option<ModelInfo> {
-        // 极小 context_window → 阈值 = floor(100 * 0.85) = 85 token，
-        // 预置历史轻松越过它，触发压缩。
+        // context_window 决定三档阈值。默认 100 → hard=floor(100*0.85)=85，
+        // 预置历史轻松越过，触发同步压缩。
         Some(ModelInfo {
             id: model_id.to_string(),
             display_name: None,
-            context_window: Some(100),
+            context_window: Some(self.context_window),
             max_output_tokens: Some(64),
             deprecated: false,
             capabilities_overrides: Default::default(),
@@ -256,6 +263,93 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
         )
     });
     assert!(has_summary_text, "first message should carry the summary");
+}
+
+/// 后台压缩路径：估算落在 soft 水位 `[soft, hard)` 区间时，turn **不**同步压缩，
+/// 而是异步起一次后台摘要压缩；本轮请求带满历史，压缩落地在随后（这里轮询历史
+/// 直到首条变成合成摘要）。
+#[tokio::test]
+async fn background_compaction_runs_off_turn_critical_path() {
+    // 预置历史 ≈ 314 token（3×102 大 user + 3×2 小 reply）+ 新 prompt ~2 ≈ 316。
+    // 取 context_window=405 → micro=floor(405*0.6)=243, soft=283, hard=344。
+    // 估算 ~316 ∈ [283, 344) 的 soft 带（两侧各 ~30 余量）：本轮异步起后台压缩。
+    // 历史无大 tool_result（纯文本轮次）→ 微压缩无可清理项 → 跳过，落到 soft。
+    let provider = Arc::new(RecordingProvider::with_context_window(405));
+    let provider_dyn = provider.clone() as Arc<dyn LlmProvider>;
+
+    let big = "x".repeat(400); // ~100 token each
+    let history = vec![
+        text_msg(Role::User, &format!("turn one {big}")),
+        text_msg(Role::Assistant, "reply one"),
+        text_msg(Role::User, &format!("turn two {big}")),
+        text_msg(Role::Assistant, "reply two"),
+        text_msg(Role::User, &format!("turn three {big}")),
+        text_msg(Role::Assistant, "reply three"),
+    ];
+    let loaded = LoadedSession {
+        info: SessionCreateInfo {
+            id: SessionId::new(new_session_id()),
+            cwd: std::env::current_dir().expect("cwd"),
+            mcp_servers: Vec::new(),
+        },
+        history,
+    };
+
+    let core = DefaultAgentCore::builder()
+        .provider(provider_dyn)
+        .session_loader(Arc::new(StubLoader {
+            loaded: loaded.clone(),
+        }))
+        .config(TurnConfig {
+            model: "rec-001".to_string(),
+            ..TurnConfig::default()
+        })
+        .build();
+
+    let session = core
+        .load_session(
+            loaded.info.id.clone(),
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+            Arc::new(NoopShellBackend) as Arc<dyn ShellBackend>,
+            Frontend::Headless,
+        )
+        .await
+        .expect("load session");
+
+    let stop = session
+        .run_turn(vec![ContentBlock::Text(TextContent::new("new prompt"))])
+        .await
+        .expect("turn");
+    assert!(matches!(stop, StopReason::EndTurn));
+
+    // 本轮 turn 走 soft 带 → 异步起后台压缩，**不**阻塞本轮：故本轮的正常请求
+    // 看到的是未压缩的满历史（首条仍是原始 user 轮，不是摘要）。
+    // 后台压缩随后落地——轮询历史直到首条变成合成摘要（带 SUMMARY 前缀）。
+    let mut compacted = false;
+    for _ in 0..50 {
+        let snap = session.history_snapshot();
+        if let Some(first) = snap.first()
+            && first.role == Role::Assistant
+            && first.content.iter().any(|c| {
+                matches!(c, MessageContent::Text { text } if text.contains("ship compaction"))
+            })
+        {
+            compacted = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        compacted,
+        "background compaction should eventually rebuild history with a summary"
+    );
+
+    // provider 必收到过一个摘要子请求（tool_choice=None）。
+    let seen = provider.seen.lock().expect("seen poisoned").clone();
+    assert!(
+        seen.iter().any(|(is_sum, _)| *is_sum),
+        "expected a background summarize sub-request, saw {seen:?}"
+    );
 }
 
 struct StubLoader {

@@ -1422,3 +1422,111 @@ secret_key = "sk-lf-team"
     assert_eq!(lf.secret_key.as_deref(), Some("sk-lf-team"));
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 }
+
+#[test]
+fn compact_soft_ratio_not_below_hard_is_rejected() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[default]
+provider = "echo"
+model = "m"
+
+[turn]
+compact_ratio = 0.6
+compact_soft_ratio = 0.7
+"#,
+    );
+
+    let err = load_config(test_options(&tmp)).expect_err("inverted watermarks");
+    match err {
+        ConfigError::Invalid { message, .. } => {
+            assert!(
+                message.contains("compact_soft_ratio") && message.contains("compact_ratio"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn compact_ratio_out_of_range_is_rejected() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[default]
+provider = "echo"
+model = "m"
+
+[turn]
+compact_ratio = 1.5
+"#,
+    );
+
+    let err = load_config(test_options(&tmp)).expect_err("ratio out of range");
+    match err {
+        ConfigError::Invalid { message, .. } => {
+            assert!(
+                message.contains("compact_ratio") && message.contains("(0, 1]"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn valid_three_tier_watermarks_load() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[default]
+provider = "echo"
+model = "m"
+
+[turn]
+microcompact_ratio = 0.5
+compact_soft_ratio = 0.65
+compact_ratio = 0.8
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("valid watermarks load");
+    assert_eq!(loaded.effective.turn.microcompact_ratio, Some(0.5));
+    assert_eq!(loaded.effective.turn.compact_soft_ratio, Some(0.65));
+    assert_eq!(loaded.effective.turn.compact_ratio, Some(0.8));
+}
+
+#[test]
+fn disabled_tier_skips_ordering_check() {
+    // soft 比例倒挂，但 background_compact 关闭 → 该档不参与排序约束 → 应放行。
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[default]
+provider = "echo"
+model = "m"
+
+[turn]
+background_compact_enabled = false
+compact_soft_ratio = 0.9
+compact_ratio = 0.8
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("disabled tier skips check");
+    assert!(!loaded.effective.turn.background_compact_enabled);
+}

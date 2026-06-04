@@ -145,10 +145,18 @@ pub trait History: Send + Sync {
 
 **History 是纯存储 + token 计量，压缩编排不在这里。** 早先把 `compact()` 设在
 trait 上是设计错位——摘要要调 LLM，存储抽象够不到 provider。改为：trait 提供
-`replace`（整体回写）与 `record_input_tokens`（喂真实用量），压缩的「选边界 → 调
-LLM 摘要 → 重建消息列表」放在 turn 主循环（见 [`turn-loop.md`](./turn-loop.md) §4 与
-`crates/agent/src/session/turn/compact.rs`）。这与 codex / opencode / Claude Code 三家
-一致：摘要编排都在 session/turn 层而非消息存储里。
+`replace`（整体回写）、`splice_prefix`（前缀替换，后台压缩回写用）与
+`record_input_tokens`（喂真实用量），压缩的「选边界 → 调 LLM 摘要 → 重建消息列表」
+放在 turn 主循环（见 [`turn-loop.md`](./turn-loop.md) §4 与
+`crates/agent/src/session/turn/{compact,microcompact,compaction_slot}.rs`）。这与
+codex / opencode / Claude Code 三家一致：摘要编排都在 session/turn 层而非消息存储里。
+
+`splice_prefix(drop_count, summary)` 是后台压缩的回写原语：后台任务在旧 snapshot 上
+算出 `drop_count`，但摘要 LLM 调用期间前台仍在尾插，故不能 `replace(整表)`——
+`splice_prefix` 只换掉**当前**列表前 `drop_count` 条、保留其后全部（含期间新增的尾部）。
+其并发安全前提（飞行期间不增删中段）由后台压缩 single-flight 保证，详见 turn-loop §4.1。
+`history` 字段由此从 `Box<dyn History>` 改为 `Arc<dyn History>`——后台压缩任务要
+`'static` 持有它跨 turn。
 
 为什么仍抽 trait：
 

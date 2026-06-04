@@ -880,6 +880,14 @@ pub(crate) struct TurnSection {
     pub(crate) request_limit: Option<u32>,
     pub(crate) compact_threshold_tokens: Option<u64>,
     pub(crate) compact_ratio: Option<f64>,
+    /// 后台全量压缩开关（越 soft 水位异步起摘要压缩，不阻塞当轮）。
+    pub(crate) background_compact_enabled: Option<bool>,
+    /// 后台压缩 soft 水位占 `context_window` 的比例（默认 0.7）。
+    pub(crate) compact_soft_ratio: Option<f64>,
+    /// 微压缩开关（清理较旧轮次里的超大 tool_result，不调 LLM）。
+    pub(crate) microcompact_enabled: Option<bool>,
+    /// 微压缩水位占 `context_window` 的比例（默认 0.6）。
+    pub(crate) microcompact_ratio: Option<f64>,
     pub(crate) max_llm_retries: Option<u32>,
     pub(crate) max_concurrent_tools: Option<usize>,
     /// `before turn-end` hook 强制续命的硬上限。`None` ⇒ 用 agent 侧默认（3）。

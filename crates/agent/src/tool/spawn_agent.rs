@@ -532,6 +532,13 @@ async fn run_subagent_core(
         // 子 agent turn 不携后台句柄：结构性禁止后台任务自我繁殖
         // （与"白名单永不含 spawn_agent 自己"同一道防递归思路）。
         background: None,
+        // 子 agent turn 不做后台压缩：上下文短、生命周期随工具调用结束，无须跨
+        // turn 的后台摘要。仍享 hard 水位的同步压缩兜底（compact_hard 路径要求
+        // provider_arc）——故给它 provider_arc，其余后台压缩件留空。
+        compaction_slot: None,
+        history_arc: None,
+        provider_arc: Some(provider.clone()),
+        session_cancel: None,
         // 子 agent 的 task 是它的"用户输入"。
         ingest_source: crate::hooks::step::IngestSource::User,
     };

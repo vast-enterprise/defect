@@ -131,6 +131,15 @@ pub enum AgentEvent {
         tokens_after: u64,
     },
 
+    /// 主循环做了一次**微压缩**：清理较旧轮次里的超大 `tool_result` 正文（不调
+    /// LLM、不删消息）。`cleared` = 实际清理的 `tool_result` 条数。与
+    /// [`Self::ContextCompressed`] 区分以便 observability / UI 分别展示。
+    ContextMicrocompacted {
+        tokens_before: u64,
+        tokens_after: u64,
+        cleared: usize,
+    },
+
     // ---------- subagent 嵌套（仅 observability） ----------
     /// 一个 `spawn_agent` 子 agent turn 内部产生的事件，**包裹**后从子 turn
     /// 的隔离事件流桥接到父 session 的事件流。

@@ -339,7 +339,7 @@ impl AgentCore for DefaultAgentCore {
             let concrete = Arc::new(DefaultSession {
                 id: id.clone(),
                 cwd,
-                history: Box::new(VecHistory::new()) as Box<dyn History>,
+                history: Arc::new(VecHistory::new()) as Arc<dyn History>,
                 tools: composite,
                 registry: self.registry.clone(),
                 provider_state: RwLock::new(initial),
@@ -349,6 +349,7 @@ impl AgentCore for DefaultAgentCore {
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
                 background: crate::session::BackgroundTasks::new(session_cancel.clone()),
+                compaction_slot: crate::session::CompactionSlot::new(),
                 turn_freed: Arc::new(tokio::sync::Notify::new()),
                 session_cancel,
                 config: RwLock::new(
@@ -433,7 +434,7 @@ impl AgentCore for DefaultAgentCore {
             let concrete = Arc::new(DefaultSession {
                 id: loaded.info.id.clone(),
                 cwd: loaded.info.cwd.clone(),
-                history: Box::new(VecHistory::from_messages(loaded.history)),
+                history: Arc::new(VecHistory::from_messages(loaded.history)) as Arc<dyn History>,
                 tools: Arc::new(CompositeRegistry::new(
                     session_tools,
                     self.process_tools.clone(),
@@ -446,6 +447,7 @@ impl AgentCore for DefaultAgentCore {
                 permissions: Arc::new(PermissionGate::new()),
                 turn_state: Mutex::new(TurnSlot::default()),
                 background: crate::session::BackgroundTasks::new(session_cancel.clone()),
+                compaction_slot: crate::session::CompactionSlot::new(),
                 turn_freed: Arc::new(tokio::sync::Notify::new()),
                 session_cancel,
                 config: RwLock::new(
@@ -542,7 +544,9 @@ struct SessionProviderState {
 pub struct DefaultSession {
     id: SessionId,
     cwd: PathBuf,
-    history: Box<dyn History>,
+    /// `Arc` 而非 `Box`：后台压缩任务（[`CompactionSlot`]）要 `'static` 持有它
+    /// 跨 turn，故须可共享引用计数。
+    history: Arc<dyn History>,
     tools: Arc<dyn ToolRegistry>,
     /// 全局 provider 目录。session 共享 [`DefaultAgentCore`] 持有的同一份
     /// `Arc<ProviderRegistry>`——list_models / set_model 的 candidate 与
@@ -570,6 +574,9 @@ pub struct DefaultSession {
     /// 把 clone 经 `TurnRunner` → `ToolContext` 注入给工具。详见
     /// `docs/proposals/task-arrange.md` §3.1。
     background: crate::session::BackgroundTasks,
+    /// session 级后台压缩槽（single-flight）。越 soft 水位时由 turn 主循环异步起一次
+    /// 摘要压缩，不阻塞本轮。详见 `session/turn/compaction_slot.rs`。
+    compaction_slot: crate::session::CompactionSlot,
     /// turn slot 释放通知。`TurnGuard::drop` 时 `notify_one`——session driver 在
     /// 撞上 `TurnInProgress` 后等它，待当前 turn 结束再起自主续转 turn（主动续转的
     /// 活性保证）。详见 `docs/proposals/task-arrange.md` §3.2。
@@ -737,6 +744,12 @@ impl DefaultSession {
                 // 顶层 turn 注入 session 级后台任务句柄——工具的 run_in_background
                 // 能力由此开启。嵌套子 agent turn 不注入（见 spawn_agent）。
                 background: Some(self.background.clone()),
+                // 顶层 turn 注入后台压缩槽 + history/provider 的 Arc，使越 soft 水位时
+                // 能异步起摘要压缩。子 agent turn 全传 None（见 spawn_agent）。
+                compaction_slot: Some(self.compaction_slot.clone()),
+                history_arc: Some(self.history.clone()),
+                provider_arc: Some(provider.clone()),
+                session_cancel: Some(self.session_cancel.clone()),
                 ingest_source,
             };
 
