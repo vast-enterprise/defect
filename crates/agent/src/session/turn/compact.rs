@@ -26,8 +26,8 @@ use crate::llm::{
     Role, SamplingParams, StopReason, ThinkingConfig, ToolChoice, ToolResultBody,
     ToolResultContent,
 };
-use crate::session::history::estimate_message_tokens;
 use crate::session::CompactionReport;
+use crate::session::history::estimate_message_tokens;
 use crate::tool::ToolSchema;
 
 /// 保留尾部的 token 预算下限 / 上限（对齐 opencode 的 2k–8k）。

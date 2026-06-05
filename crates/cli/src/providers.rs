@@ -27,9 +27,9 @@ use defect_config::{
 };
 // 仅 reasoning-effort 映射用，随 openai/deepseek 编入。
 #[cfg(any(feature = "provider-openai", feature = "provider-deepseek"))]
-use defect_config::ReasoningEffort as ConfigReasoningEffort;
-#[cfg(any(feature = "provider-openai", feature = "provider-deepseek"))]
 use defect_agent::llm::ReasoningEffort as LlmReasoningEffort;
+#[cfg(any(feature = "provider-openai", feature = "provider-deepseek"))]
+use defect_config::ReasoningEffort as ConfigReasoningEffort;
 #[cfg(feature = "provider-anthropic")]
 use defect_llm::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 #[cfg(feature = "provider-bedrock")]

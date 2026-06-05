@@ -192,10 +192,7 @@ impl DefaultAgentCoreBuilder {
     /// 设置后台任务进度视图配置（进度环容量 / 单 block 正文字符上限）。未调用时
     /// 用默认（环 64、正文上限 0 = 只给摘要/元信息，不灌子 turn 正文）。CLI 装配期
     /// 从 `[tools.background]` 投影注入。
-    pub fn background_progress(
-        mut self,
-        config: crate::session::BackgroundProgressConfig,
-    ) -> Self {
+    pub fn background_progress(mut self, config: crate::session::BackgroundProgressConfig) -> Self {
         self.background_progress = config;
         self
     }
@@ -725,10 +722,8 @@ impl DefaultSession {
             // session 作用域注入（after_session_enter hook 的 additional_context，
             // 如 skill L1 清单 / always-on skill body）与显式 system_prompt 合并成
             // 单一 "Session Instructions" overlay——两者同源、同落点，不另加参数。
-            let session_overlay = merge_session_overlay(
-                config.system_prompt.as_deref(),
-                &self.session_start_append,
-            );
+            let session_overlay =
+                merge_session_overlay(config.system_prompt.as_deref(), &self.session_start_append);
             let system_prompt = resolve_system_prompt(
                 &running_ctx,
                 &provider.info().vendor,

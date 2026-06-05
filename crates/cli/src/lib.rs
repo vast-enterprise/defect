@@ -24,6 +24,7 @@
 #![warn(clippy::indexing_slicing, clippy::unwrap_used)]
 
 pub mod args;
+pub mod assembly;
 pub mod hooks;
 pub mod http_stack;
 pub mod mcp_servers;

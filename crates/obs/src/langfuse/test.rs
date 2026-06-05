@@ -548,7 +548,10 @@ fn turn_ended_updates_trace_with_same_id() {
     // 再关闭 step span（[1]），最后发 trace 更新（[2]）。
     assert_eq!(ended[0]["type"], "generation-update");
     assert_eq!(ended[1]["type"], "span-update");
-    assert_eq!(ended[1]["body"]["name"].is_null() || ended[1]["body"]["name"] == "step", true);
+    assert_eq!(
+        ended[1]["body"]["name"].is_null() || ended[1]["body"]["name"] == "step",
+        true
+    );
     assert_eq!(ended[2]["type"], "trace-create");
     // trace 用同一 trace_id 更新（合并 input/output/endTime）。
     assert_eq!(ended[2]["body"]["id"], trace_id);
@@ -656,7 +659,12 @@ fn foreground_subagent_nests_under_open_tool_span() {
     assert_eq!(subagent_span_id, "id-1-sub-sa-1");
     // subagent span 挂在父工具 span 下（嵌套）。
     assert_eq!(out[0]["body"]["parentObservationId"], tool_span_id);
-    assert!(out[0]["body"]["name"].as_str().unwrap().contains("reviewer"));
+    assert!(
+        out[0]["body"]["name"]
+            .as_str()
+            .unwrap()
+            .contains("reviewer")
+    );
 
     // 子 turn 的 step 挂在 subagent span 下。
     assert_eq!(out[1]["type"], "span-create");
@@ -741,7 +749,10 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
     assert_eq!(out[1]["body"]["name"], "step");
     assert_eq!(out[1]["body"]["parentObservationId"], "id-1-sub-sa-9");
     assert_eq!(out[2]["type"], "generation-create");
-    assert_eq!(out[2]["body"]["parentObservationId"], "id-1-sub-sa-9-step-1");
+    assert_eq!(
+        out[2]["body"]["parentObservationId"],
+        "id-1-sub-sa-9-step-1"
+    );
     let gen_id = out[2]["body"]["id"].as_str().unwrap().to_string();
 
     // 子 turn 的流式输出：output 正文 + thinking。
@@ -750,24 +761,36 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
         agent_type: "worker".into(),
         inner: Box::new(inner),
     };
-    project_json(&mut proj, sub_event(AgentEvent::AssistantText {
-        content: text_block("bg answer"),
-    }), &mut ids);
-    project_json(&mut proj, sub_event(AgentEvent::AssistantThought {
-        content: text_block("bg reasoning"),
-    }), &mut ids);
+    project_json(
+        &mut proj,
+        sub_event(AgentEvent::AssistantText {
+            content: text_block("bg answer"),
+        }),
+        &mut ids,
+    );
+    project_json(
+        &mut proj,
+        sub_event(AgentEvent::AssistantThought {
+            content: text_block("bg reasoning"),
+        }),
+        &mut ids,
+    );
     // 本次调用的 usage（流 drain 后到达）→ LlmCallFinished 当即 flush 子 generation。
-    let gen_flush = project_json(&mut proj, sub_event(AgentEvent::LlmCallFinished {
-        model: "m".into(),
-        attempt: 1,
-        usage: Usage {
-            input_tokens: Some(11),
-            output_tokens: Some(7),
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-        },
-        error: None,
-    }), &mut ids);
+    let gen_flush = project_json(
+        &mut proj,
+        sub_event(AgentEvent::LlmCallFinished {
+            model: "m".into(),
+            attempt: 1,
+            usage: Usage {
+                input_tokens: Some(11),
+                output_tokens: Some(7),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
+            error: None,
+        }),
+        &mut ids,
+    );
     // 子 generation-update：output / reasoning / usageDetails 都写到位（与父 turn 同形）。
     let gen_update = gen_flush
         .iter()
@@ -779,10 +802,14 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
     assert_eq!(gen_update["body"]["usageDetails"]["output"], 7);
 
     // 子 turn 结束 → 关闭子 step span + 关闭 subagent span。
-    let closed = project_json(&mut proj, sub_event(AgentEvent::TurnEnded {
-        reason: StopReason::EndTurn,
-        usage: Usage::default(),
-    }), &mut ids);
+    let closed = project_json(
+        &mut proj,
+        sub_event(AgentEvent::TurnEnded {
+            reason: StopReason::EndTurn,
+            usage: Usage::default(),
+        }),
+        &mut ids,
+    );
     // 子 step 收尾。
     assert!(closed.iter().any(|e| e["type"] == "span-update"
         && e["body"]["id"] == "id-1-sub-sa-9-step-1"
@@ -844,7 +871,10 @@ fn recursive_subagent_depth_two_nests_correctly() {
     // B 内的 spawn_agent 工具 span：id = {B scope}-tool-B，挂在 B 的 step 下。
     assert_eq!(b_spawn[0]["type"], "span-create");
     assert_eq!(b_spawn[0]["body"]["id"], "id-1-sub-A-tool-B");
-    assert_eq!(b_spawn[0]["body"]["parentObservationId"], "id-1-sub-A-step-1");
+    assert_eq!(
+        b_spawn[0]["body"]["parentObservationId"],
+        "id-1-sub-A-step-1"
+    );
 
     // 孙 agent C 的事件：path=[A,B]。建 C 的 subagent span + step + gen。
     let c = project_json(
@@ -873,5 +903,8 @@ fn recursive_subagent_depth_two_nests_correctly() {
     // C 的 generation 挂在 C 的 step 下。
     assert_eq!(c[2]["type"], "generation-create");
     assert_eq!(c[2]["body"]["id"], "id-1-sub-A-sub-B-step-1-gen");
-    assert_eq!(c[2]["body"]["parentObservationId"], "id-1-sub-A-sub-B-step-1");
+    assert_eq!(
+        c[2]["body"]["parentObservationId"],
+        "id-1-sub-A-sub-B-step-1"
+    );
 }

@@ -22,7 +22,9 @@ use futures::future::BoxFuture;
 use crate::error::BoxError;
 use crate::event::{AgentEvent, PermissionResolution};
 use crate::fs::FsBackend;
-use crate::llm::{Message, ModelCandidate, ModelInfo, ProviderError, ProviderInfo, ReasoningEffort};
+use crate::llm::{
+    Message, ModelCandidate, ModelInfo, ProviderError, ProviderInfo, ReasoningEffort,
+};
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolSchema};
 

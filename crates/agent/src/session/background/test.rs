@@ -148,14 +148,21 @@ fn user_msg(text: &str) -> Message {
 #[test]
 fn recent_blocks_flattens_messages_and_orders() {
     // 两条消息 → 摊平成 user + (assistant text + tool_use) = 3 个 block。
-    let msgs = vec![user_msg("do the thing"), assistant_msg("working on it", "read_file")];
+    let msgs = vec![
+        user_msg("do the thing"),
+        assistant_msg("working on it", "read_file"),
+    ];
     // limit 大，正文保留。
     let (total, recent) = recent_blocks_of(&msgs, 10, 1000);
     assert_eq!(total, 3);
     let kinds: Vec<BlockKind> = recent.iter().map(|b| b.kind).collect();
     assert_eq!(
         kinds,
-        vec![BlockKind::User, BlockKind::AssistantText, BlockKind::ToolUse]
+        vec![
+            BlockKind::User,
+            BlockKind::AssistantText,
+            BlockKind::ToolUse
+        ]
     );
     // tool_use 的文本是工具名。
     assert_eq!(recent[2].text, "read_file");
@@ -171,17 +178,29 @@ fn recent_blocks_default_limit_drops_free_form_body_keeps_tool_name() {
     let msgs = vec![assistant_msg("a long assistant reply", "read_file")];
     // limit 0：自由正文(assistant text)清空，工具名(非正文)保留。
     let (_total, recent) = recent_blocks_of(&msgs, 10, 0);
-    let text_block = recent.iter().find(|b| b.kind == BlockKind::AssistantText).unwrap();
+    let text_block = recent
+        .iter()
+        .find(|b| b.kind == BlockKind::AssistantText)
+        .unwrap();
     assert_eq!(text_block.text, "", "free-form body dropped at limit 0");
-    let tool_block = recent.iter().find(|b| b.kind == BlockKind::ToolUse).unwrap();
-    assert_eq!(tool_block.text, "read_file", "tool name kept (not a free-form body)");
+    let tool_block = recent
+        .iter()
+        .find(|b| b.kind == BlockKind::ToolUse)
+        .unwrap();
+    assert_eq!(
+        tool_block.text, "read_file",
+        "tool name kept (not a free-form body)"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn peek_reads_attached_history_committed_blocks() {
     use crate::session::{History, VecHistory};
 
-    let bg = BackgroundTasks::new(CancellationToken::new(), BackgroundProgressConfig::default());
+    let bg = BackgroundTasks::new(
+        CancellationToken::new(),
+        BackgroundProgressConfig::default(),
+    );
     // 用一个外部可控的 history Arc：任务体 attach 它，我们从外面往里 append 模拟子 turn 提交。
     let history: Arc<dyn History> = Arc::new(VecHistory::new());
     let history_for_task = history.clone();
@@ -212,7 +231,11 @@ async fn peek_reads_attached_history_committed_blocks() {
     let kinds: Vec<BlockKind> = snap.recent.iter().map(|b| b.kind).collect();
     assert_eq!(
         kinds,
-        vec![BlockKind::User, BlockKind::AssistantText, BlockKind::ToolUse]
+        vec![
+            BlockKind::User,
+            BlockKind::AssistantText,
+            BlockKind::ToolUse
+        ]
     );
     assert_eq!(snap.recent[2].text, "read_file");
 
@@ -222,7 +245,10 @@ async fn peek_reads_attached_history_committed_blocks() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn peek_without_attached_history_returns_empty_blocks() {
-    let bg = BackgroundTasks::new(CancellationToken::new(), BackgroundProgressConfig::default());
+    let bg = BackgroundTasks::new(
+        CancellationToken::new(),
+        BackgroundProgressConfig::default(),
+    );
     // 任务不 attach history。
     let id = bg.spawn("worker".to_string(), |_c, _handle| async {
         BackgroundResult::Completed("done".to_string())

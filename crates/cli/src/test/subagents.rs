@@ -338,7 +338,10 @@ fn main_session_auto_mounts_skill_hooks() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(injected.contains("**style**"), "L1 manifest: {injected}");
-    assert!(injected.contains("ALWAYS USE TABS"), "always-on body missing");
+    assert!(
+        injected.contains("ALWAYS USE TABS"),
+        "always-on body missing"
+    );
 
     // before_ingest：prompt 提及 .sql 路径 → sql skill 被前插提示。
     let mut ingest = BeforeIngest {

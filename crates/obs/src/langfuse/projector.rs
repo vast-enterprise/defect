@@ -48,7 +48,9 @@
 
 use std::collections::HashMap;
 
-use agent_client_protocol_schema::{ContentBlock, StopReason, ToolCallStatus, ToolCallUpdateFields};
+use agent_client_protocol_schema::{
+    ContentBlock, StopReason, ToolCallStatus, ToolCallUpdateFields,
+};
 use defect_agent::event::{AgentEvent, LlmRequestSnapshot};
 use defect_agent::llm::{Message, MessageContent, Role, Usage};
 
@@ -206,7 +208,9 @@ impl TraceProjector {
                 tokens_before,
                 tokens_after,
                 cleared,
-            } => self.on_context_compressed(tokens_before, tokens_after, Some(cleared), now, new_id),
+            } => {
+                self.on_context_compressed(tokens_before, tokens_after, Some(cleared), now, new_id)
+            }
             AgentEvent::TurnEnded { reason, usage } => {
                 self.on_turn_ended(reason, usage, now, new_id)
             }
@@ -345,7 +349,15 @@ impl TraceProjector {
         let Some(scope) = self.scopes.get_mut(&trace_id) else {
             return Vec::new();
         };
-        scope_tool_started(scope, &trace_id, &tool_call_id, name, raw_input, now, new_id)
+        scope_tool_started(
+            scope,
+            &trace_id,
+            &tool_call_id,
+            name,
+            raw_input,
+            now,
+            new_id,
+        )
     }
 
     fn on_top_tool_finished(

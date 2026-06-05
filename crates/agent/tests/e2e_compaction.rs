@@ -330,9 +330,9 @@ async fn background_compaction_runs_off_turn_critical_path() {
         let snap = session.history_snapshot();
         if let Some(first) = snap.first()
             && first.role == Role::Assistant
-            && first.content.iter().any(|c| {
-                matches!(c, MessageContent::Text { text } if text.contains("ship compaction"))
-            })
+            && first.content.iter().any(
+                |c| matches!(c, MessageContent::Text { text } if text.contains("ship compaction")),
+            )
         {
             compacted = true;
             break;

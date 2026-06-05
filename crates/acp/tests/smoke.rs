@@ -964,7 +964,11 @@ async fn set_config_option_switches_reasoning_effort() {
                 // 无模式目录：model + thought-level 两个选择器（无 permission_mode）。
                 assert_eq!(options.len(), 2);
                 assert!(options.iter().any(|o| o.id.0.as_ref() == "model"));
-                assert!(options.iter().any(|o| o.id.0.as_ref() == "reasoning_effort"));
+                assert!(
+                    options
+                        .iter()
+                        .any(|o| o.id.0.as_ref() == "reasoning_effort")
+                );
                 assert!(!options.iter().any(|o| o.id.0.as_ref() == "permission_mode"));
 
                 // 合法档位：high。

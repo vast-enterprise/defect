@@ -264,7 +264,9 @@ fn block_of_content(content: &MessageContent, role: Role, limit: usize) -> Progr
         MessageContent::Thinking { text, .. } => (BlockKind::Thought, text.clone()),
         // 工具名是一行摘要，不当正文截断；参数不进鸟瞰（要看细节去 langfuse trace）。
         MessageContent::ToolUse { name, .. } => (BlockKind::ToolUse, name.clone()),
-        MessageContent::ToolResult { output, .. } => (BlockKind::ToolResult, tool_result_text(output)),
+        MessageContent::ToolResult { output, .. } => {
+            (BlockKind::ToolResult, tool_result_text(output))
+        }
         MessageContent::Image { .. } => (BlockKind::Other, "<image>".to_string()),
         MessageContent::ProviderActivity { kind, .. } => {
             (BlockKind::Other, format!("provider activity: {kind:?}"))
@@ -370,7 +372,10 @@ impl BackgroundTasks {
     /// 用一个 session 级取消令牌 + 进度视图配置构造。`session_cancel` 由 session 持有、
     /// 随 session 终结而取消。
     #[must_use]
-    pub fn new(session_cancel: CancellationToken, progress_config: BackgroundProgressConfig) -> Self {
+    pub fn new(
+        session_cancel: CancellationToken,
+        progress_config: BackgroundProgressConfig,
+    ) -> Self {
         Self {
             cancel: session_cancel,
             completed_notify: Arc::new(Notify::new()),

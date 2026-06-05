@@ -480,13 +480,14 @@ fn validate_compact_ratios(path: &Path, turn: &TurnConfig) -> Result<(), ConfigE
         if let Some(r) = ratio
             && !(r > 0.0 && r <= 1.0)
         {
-            return Err(invalid(format!(
-                "[turn].{name} must be in (0, 1], got {r}"
-            )));
+            return Err(invalid(format!("[turn].{name} must be in (0, 1], got {r}")));
         }
     }
     // 仅对开启的档做排序约束：micro ≤ soft < hard。
-    let micro = turn.microcompact_enabled.then_some(turn.microcompact_ratio).flatten();
+    let micro = turn
+        .microcompact_enabled
+        .then_some(turn.microcompact_ratio)
+        .flatten();
     let soft = turn
         .background_compact_enabled
         .then_some(turn.compact_soft_ratio)

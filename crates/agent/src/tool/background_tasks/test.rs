@@ -19,7 +19,11 @@ use crate::shell::ShellBackend;
 use crate::tool::ToolContext;
 
 /// 跑一个工具，注入指定的 background 句柄（或 `None`），收集全部 tool 事件。
-fn run(tool: &dyn Tool, args: serde_json::Value, background: Option<BackgroundTasks>) -> Vec<ToolEvent> {
+fn run(
+    tool: &dyn Tool,
+    args: serde_json::Value,
+    background: Option<BackgroundTasks>,
+) -> Vec<ToolEvent> {
     let fs: Arc<dyn FsBackend> = Arc::new(NoopFsBackend);
     let shell: Arc<dyn ShellBackend> = Arc::new(crate::shell::NoopShellBackend);
     let http = Arc::new(NoopHttpClient);
@@ -93,7 +97,9 @@ async fn inspect_lists_running_and_finished() {
 
     // 等完成任务入表终态。
     for _ in 0..200 {
-        if bg.peek(&done_id, Some(1)).map(|s| s.status) == Some(crate::session::TaskStatus::Completed) {
+        if bg.peek(&done_id, Some(1)).map(|s| s.status)
+            == Some(crate::session::TaskStatus::Completed)
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -101,10 +107,9 @@ async fn inspect_lists_running_and_finished() {
 
     let tool = InspectBackgroundTaskTool::new();
     let bg2 = bg.clone();
-    let out =
-        tokio::task::spawn_blocking(move || run(&tool, serde_json::json!({}), Some(bg2)))
-            .await
-            .unwrap();
+    let out = tokio::task::spawn_blocking(move || run(&tool, serde_json::json!({}), Some(bg2)))
+        .await
+        .unwrap();
     let text = completed_text_of(&out[0]);
     assert!(text.contains(&done_id), "lists completed task");
     assert!(text.contains(&running_id), "lists running task");

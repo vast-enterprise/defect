@@ -307,7 +307,11 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
         let mut model_options = candidates
             .into_iter()
             .map(|c| {
-                let name = c.model.display_name.clone().unwrap_or_else(|| c.model.id.clone());
+                let name = c
+                    .model
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| c.model.id.clone());
                 let description = model_option_description(&c);
                 SessionConfigSelectOption::new(SessionConfigValueId::new(c.model.id), name)
                     .description(Some(description))
@@ -369,8 +373,13 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
     //    OpenAI wire 枚举一致。
     let current_effort = reasoning_value_id(session.current_reasoning_effort());
     let effort_options = vec![
-        SessionConfigSelectOption::new(SessionConfigValueId::new(REASONING_DEFAULT_VALUE), "Default")
-            .description(Some("沿用 provider 默认，不下发 reasoning_effort".to_string())),
+        SessionConfigSelectOption::new(
+            SessionConfigValueId::new(REASONING_DEFAULT_VALUE),
+            "Default",
+        )
+        .description(Some(
+            "沿用 provider 默认，不下发 reasoning_effort".to_string(),
+        )),
         SessionConfigSelectOption::new(SessionConfigValueId::new("none"), "None"),
         SessionConfigSelectOption::new(SessionConfigValueId::new("minimal"), "Minimal"),
         SessionConfigSelectOption::new(SessionConfigValueId::new("low"), "Low"),
@@ -600,8 +609,7 @@ impl ServeState {
         {
             Ok(session) => {
                 let config_options = session_config_options(session.as_ref()).await;
-                for notification in
-                    replay_notifications(session.id(), &session.history_snapshot())
+                for notification in replay_notifications(session.id(), &session.history_snapshot())
                 {
                     if let Err(err) = cx.send_notification(notification) {
                         tracing::warn!(?err, "failed to replay resumed session transcript");
@@ -703,7 +711,10 @@ impl ServeState {
         let apply_result = match config_id.as_str() {
             // 模型：转调 session.set_model（与 deprecated `session/set_model`
             // 同一后端）。未知 / 越界 model id → InvalidConfigOption。
-            MODEL_CONFIG_ID => session.set_model(value.clone()).await.map_err(|_| invalid_value()),
+            MODEL_CONFIG_ID => session
+                .set_model(value.clone())
+                .await
+                .map_err(|_| invalid_value()),
             // 权限模式：转调 session.set_mode（与 deprecated `session/set_mode`
             // 同一后端）。未知 mode id → InvalidConfigOption。
             MODE_CONFIG_ID => session.set_mode(value.clone()).map_err(|_| invalid_value()),

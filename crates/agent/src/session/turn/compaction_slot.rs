@@ -122,12 +122,7 @@ impl CompactionSlot {
 
 /// 跑一次后台压缩：snapshot → plan → summarize → `splice_prefix` 回写 → 发事件。
 /// 任何最佳努力跳过（无边界 / 摘要失败）都静默返回。
-async fn run_once(
-    history: &dyn History,
-    ctx: &CompactionCtx,
-    threshold: u64,
-    on_done: &OnDone,
-) {
+async fn run_once(history: &dyn History, ctx: &CompactionCtx, threshold: u64, on_done: &OnDone) {
     let messages = history.snapshot();
     let Some(plan) = compact::plan(&messages, threshold) else {
         return;
@@ -141,9 +136,7 @@ async fn run_once(
     // 关键：splice_prefix 只丢当前列表前 drop_count 条、保留其后全部（含摘要
     // 飞行期间前台 append 的尾部消息）。单飞保证了 drop_count 在当前列表仍合法。
     history.splice_prefix(plan.drop_count, summary_msg);
-    let tokens_after = history
-        .token_estimate()
-        .unwrap_or(plan.tokens_before);
+    let tokens_after = history.token_estimate().unwrap_or(plan.tokens_before);
 
     tracing::info!(
         drop_count = plan.drop_count,

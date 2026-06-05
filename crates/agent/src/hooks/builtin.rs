@@ -331,10 +331,7 @@ impl StepHandler for SkillTriggersHook {
         envelope: &'a Value,
         _ctx: HookCtx<'a>,
     ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
-        let prompt = envelope
-            .get("input")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let prompt = envelope.get("input").and_then(Value::as_str).unwrap_or("");
         let prompt_lower = prompt.to_ascii_lowercase();
         let path_tokens = extract_path_tokens(prompt);
 
@@ -351,8 +348,7 @@ impl StepHandler for SkillTriggersHook {
             })
             .collect();
 
-        let verdict =
-            (!hints.is_empty()).then(|| serde_json::json!({ "prepend_input": hints }));
+        let verdict = (!hints.is_empty()).then(|| serde_json::json!({ "prepend_input": hints }));
         Box::pin(async move { Ok(verdict) })
     }
 }
@@ -508,7 +504,10 @@ mod test {
         let cwd = std::path::Path::new("/");
         // 大小写不敏感子串命中。
         let verdict = h
-            .handle_step(&triggers_envelope("please run the MIGRATION now"), ctx(&session_id, cwd))
+            .handle_step(
+                &triggers_envelope("please run the MIGRATION now"),
+                ctx(&session_id, cwd),
+            )
             .await
             .expect("ok")
             .expect("verdict");
@@ -549,7 +548,10 @@ mod test {
         let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
         let verdict = h
-            .handle_step(&triggers_envelope("write some rust code"), ctx(&session_id, cwd))
+            .handle_step(
+                &triggers_envelope("write some rust code"),
+                ctx(&session_id, cwd),
+            )
             .await
             .expect("ok");
         assert!(verdict.is_none());

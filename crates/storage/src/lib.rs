@@ -78,8 +78,7 @@ impl StorageObserver {
             let Ok(meta) = store.load_meta() else {
                 continue; // 坏存档 / 无 meta：跳过
             };
-            let meta_cwd =
-                fs::canonicalize(&meta.cwd).unwrap_or_else(|_| meta.cwd.clone());
+            let meta_cwd = fs::canonicalize(&meta.cwd).unwrap_or_else(|_| meta.cwd.clone());
             if meta_cwd != target {
                 continue;
             }
@@ -87,7 +86,10 @@ impl StorageObserver {
             let mtime = fs::metadata(store.journal_path())
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            if best.as_ref().is_none_or(|(best_mtime, _)| mtime >= *best_mtime) {
+            if best
+                .as_ref()
+                .is_none_or(|(best_mtime, _)| mtime >= *best_mtime)
+            {
                 best = Some((mtime, meta.session_id));
             }
         }
