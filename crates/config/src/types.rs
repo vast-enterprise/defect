@@ -903,6 +903,9 @@ pub(crate) struct TurnSection {
     pub(crate) max_concurrent_tools: Option<usize>,
     /// `before turn-end` hook 强制续命的硬上限。`None` ⇒ 用 agent 侧默认（3）。
     pub(crate) max_hook_continues: Option<u32>,
+    /// subagent 纵向递归深度上限。`None` ⇒ 用 agent 侧默认（4）。`0` ⇒ 禁止派发任何
+    /// subagent（顶层工具集不含 spawn_agent）。
+    pub(crate) subagent_max_depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -7,10 +7,20 @@
 //! ## 两道闸门
 //!
 //! - **闸门 A（看得到哪些工具）**：每个 profile 的 `tool_allow` 白名单从父 agent
-//!   工具集里裁子集；白名单**永不含 `spawn_agent` 自己**，故结构性禁止递归。
+//!   工具集里裁子集。`spawn_agent` **可**进白名单——递归由**深度闸门**控制（见下），
+//!   而非无条件排除。
 //! - **闸门 B（运行时放行到什么程度）**：子 turn 的 policy 是
 //!   [`NonInteractivePolicy`] 包住父 policy——`Ask` 降级为 `Deny`，子 agent
 //!   非交互、永不阻塞在 [`PermissionGate`] 上、授权恒 ≤ 父。
+//!
+//! ## 递归与深度闸门
+//!
+//! subagent 不过是"有亲代的 agent"——父子跑同一套 [`TurnRunner`]。递归层数由
+//! [`crate::tool::ToolContext::subagent_depth`] 控制：顶层 turn 注入配置上限
+//! （`TurnConfig::subagent_max_depth`），每深入一层减一。某层若 `tool_allow` 含
+//! `spawn_agent` 且**子层剩余深度 > 0**，就给子 agent 装一份新构造的 `spawn_agent`
+//! 工具（捕获同一 base 工具集作裁子集来源，使孙能继续）；深度耗尽（0）则不装——
+//! 结构性收口。`depth == 0` 的 turn 工具集不含 `spawn_agent`，调用直接 fail loud。
 //!
 //! ## 继承原则
 //!
@@ -250,6 +260,9 @@ impl Tool for SpawnAgentTool {
         let background = ctx.background.clone();
         // subagent 事件桥：把子 turn 事件嵌套回父 trace（observability）。
         let bridge = ctx.subagent_bridge.clone();
+        // 本 turn 起的剩余 subagent 派发深度。子 turn 得到 `depth-1`；子工具集是否含
+        // spawn_agent 由 `child_depth > 0` 决定（见 run_subagent_core）。
+        let subagent_depth = ctx.subagent_depth;
         // 同步路径用 turn 子 token（turn 结束即取消）；后台路径不用它，改用
         // BackgroundTasks 在 spawn 时 mint 的 session 级子 token（见下）。
         let turn_cancel = ctx.cancel.child_token();
@@ -263,6 +276,18 @@ impl Tool for SpawnAgentTool {
                 Ok(p) => p,
                 Err(err) => return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(err))),
             };
+
+            // 深度闸门：本 turn 的剩余派发深度耗尽（0）⇒ 本不该看到 spawn_agent 工具
+            // （run_subagent_core 在 child_depth==0 时不把它放进子工具集）。能走到这里
+            // 说明 ctx 装配异常——fail loud，不静默吞。顶层 turn 注入的是配置上限，正常
+            // 恒 > 0。
+            if subagent_depth == 0 {
+                return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(
+                    "subagent recursion depth exhausted: this agent is not allowed to spawn \
+                     further subagents"
+                        .to_string(),
+                ))));
+            }
 
             // 后台路径：需要 ctx 支持后台（顶层 turn 才注入），且 run_in_background=true。
             if parsed.run_in_background {
@@ -287,6 +312,7 @@ impl Tool for SpawnAgentTool {
                     shell,
                     http,
                     parent_model,
+                    subagent_depth,
                     // 后台路径**也桥接**——与前台同一套 `AgentEvent::Subagent` 机制。
                     // 发起它的 spawn_agent tool span 会先正常 close（下方"已启动"的
                     // ToolCallFinished），随后子 turn 事件作为一个**相邻**的 subagent span
@@ -346,6 +372,7 @@ impl Tool for SpawnAgentTool {
                 shell,
                 http,
                 parent_model,
+                subagent_depth,
                 // 同步路径：父 spawn_agent tool span 全程张开（阻塞等子 turn），
                 // 子事件可嵌套其下。
                 bridge,
@@ -383,6 +410,9 @@ struct SubagentDeps {
     shell: Arc<dyn crate::shell::ShellBackend>,
     http: Arc<dyn crate::http::HttpClient>,
     parent_model: String,
+    /// 本层（发起方）turn 的剩余派发深度。子 turn 跑在 `subagent_depth - 1` 上；
+    /// 子工具集含 spawn_agent 当且仅当那个减一后的值 `> 0`（见 run_subagent_core）。
+    subagent_depth: u32,
     /// subagent 事件桥：`Some` 时把子 turn 事件嵌套回父 trace。仅同步路径设置。
     bridge: Option<crate::tool::SubagentBridge>,
     /// 进度环 sink：`Some` 时把子 turn 的"最近几个 block"流式喂进发起它的后台任务
@@ -420,6 +450,7 @@ async fn run_subagent_core(
         shell,
         http,
         parent_model,
+        subagent_depth,
         bridge,
         progress,
     } = deps;
@@ -445,12 +476,32 @@ async fn run_subagent_core(
     };
     let provider = entry.provider().clone();
 
-    // 闸门 A：按白名单从父工具集裁子集；排除 spawn_agent 自己（禁递归）。
+    // 子 turn 的剩余派发深度 = 本层减一。本层走到这里 `subagent_depth >= 1`（execute
+    // 已对 0 fail loud），故子层 >= 0。
+    let child_depth = subagent_depth - 1;
+
+    // 闸门 A：按白名单从父工具集裁子集。`spawn_agent` 不再被无条件排除——改由**深度闸门**
+    // 决定：仅当 `child_depth > 0`（子 agent 自己还能再派发至少一层）且 profile 白名单
+    // 明确允许时，才给子 agent 装一份**新构造的** spawn_agent 工具（它捕获同一份 base
+    // `process_tools` 作裁子集来源，使孙能继续递归）。深度耗尽（child_depth==0）时即便
+    // 白名单写了 spawn_agent 也忽略——结构性收口（与旧硬编码同效，但可配置）。
     // 未知工具名 hard fail（fail loud，不静默忽略）。
     let mut builder = StaticToolRegistry::builder();
     for name in &profile.tool_allow {
         if name == SPAWN_AGENT_TOOL_NAME {
-            // 即便 profile 误写也忽略——结构性保证不递归。
+            if child_depth > 0 {
+                let child_spawn = SpawnAgentTool::new(
+                    profiles.clone(),
+                    registry.clone(),
+                    // 传入本层拿到的父策略——子 SpawnAgentTool 构造期捕获它作回退；运行时
+                    // 仍优先用 ctx 注入的 active policy。子 turn 再包一层 NonInteractive。
+                    policy.clone(),
+                    process_tools.clone(),
+                    base_prompt.clone(),
+                );
+                builder = builder.insert(Arc::new(child_spawn));
+            }
+            // child_depth==0：深度耗尽，不装——结构性禁止再递归。
             continue;
         }
         match process_tools.get(name) {
@@ -492,14 +543,32 @@ async fn run_subagent_core(
         let mut sub_events = events.subscribe();
         let agent_type = parsed.profile.clone();
         tokio::spawn(async move {
-            while let Some(inner) = sub_events.next().await {
-                b.parent_events
-                    .emit(AgentEvent::Subagent {
-                        parent_tool_call_id: b.parent_tool_call_id.clone(),
+            while let Some(ev) = sub_events.next().await {
+                // 递归扁平化：本层桥接只 prepend 自己这一跳的 tool_call_id。
+                // - 来自更深层、**已是** `Subagent`（带部分祖先链）⇒ 把本层 id 插到链首、
+                //   保留深层的 `agent_type` 与叶子 `inner` 不变；
+                // - 子 turn 的**叶子**事件 ⇒ 包成 `Subagent{[本层 id], 本层 profile, 叶子}`。
+                // 事件穿过 N 层后 `ancestor_path` 恰为顶层→叶子那层的完整链。
+                let forwarded = match ev {
+                    AgentEvent::Subagent {
+                        mut ancestor_path,
+                        agent_type: deeper,
+                        inner,
+                    } => {
+                        ancestor_path.insert(0, b.parent_tool_call_id.clone());
+                        AgentEvent::Subagent {
+                            ancestor_path,
+                            agent_type: deeper,
+                            inner,
+                        }
+                    }
+                    leaf => AgentEvent::Subagent {
+                        ancestor_path: vec![b.parent_tool_call_id.clone()],
                         agent_type: agent_type.clone(),
-                        inner: Box::new(inner),
-                    })
-                    .await;
+                        inner: Box::new(leaf),
+                    },
+                };
+                b.parent_events.emit(forwarded).await;
             }
         })
     });
@@ -535,6 +604,9 @@ async fn run_subagent_core(
         sampling: profile.sampling.clone().unwrap_or_default(),
         // 子 agent 给个有限步数上限——防失控嵌套循环。
         request_limit: TurnRequestLimit::Fixed(32),
+        // 纵向深度逐层递减：子 turn 的工具驱动据此再决定孙能否派发。child_depth==0 时
+        // 子 turn 的工具集本就不含 spawn_agent（上面闸门 A 没装），这里冗余设 0 自洽。
+        subagent_max_depth: child_depth,
         ..TurnConfig::default()
     };
 

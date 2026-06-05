@@ -141,8 +141,8 @@ pub enum AgentEvent {
     },
 
     // ---------- subagent 嵌套（仅 observability） ----------
-    /// 一个 `spawn_agent` 子 agent turn 内部产生的事件，**包裹**后从子 turn
-    /// 的隔离事件流桥接到父 session 的事件流。
+    /// 一个 `spawn_agent` 子 agent turn 内部产生的**叶子**事件，从子 turn 的隔离
+    /// 事件流桥接到父 session 的事件流。
     ///
     /// 设计意图：子 agent 在 fresh、隔离上下文里跑（自己的 [`crate::session::EventEmitter`]），
     /// 父 agent **看不到**它的中间过程——这是 `spawn_agent` 的隔离契约。但
@@ -150,16 +150,28 @@ pub enum AgentEvent {
     /// 父那次 `spawn_agent` 工具调用的 span 之下。于是 `spawn_agent` 在子 emitter
     /// 上挂一个桥接订阅者，把每个子事件包成本变体转发给父 emitter。
     ///
+    /// ## 扁平化（支持递归 subagent）
+    ///
+    /// `inner` **永远是叶子事件**（绝不再是另一个 `Subagent`）。嵌套深度由
+    /// [`Self::Subagent::ancestor_path`] 这条**祖先链**表达，而非层层 `Box` 包裹：
+    /// 链里从顶层 `spawn_agent` 工具调用 id 到当前层的 id 依次排列。每经过一层桥接，
+    /// 该层把自己的 `parent_tool_call_id` **prepend** 到链首、保留叶子 `inner` 不变
+    /// （见 `spawn_agent.rs` 桥接闭包）。projector 用整条链定位父挂载点——链全局唯一，
+    /// 天然避开跨子 session 的 `ToolCallId` 撞号，且 projector 无需递归剥壳。
+    ///
     /// **消费约定**：只有 langfuse projector 处理它（投成挂在父 tool span 下的
     /// 嵌套 generation / span）。其余消费者（`defect-storage` 落盘、`defect-acp`
     /// wire 投射、REPL 渲染）一律**忽略**——隔离契约对它们不变。
     Subagent {
-        /// 父 session 里发起本子 agent 的那次 `spawn_agent` 工具调用 id，用于把
-        /// 子事件嵌套到对应的父 tool span 之下。
-        parent_tool_call_id: ToolCallId,
-        /// 子 agent 的 profile 名（如 `weebs-in`），进嵌套 span 的命名 / 元数据。
+        /// 从顶层 `spawn_agent` 工具调用到当前 subagent 层的 `ToolCallId` 祖先链。
+        /// 链首是顶层（直接挂在父 turn trace 里的那次 spawn_agent），链尾是发起
+        /// 本叶子事件那一层的 spawn_agent。深度 = `ancestor_path.len()`。
+        ancestor_path: Vec<ToolCallId>,
+        /// 发起本叶子事件那一层 subagent 的 profile 名（如 `weebs-in`），进嵌套
+        /// span 的命名 / 元数据。
         agent_type: String,
-        /// 被包裹的子 turn 事件。`Box` 避免 enum 因自引用而无界膨胀。
+        /// 被桥接的子 turn **叶子**事件（绝不是另一个 `Subagent`）。`Box` 避免 enum
+        /// 因自引用而无界膨胀。
         inner: Box<AgentEvent>,
     },
 }

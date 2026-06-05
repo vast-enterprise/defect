@@ -226,7 +226,9 @@ fn run_tool(tool: &SpawnAgentTool, args: serde_json::Value, cwd: &Path) -> Vec<T
     let fs: Arc<dyn FsBackend> = Arc::new(NoopFsBackend);
     let shell: Arc<dyn ShellBackend> = Arc::new(crate::shell::NoopShellBackend);
     let http = Arc::new(NoopHttpClient);
-    let ctx = ToolContext::new(cwd, CancellationToken::new(), fs, shell, http, "fake-1");
+    // 非零深度，避免新深度闸门在派发前 fail loud。
+    let ctx = ToolContext::new(cwd, CancellationToken::new(), fs, shell, http, "fake-1")
+        .with_subagent_depth(4);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -258,8 +260,10 @@ fn run_tool_with_bridge(
         parent_events: parent_events.clone(),
         parent_tool_call_id: agent_client_protocol_schema::ToolCallId::new(parent_tool_call_id),
     };
+    // 给个非零深度，否则新加的深度闸门会在派发前 fail loud。
     let ctx = ToolContext::new(cwd, CancellationToken::new(), fs, shell, http, "fake-1")
-        .with_subagent_bridge(bridge);
+        .with_subagent_bridge(bridge)
+        .with_subagent_depth(4);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -389,16 +393,23 @@ fn subagent_events_bridged_to_parent() {
     // 工具本身仍正常返回最终文本。
     assert_eq!(completed_text(&tool_events).as_deref(), Some("the answer"));
 
-    // 父 emitter 收到的全是 Subagent 包裹，且 parent_tool_call_id / agent_type 正确。
+    // 父 emitter 收到的全是 Subagent 包裹。单层场景下 ancestor_path 恰为 [本次调用 id]，
+    // agent_type 正确。
     assert!(!bridged.is_empty(), "expected bridged subagent events");
     for ev in &bridged {
         match ev {
             AgentEvent::Subagent {
-                parent_tool_call_id,
+                ancestor_path,
                 agent_type,
                 ..
             } => {
-                assert_eq!(parent_tool_call_id.0.as_ref(), "parent-call-1");
+                assert_eq!(
+                    ancestor_path
+                        .iter()
+                        .map(|id| id.0.as_ref())
+                        .collect::<Vec<_>>(),
+                    vec!["parent-call-1"]
+                );
                 assert_eq!(agent_type, "reviewer");
             }
             other => panic!("expected Subagent wrapper, got {other:?}"),

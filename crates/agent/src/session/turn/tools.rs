@@ -254,6 +254,7 @@ impl TurnRunner<'_> {
                     // 把本轮 active policy 传给工具——`spawn_agent` 据此让子 agent
                     // 包父此刻的真实策略（反映 session 当前 permission mode）。
                     let policy = self.policy.clone();
+                    let subagent_depth = self.config.subagent_max_depth;
                     let name = tool.schema().name.clone();
                     let span = tracing::info_span!(
                         "tool_call",
@@ -287,6 +288,7 @@ impl TurnRunner<'_> {
                                 model,
                                 background,
                                 policy,
+                                subagent_depth,
                             )
                             .await
                         }
@@ -518,6 +520,7 @@ async fn drive_tool_stream(
     model: String,
     background: Option<crate::session::BackgroundTasks>,
     policy: Arc<dyn crate::policy::SandboxPolicy>,
+    subagent_depth: u32,
 ) -> ToolResult {
     let mut ctx = ToolContext::new(
         &cwd,
@@ -527,13 +530,17 @@ async fn drive_tool_stream(
         http.clone(),
         &model,
     )
-    .with_policy(policy);
+    .with_policy(policy)
+    // 本 turn 起的剩余 subagent 派发深度——`spawn_agent` 据它决定子 agent 还能否
+    // 继续递归（0 ⇒ 子工具集不含 spawn_agent）。
+    .with_subagent_depth(subagent_depth);
     if let Some(bg) = background {
         ctx = ctx.with_background(bg);
     }
     // 注入 subagent 事件桥：让 `spawn_agent` 能把子 turn 事件包成
     // AgentEvent::Subagent 转发回本 session 的事件流（按本次 tool_call_id 嵌套）。
-    // 对绝大多数工具是惰性的——只有 spawn_agent 会用到。
+    // 对绝大多数工具是惰性的——只有 spawn_agent 会用到。顶层与子 agent 嵌套 turn 都
+    // 注入（递归桥接）：每层 bridge_task 只 prepend 自己这一跳的 tool_call_id。
     ctx = ctx.with_subagent_bridge(crate::tool::SubagentBridge {
         parent_events: events.clone(),
         parent_tool_call_id: id.clone(),

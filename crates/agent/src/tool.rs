@@ -179,27 +179,50 @@ pub struct ToolContext<'a> {
     pub background: Option<crate::session::BackgroundTasks>,
     /// subagent 事件桥：`Some` 时工具可把自己内部派生的子 turn 事件包成
     /// [`crate::event::AgentEvent::Subagent`] 转发回父 session 的事件流，供
-    /// observability 嵌套展示。当前唯一使用者是 `spawn_agent`。由顶层
+    /// observability 嵌套展示。当前唯一使用者是 `spawn_agent`。由
     /// [`crate::session::turn::TurnRunner`] 在驱动每个工具时按该工具的
-    /// [`ToolCallId`] 注入；子 agent 嵌套 turn 不注入（不递归桥接）。
+    /// [`ToolCallId`] 注入——**顶层与子 agent 嵌套 turn 都注入**（递归桥接），
+    /// 桥接深度由 [`SubagentBridge::ancestor_path`] / [`SubagentBridge::depth`] 表达。
     pub subagent_bridge: Option<SubagentBridge>,
     /// 本 turn 快照的 active sandbox policy。`spawn_agent` 用它做"子 agent 包
     /// 父此刻的真实策略"——`session/set_mode` 切换后新起的 turn 把新策略经此
     /// 传下去，子 agent 不会拿到陈旧的进程级默认。`None` 时 `spawn_agent`
     /// 回退到构造期捕获的 policy（测试 / 未注入场景）。绝大多数工具忽略本字段。
     pub policy: Option<Arc<dyn crate::policy::SandboxPolicy>>,
+    /// 从当前层起还能再派发多少层 subagent。顶层 turn = 配置的初始上限；
+    /// `spawn_agent` 为子 agent 嵌套 turn 注入时减一。`0` ⇒ 子 agent 拿不到
+    /// `spawn_agent` 工具（深度耗尽，结构性禁止继续递归）——取代旧的"白名单永不
+    /// 含 spawn_agent"硬编码。功能性闸门，与 observability 无关，故独立于可空的
+    /// [`Self::subagent_bridge`]，在测试 / 无桥场景下同样生效。默认 `0`（最保守：
+    /// 不显式注入即不可派发；顶层 turn 必须显式 [`Self::with_subagent_depth`]）。
+    pub subagent_depth: u32,
 }
 
 /// 把工具内部派生的子 turn 事件桥接回父 session 事件流所需的句柄。
 ///
-/// 持有父 session 的 [`EventEmitter`] 与发起本工具调用的 [`ToolCallId`]——
-/// 后者让 observability 把子事件嵌套到对应的父 tool span 之下。`Clone` 廉价
-/// （内部 `Arc` + 小字符串）。
+/// 持有父 session 的 [`EventEmitter`] 与发起本工具调用的 [`ToolCallId`]。`Clone`
+/// 廉价（内部 `Arc` + 小字符串）。
+///
+/// ## 递归桥接：每层只 prepend 自己的 id
+///
+/// 完整祖先链不存在这里——它在事件**向上冒泡**时由各层桥接逐段累积。每一层的桥接
+/// 订阅者（`spawn_agent` 的 `bridge_task`）：
+/// - 收到子 turn 的**叶子**事件 ⇒ 包成
+///   `Subagent{ ancestor_path: [parent_tool_call_id], agent_type: <本层 profile>, inner: 叶子 }`；
+/// - 收到的**已是** `Subagent`（来自更深层、已带部分链）⇒ 把 `parent_tool_call_id`
+///   **prepend** 到其 `ancestor_path` 链首、保留 `inner` 叶子与深层 `agent_type` 不变。
+///
+/// 于是事件穿过 N 层桥接后，`ancestor_path` 恰好是从顶层到叶子那层的完整 id 链。
+/// 每层无需预知全链，只认自己这一跳——这也让前台 / 后台 / 任意深度共用同一逻辑。
+///
+/// 递归的**深度闸门**不在这里——它是功能性的、必须始终生效（含无 observability /
+/// 测试场景），故走 [`ToolContext::subagent_depth`] 独立字段，而非这个可空的桥。
 #[derive(Clone)]
 pub struct SubagentBridge {
     /// 父 session 的事件总线。包好的 [`crate::event::AgentEvent::Subagent`] 投到这里。
     pub parent_events: Arc<EventEmitter>,
-    /// 发起子 agent 的那次工具调用 id（父 trace 里对应的 tool span）。
+    /// 发起子 agent 的那次工具调用 id（父 trace 里对应的 tool span）。本层桥接据它
+    /// prepend，是该子 agent 在父 trace 里挂载点的坐标。
     pub parent_tool_call_id: ToolCallId,
 }
 
@@ -225,7 +248,17 @@ impl<'a> ToolContext<'a> {
             background: None,
             subagent_bridge: None,
             policy: None,
+            subagent_depth: 0,
         }
+    }
+
+    /// 注入本层起的剩余 subagent 派发深度。顶层 turn 的工具驱动用配置的初始上限
+    /// 调用；`spawn_agent` 为子 agent 嵌套 turn 注入减一后的值。不调用 ⇒ `0`
+    /// （最保守：不可派发 subagent）。
+    #[must_use]
+    pub fn with_subagent_depth(mut self, depth: u32) -> Self {
+        self.subagent_depth = depth;
+        self
     }
 
     /// 注入本 turn 快照的 active sandbox policy。顶层 turn 的工具驱动用它把

@@ -140,6 +140,12 @@ pub struct TurnConfig {
     /// `before turn-end` hook 强制续命的硬上限——防止 hook 一直 `Continue` 把 turn
     /// 拖成死循环。见 `docs/internal/hook-step-context.md` §5.7。默认 3。
     pub max_hook_continues: u32,
+    /// 本 turn 起还能派发多少层 subagent（纵向递归深度上限）。`spawn_agent` 据它经
+    /// [`crate::tool::ToolContext::subagent_depth`] 把"剩余深度"传给工具；子 agent
+    /// 嵌套 turn 的 `subagent_max_depth` = 父注入的剩余深度减一。`0` ⇒ 本 turn 的
+    /// 工具集不含 `spawn_agent`，结构性禁止派发——取代旧的"白名单永不含 spawn_agent"
+    /// 硬编码闸门。默认 [`DEFAULT_SUBAGENT_MAX_DEPTH`]。
+    pub subagent_max_depth: u32,
 }
 
 impl Default for TurnConfig {
@@ -168,6 +174,7 @@ impl Default for TurnConfig {
             max_llm_retries: 3,
             max_concurrent_tools: 0,
             max_hook_continues: DEFAULT_MAX_HOOK_CONTINUES,
+            subagent_max_depth: DEFAULT_SUBAGENT_MAX_DEPTH,
         }
     }
 }
@@ -765,6 +772,12 @@ fn ratio_threshold(context_window: u64, ratio: f64) -> Option<u64> {
 /// [`TurnConfig::max_hook_continues`] 覆盖（配置项 `[turn].max_hook_continues`）。
 /// 见 `docs/internal/hook-step-context.md` §5.7。
 pub(crate) const DEFAULT_MAX_HOOK_CONTINUES: u32 = 3;
+
+/// subagent 纵向递归深度默认上限。顶层 turn 起算：N 层 ⇒ 顶层可派发 subagent，
+/// 其子可再派发……直到第 N 层（`subagent_max_depth` 减到 0）不再获得 `spawn_agent`。
+/// 默认 4 给"主 agent → 协调子 agent → 工作子 agent"这类编排留足空间，又能防纵向
+/// 失控。横向失控另由 `request_limit` 防住。
+pub(crate) const DEFAULT_SUBAGENT_MAX_DEPTH: u32 = 4;
 
 struct TurnState {
     request_count: u32,

@@ -287,6 +287,9 @@ fn build_effective_config(
     if let Some(max_hook_continues) = config.turn.max_hook_continues {
         turn.max_hook_continues = max_hook_continues;
     }
+    if let Some(subagent_max_depth) = config.turn.subagent_max_depth {
+        turn.subagent_max_depth = subagent_max_depth;
+    }
     validate_compact_ratios(path, &turn)?;
     if turn.sampling == SamplingParams::default() {
         // 保持 default sampling 显式落在 effective config 中，方便后续扩字段。

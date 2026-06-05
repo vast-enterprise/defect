@@ -4,24 +4,41 @@
 //! `RecordProjector` 同构）。主循环每收到一个 [`AgentEvent`] 调一次
 //! [`TraceProjector::project`]，拿回 0..N 个 [`IngestionEvent`] 交给上报器。
 //!
-//! ## 映射（每个 turn 一个 trace）
+//! ## 层级（每个 turn 一个 trace）
 //!
-//! - `TurnStarted` → `trace-create`（新 turn 级 trace_id）
-//! - `UserPromptCommitted` → 暂存为 trace `input`
-//! - `LlmCallStarted` → `generation-create`
-//! - `AssistantText` / `AssistantThought` → 累积进当前 generation 的 output
-//! - `LlmCallFinished` → `generation-update`（endTime + usageDetails + level）
-//! - `ToolCallStarted` → `span-create`；`ToolCallFinished` → `span-update`
-//! - `ContextCompressed` → trace 上一个 `event-create`
-//! - `TurnEnded` → `trace-update`（endTime + output + stopReason）
+//! ```text
+//! trace (turn)
+//! └── step (span)                 每轮一个：一次 llm_call + 它触发的工具
+//!     ├── llm_call (generation)
+//!     └── tool (span)             与 llm_call 同为 step 的子节点（兄弟）
+//!         └── (spawn_agent) → subagent (span)
+//!             └── step (span)     子 agent 内同构递归
+//!                 ├── llm_call
+//!                 └── tool / spawn_agent → subagent → ...
+//! ```
 //!
-//! 设计详见 `docs/internal/observability-langfuse.md` §3。
+//! 关键：**step span** 是每轮的容器，`llm_call`（generation）与该轮触发的工具
+//! 都挂在它下面，互为兄弟。这样 generation 的时长回归**纯 LLM 调用**（在
+//! `LlmCallFinished` 收尾，不再延迟到下轮、不再包住工具执行时间）；工具时长落在
+//! step 里。
+//!
+//! ## 递归 subagent（扁平化 ancestor_path）
+//!
+//! [`AgentEvent::Subagent`] 携带一条 `ancestor_path`（顶层 `spawn_agent` 工具调用到
+//! 当前层的 `ToolCallId` 链），`inner` 永远是叶子事件。projector 用这条链**确定性**
+//! 派生所有 span id，故无需逐层 anchor，任意深度同构处理。每个 subagent 层是一个
+//! 独立 **scope**（与顶层 turn 共用同一套 step/gen/tool 投影逻辑）。
 //!
 //! ## id 策略
 //!
 //! - **traceId**：`TurnStarted` 时生成一次 `Uuid::new_v4()`，turn 内复用。
 //!   **不可**用 `{session}-turn-{seq}` 自增——resume 后会撞 id（见设计文档 §3.5）。
-//! - **generation / span id**：派生自 trace_id + 序号 / `ToolCallId`，turn 内唯一。
+//! - **scope 前缀**：顶层 = `{trace}`；subagent 路径 `[A,B]` = `{trace}-sub-A-sub-B`。
+//!   subagent span 的 id **就是**它的 scope 前缀。
+//! - **step / generation / tool span id**：派生自 scope 前缀 + 序号 / `ToolCallId`，
+//!   全局唯一且确定性——subagent span 的父（发起它的 tool span）由路径直接算出。
+//! - **anchor**：唯一需要存的状态是**顶层 `spawn_agent` 工具调用 id → trace_id**
+//!   （trace_id 随机不可推导）。同一 turn 的所有 subagent 共享该 trace_id，故只锚顶层。
 //! - **信封 id**：每个 ingestion 事件一个 `Uuid::new_v4()`，供 Langfuse 去重。
 //!
 //! ## 时间戳
@@ -31,9 +48,7 @@
 
 use std::collections::HashMap;
 
-use agent_client_protocol_schema::{
-    ContentBlock, StopReason, ToolCallStatus, ToolCallUpdateFields,
-};
+use agent_client_protocol_schema::{ContentBlock, StopReason, ToolCallStatus, ToolCallUpdateFields};
 use defect_agent::event::{AgentEvent, LlmRequestSnapshot};
 use defect_agent::llm::{Message, MessageContent, Role, Usage};
 
@@ -43,108 +58,93 @@ use super::model::{EventKind, IngestionEvent, ObservationBody, ObservationLevel,
 const DEFAULT_ENVIRONMENT: &str = "production";
 /// 每个 agent turn 对应的 Langfuse trace 名称。
 const TRACE_NAME: &str = "turn";
+/// 每轮（一次 llm_call + 它触发的工具）的容器 span 名称。
+const STEP_NAME: &str = "step";
 /// LLM 调用对应的 Langfuse generation 名称。
 const GENERATION_NAME: &str = "llm_call";
 /// `spawn_agent` 工具名（wire 上的字符串）。真相源是
 /// `defect_agent::tool::spawn_agent::SPAWN_AGENT_TOOL_NAME`（`pub(crate)` 不可跨 crate 引），
-/// 这里按 wire 名复制一份——projector 据它把 spawn_agent 工具调用登记成 subagent 锚点。
+/// 这里按 wire 名复制一份——projector 据它把**顶层** spawn_agent 工具调用锚定到 trace_id。
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 /// subagent 独立 span 的名称前缀（与发起它的工具 span 分开的那一层）。
 const SUBAGENT_SPAN_NAME: &str = "subagent";
 
-/// 一个 `spawn_agent` 工具调用的 langfuse 坐标——**session 级、跨 turn 存活**。
-///
-/// 前台 subagent 的子事件在父 turn trace 内到达（`turn.tool_spans` 也有），但**后台**
-/// subagent 的子事件在**发起 turn 结束之后**才到，那时 `turn` 已被覆盖。锚点把
-/// `(trace_id, tool_span_id)` 留住，让后台子事件仍能把 subagent span 挂回原 tool span 下。
-#[derive(Clone)]
-struct SubagentAnchor {
-    trace_id: String,
-    /// 发起它的 `spawn_agent` 工具 span id——subagent span 的 `parent_observation_id`。
-    tool_span_id: String,
-}
-
 /// 逐 session 的投影状态。
 pub struct TraceProjector {
     session_id: String,
-    /// 当前 turn 的状态；`None` 表示不在 turn 内（TurnStarted 之前）。
-    turn: Option<TurnState>,
-    /// 暂存的用户 prompt 文本。主循环**先发 `UserPromptCommitted` 再发
-    /// `TurnStarted`**（turn.rs:197 先于 :212），所以收到 prompt 时 turn 还没建——
-    /// 先存这里，`TurnStarted` 建 `TurnState` 时再取进去。
+    /// 当前**顶层** turn 的元信息；`None` 表示不在 turn 内（TurnStarted 之前 /
+    /// TurnEnded 之后）。注意 subagent 的事件可能在顶层 turn 结束后仍到达（后台），
+    /// 那时 `turn` 已 `None`，但 subagent scope 仍存活、trace_id 经 [`Self::anchors`] 取回。
+    turn: Option<TurnMeta>,
+    /// 暂存的用户 prompt 文本。主循环**先发 `UserPromptCommitted` 再发 `TurnStarted`**，
+    /// 所以收到 prompt 时 turn 还没建——先存这里，`TurnStarted` 建 turn 时取走。
     pending_input: Option<String>,
-    /// `spawn_agent` 工具调用 id → 锚点。`on_tool_started` 见到 spawn_agent 时登记，
-    /// subagent 子 turn `TurnEnded` 时清除。session 级，使后台子事件跨 turn 也能找回父。
-    subagent_anchors: HashMap<String, SubagentAnchor>,
-    /// 进行中的 subagent 投影状态：`spawn_agent` 工具调用 id → 状态。**session 级**
-    /// （非 turn 级）——后台 subagent 的事件可能跨 turn 边界陆续到达。
-    subagents: HashMap<String, SubagentState>,
+    /// **顶层** `spawn_agent` 工具调用 id → 其所属 trace_id。subagent 事件据
+    /// `ancestor_path[0]` 查它取回 trace_id（trace_id 随机不可推导；同一 turn 的所有
+    /// 嵌套 subagent 共享该 trace_id，故只锚顶层这一跳）。subagent（路径长度 1）结束时清除。
+    anchors: HashMap<String, String>,
+    /// 所有进行中的 scope：`scope 前缀` → 状态。**session 级**——顶层 turn scope（前缀
+    /// = trace_id）与各 subagent scope（前缀 = `{trace}-sub-...`）共存。subagent scope
+    /// 可能跨 turn 边界存活（后台），故不随 turn 清空，各自在对应 `TurnEnded` 时移除。
+    scopes: HashMap<String, ScopeState>,
 }
 
-/// 单个 turn（= 一个 langfuse trace）的累积状态。
-struct TurnState {
+/// 当前顶层 turn 的元信息（trace 级，不含 step/gen/tool 投影状态——那些在
+/// `scopes[trace_id]` 这个 scope 里，与 subagent scope 同构）。
+struct TurnMeta {
     trace_id: String,
-    /// 用户 prompt 文本，TurnStarted 后由 UserPromptCommitted 填，写进 trace input。
+    /// 用户 prompt 文本，写进 trace input。
     input: Option<String>,
-    /// 第几次 LLM 调用——派生 generation id。
-    call_seq: u32,
-    /// 当前进行中的 generation（最近一次 LlmCallStarted 建立）。
-    ///
-    /// 关键：generation 的 output / thinking 是在 `LlmCallStarted` 之后才流式到达的
-    /// （`LlmCallFinished` 也早于流），所以 generation 的收尾（generation-update）
-    /// **延迟**到下一次 `LlmCallStarted` 或 `TurnEnded` 时才发——保证 create 永远
-    /// 先于 update（修复 “observation not found”）。
-    current_gen: Option<PendingGeneration>,
     /// 整个 turn 的最终助手文本（写进 trace output）。
     final_output: String,
+}
+
+/// 一个 scope（顶层 turn 或某 subagent 层）的 step/generation/tool 投影状态。
+///
+/// 顶层与 subagent 共用本结构——这正是"subagent 不过是有亲代的 agent"在 observability
+/// 侧的体现：同一套 step 容器 + generation + tool span 逻辑，仅挂载点（`step_parent`）
+/// 与 id 前缀（`prefix`）不同。
+struct ScopeState {
+    /// id 派生前缀：顶层 = `{trace}`；subagent = `{trace}-sub-A-sub-B`。
+    /// subagent scope 的 `prefix` 同时**就是**其 subagent span 的 id。
+    prefix: String,
+    /// 本 scope 里 step span 的父 observation：顶层 = `None`（直接挂 trace）；
+    /// subagent = `Some(subagent span id)` = `Some(prefix)`。
+    step_parent: Option<String>,
+    /// 当前进行中的 step span id（`None` = 尚无 llm_call）。
+    current_step_id: Option<String>,
+    /// 第几个 step——派生 step id。
+    step_seq: u32,
+    /// 当前 step 里进行中的 generation。
+    current_gen: Option<PendingGeneration>,
     /// 工具调用 id → 已分配的 span id（Started/Finished 跨事件配对）。
     tool_spans: HashMap<String, String>,
 }
 
-/// 一个 subagent 子 turn 的投影状态。
-///
-/// 关键：subagent 有**自己独立的 span**（`subagent_span_id`），它是发起它的
-/// `spawn_agent` 工具 span 的子节点；子 turn 的 generation / 工具 span 再挂在这个
-/// subagent span 之下。这样工具 span 与 subagent span 解耦——
-/// - **前台**：工具 span 全程张开，subagent span 嵌在其内；
-/// - **后台**：工具 span 早早正常关闭（"已启动"），subagent span 作为它的**相邻子节点**
-///   自行张开到子 turn 真正结束，时间轴各自真实、不互相牵连。
-///
-/// id 命名空间用父 tool_call_id 隔开，避免与父 / 兄弟 subagent 撞 id。
-struct SubagentState {
-    /// 本 subagent 自己的 span id——子 turn 的 generation / 工具 span 的 `parent_observation_id`。
-    /// （trace_id 不存这里——每次 `on_subagent` 从 session 级锚点取，单一真相源。）
-    subagent_span_id: String,
-    /// 子 turn 第几次 LLM 调用——派生子 generation id。
-    call_seq: u32,
-    /// 子 turn 进行中的 generation。
-    current_gen: Option<PendingGeneration>,
-    /// 子 turn 的工具调用 id → span id。
-    tool_spans: HashMap<String, String>,
-}
-
-/// 进行中的 generation 累积状态。收尾时一次性 flush 成 generation-update。
+/// 进行中的 generation 累积状态。收尾（`LlmCallFinished`）时一次性 flush 成
+/// generation-update。
 struct PendingGeneration {
     id: String,
+    parent_step_id: String,
     model: String,
     /// 累积的助手回复正文。
     output: String,
     /// 累积的 thinking 文本（放进 generation 的 metadata.reasoning，不进 output）。
     thinking: String,
-    /// 本次调用的 token 用量（来自 LlmCallFinished.usage，流 drain 后到达）。
+    /// 本次调用的 token 用量（来自 LlmCallFinished.usage）。
     usage: Usage,
     /// 失败信息（来自 LlmCallFinished.error）。
     error: Option<String>,
 }
 
-impl TurnState {
-    fn new(trace_id: String) -> Self {
+impl ScopeState {
+    fn new(prefix: String, step_parent: Option<String>) -> Self {
         Self {
-            trace_id,
-            input: None,
-            call_seq: 0,
+            prefix,
+            step_parent,
+            current_step_id: None,
+            step_seq: 0,
             current_gen: None,
-            final_output: String::new(),
             tool_spans: HashMap::new(),
         }
     }
@@ -157,8 +157,8 @@ impl TraceProjector {
             session_id: session_id.into(),
             turn: None,
             pending_input: None,
-            subagent_anchors: HashMap::new(),
-            subagents: HashMap::new(),
+            anchors: HashMap::new(),
+            scopes: HashMap::new(),
         }
     }
 
@@ -180,28 +180,23 @@ impl TraceProjector {
                 model,
                 attempt,
                 request,
-            } => self.on_llm_started(model, attempt, request.as_ref(), now, new_id),
+            } => self.on_top_llm_started(model, attempt, request.as_ref(), now, new_id),
             AgentEvent::AssistantText { content } => {
-                self.accumulate_text(&content);
+                self.accumulate_top_text(&content);
                 Vec::new()
             }
             AgentEvent::AssistantThought { content } => {
-                self.accumulate_thinking(&content);
+                self.accumulate_top_thinking(&content);
                 Vec::new()
             }
             AgentEvent::LlmCallFinished { usage, error, .. } => {
-                // LlmCallFinished 现在由 run_inner 在流 drain 之后发，带**本次调用**的
-                // 真 usage（非 turn 累计）。记到当前 generation，收尾时写入 usageDetails。
-                // generation 收尾（output/thinking/endTime）仍延迟到下次 LlmCallStarted
-                // 或 TurnEnded——保证 generation-create 先于 update。
-                self.note_llm_finished(usage, error);
-                Vec::new()
+                self.on_top_llm_finished(usage, error, now, new_id)
             }
             AgentEvent::ToolCallStarted { id, name, fields } => {
-                self.on_tool_started(id.to_string(), name, fields.raw_input, now, new_id)
+                self.on_top_tool_started(id.to_string(), name, fields.raw_input, now, new_id)
             }
             AgentEvent::ToolCallFinished { id, fields } => {
-                self.on_tool_finished(&id.to_string(), &fields, now, new_id)
+                self.on_top_tool_finished(&id.to_string(), &fields, now, new_id)
             }
             AgentEvent::ContextCompressed {
                 tokens_before,
@@ -216,16 +211,13 @@ impl TraceProjector {
                 self.on_turn_ended(reason, usage, now, new_id)
             }
             AgentEvent::Subagent {
-                parent_tool_call_id,
+                ancestor_path,
                 agent_type,
                 inner,
-            } => self.on_subagent(
-                &parent_tool_call_id.to_string(),
-                agent_type,
-                *inner,
-                now,
-                new_id,
-            ),
+            } => {
+                let path: Vec<String> = ancestor_path.iter().map(ToString::to_string).collect();
+                self.on_subagent(&path, agent_type, *inner, now, new_id)
+            }
             // 不上报：进度增量、权限审计（本期不入 langfuse）。
             AgentEvent::ToolCallProgress { .. }
             | AgentEvent::PolicyDecision { .. }
@@ -234,7 +226,7 @@ impl TraceProjector {
         }
     }
 
-    // ---- 各事件处理 ----
+    // ---- 顶层 turn 事件 ----
 
     fn on_turn_started(
         &mut self,
@@ -242,20 +234,25 @@ impl TraceProjector {
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
         let trace_id = new_id();
-        let mut state = TurnState::new(trace_id.clone());
-        // 取走 TurnStarted 之前暂存的用户 prompt。
-        state.input = self.pending_input.take();
+        let input = self.pending_input.take();
         let body = TraceBody {
-            id: trace_id,
+            id: trace_id.clone(),
             name: Some(TRACE_NAME.into()),
             session_id: Some(self.session_id.clone()),
             // trace-create 时就带上 input，UI 立刻能看到用户输入（不必等 TurnEnded）。
-            input: state.input.clone().map(serde_json::Value::String),
+            input: input.clone().map(serde_json::Value::String),
             environment: Some(DEFAULT_ENVIRONMENT.into()),
             timestamp: Some(now.to_string()),
             ..Default::default()
         };
-        self.turn = Some(state);
+        // 顶层 scope：前缀 = trace_id，step 直接挂 trace（step_parent = None）。
+        self.scopes
+            .insert(trace_id.clone(), ScopeState::new(trace_id.clone(), None));
+        self.turn = Some(TurnMeta {
+            trace_id: trace_id.clone(),
+            input,
+            final_output: String::new(),
+        });
         vec![IngestionEvent::trace(
             new_id(),
             now.to_string(),
@@ -267,13 +264,11 @@ impl TraceProjector {
     fn on_user_prompt(&mut self, content: &[ContentBlock]) {
         let text = content_text(content);
         if !text.is_empty() {
-            // 主循环先发 UserPromptCommitted 再发 TurnStarted，此刻 turn 尚未建立——
-            // 暂存，等 on_turn_started 取走。
             self.pending_input = Some(text);
         }
     }
 
-    fn on_llm_started(
+    fn on_top_llm_started(
         &mut self,
         model: String,
         attempt: u32,
@@ -281,129 +276,57 @@ impl TraceProjector {
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
-        // 先收尾上一个 generation（若有）——保证它的 generation-update 在本次
-        // generation-create 之前发出。
-        let mut events = self.flush_generation(now, new_id);
-
-        let Some(turn) = self.turn.as_mut() else {
-            return events;
+        let Some(trace_id) = self.turn.as_ref().map(|t| t.trace_id.clone()) else {
+            return Vec::new();
         };
-        turn.call_seq += 1;
-        let gen_id = format!("{}-gen-{}", turn.trace_id, turn.call_seq);
-        turn.current_gen = Some(PendingGeneration {
-            id: gen_id.clone(),
-            model: model.clone(),
-            output: String::new(),
-            thinking: String::new(),
-            usage: Usage::default(),
-            error: None,
-        });
-
-        let mut meta = serde_json::Map::new();
-        meta.insert("attempt".into(), attempt.into());
-
-        let body = ObservationBody {
-            id: gen_id,
-            trace_id: turn.trace_id.clone(),
-            name: Some(GENERATION_NAME.into()),
-            model: Some(model),
-            start_time: Some(now.to_string()),
-            // input = 标准 chat messages 数组（system 作为第一条 {role:"system"}）。
-            input: Some(request_to_input(request)),
-            metadata: Some(serde_json::Value::Object(meta)),
-            environment: Some(DEFAULT_ENVIRONMENT.into()),
-            ..Default::default()
+        let Some(scope) = self.scopes.get_mut(&trace_id) else {
+            return Vec::new();
         };
-        events.push(IngestionEvent::observation(
-            new_id(),
-            now.to_string(),
-            EventKind::GenerationCreate,
-            &body,
-        ));
-        events
+        scope_llm_started(scope, &trace_id, model, attempt, request, now, new_id)
     }
 
-    /// 助手回复正文增量 → 累积到当前 generation 的 output + turn 的 final_output。
-    fn accumulate_text(&mut self, content: &ContentBlock) {
+    fn accumulate_top_text(&mut self, content: &ContentBlock) {
         if let ContentBlock::Text(text) = content
             && let Some(turn) = self.turn.as_mut()
         {
             turn.final_output.push_str(&text.text);
-            if let Some(pg) = turn.current_gen.as_mut() {
+            let trace_id = turn.trace_id.clone();
+            if let Some(scope) = self.scopes.get_mut(&trace_id)
+                && let Some(pg) = scope.current_gen.as_mut()
+            {
                 pg.output.push_str(&text.text);
             }
         }
     }
 
-    /// thinking 增量 → 累积到当前 generation 的 thinking（最终进 metadata.reasoning）。
-    fn accumulate_thinking(&mut self, content: &ContentBlock) {
+    fn accumulate_top_thinking(&mut self, content: &ContentBlock) {
         if let ContentBlock::Text(text) = content
-            && let Some(turn) = self.turn.as_mut()
-            && let Some(pg) = turn.current_gen.as_mut()
+            && let Some(trace_id) = self.turn.as_ref().map(|t| t.trace_id.clone())
+            && let Some(scope) = self.scopes.get_mut(&trace_id)
+            && let Some(pg) = scope.current_gen.as_mut()
         {
             pg.thinking.push_str(&text.text);
         }
     }
 
-    /// 记录 LLM 调用结束（LlmCallFinished）的 usage / error 到当前 generation，
-    /// 收尾时写出。usage 是**本次调用**的（非 turn 累计）。
-    fn note_llm_finished(&mut self, usage: Usage, error: Option<String>) {
-        if let Some(turn) = self.turn.as_mut()
-            && let Some(pg) = turn.current_gen.as_mut()
-        {
-            pg.usage = usage;
-            if error.is_some() {
-                pg.error = error;
-            }
-        }
-    }
-
-    /// 收尾当前 generation：把累积的 output / thinking / error / endTime 一次性
-    /// flush 成 generation-update。无进行中 generation 时是 no-op。
-    ///
-    /// 在“下一次 LlmCallStarted”和“TurnEnded”两处调用——保证 update 永远在
-    /// 对应的 create 之后、且数据已流式到齐。
-    fn flush_generation(
+    fn on_top_llm_finished(
         &mut self,
+        usage: Usage,
+        error: Option<String>,
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
-        let Some(turn) = self.turn.as_mut() else {
+        let Some(trace_id) = self.turn.as_ref().map(|t| t.trace_id.clone()) else {
             return Vec::new();
         };
-        let Some(pg) = turn.current_gen.take() else {
+        let Some(scope) = self.scopes.get_mut(&trace_id) else {
             return Vec::new();
         };
-
-        let mut meta = serde_json::Map::new();
-        if !pg.thinking.is_empty() {
-            // thinking/reasoning 没有 ingestion 专用字段——放 metadata，不污染 output。
-            meta.insert("reasoning".into(), serde_json::Value::String(pg.thinking));
-        }
-
-        let body = ObservationBody {
-            id: pg.id,
-            trace_id: turn.trace_id.clone(),
-            name: Some(GENERATION_NAME.into()),
-            model: Some(pg.model),
-            end_time: Some(now.to_string()),
-            output: (!pg.output.is_empty()).then_some(serde_json::Value::String(pg.output)),
-            // 本次调用的 usage（非 turn 累计）——这才是单次 generation 的真用量。
-            usage_details: usage_to_details(&pg.usage),
-            metadata: (!meta.is_empty()).then_some(serde_json::Value::Object(meta)),
-            level: pg.error.as_ref().map(|_| ObservationLevel::Error),
-            status_message: pg.error,
-            ..Default::default()
-        };
-        vec![IngestionEvent::observation(
-            new_id(),
-            now.to_string(),
-            EventKind::GenerationUpdate,
-            &body,
-        )]
+        note_llm_finished(scope, usage, error);
+        flush_generation(scope, &trace_id, now, new_id)
     }
 
-    fn on_tool_started(
+    fn on_top_tool_started(
         &mut self,
         tool_call_id: String,
         name: String,
@@ -411,76 +334,39 @@ impl TraceProjector {
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
-        let Some(turn) = self.turn.as_mut() else {
+        let Some(trace_id) = self.turn.as_ref().map(|t| t.trace_id.clone()) else {
             return Vec::new();
         };
-        let span_id = format!("{}-tool-{}", turn.trace_id, tool_call_id);
-        turn.tool_spans.insert(tool_call_id.clone(), span_id.clone());
-
-        // spawn_agent 工具：额外登记一个 session 级锚点。subagent 子事件（尤其**后台**，
-        // 在发起 turn 结束后才到）据它把 subagent span 挂回这个工具 span 下。
+        // 顶层 spawn_agent 工具调用：锚定 trace_id，供后续（含后台、跨 turn）subagent
+        // 事件经 ancestor_path[0] 取回 trace_id。
         if name == SPAWN_AGENT_TOOL_NAME {
-            self.subagent_anchors.insert(
-                tool_call_id,
-                SubagentAnchor {
-                    trace_id: turn.trace_id.clone(),
-                    tool_span_id: span_id.clone(),
-                },
-            );
+            self.anchors.insert(tool_call_id.clone(), trace_id.clone());
         }
-
-        let body = ObservationBody {
-            id: span_id,
-            trace_id: turn.trace_id.clone(),
-            name: Some(name),
-            start_time: Some(now.to_string()),
-            input: raw_input,
-            environment: Some(DEFAULT_ENVIRONMENT.into()),
-            ..Default::default()
+        let Some(scope) = self.scopes.get_mut(&trace_id) else {
+            return Vec::new();
         };
-        vec![IngestionEvent::observation(
-            new_id(),
-            now.to_string(),
-            EventKind::SpanCreate,
-            &body,
-        )]
+        scope_tool_started(scope, &trace_id, &tool_call_id, name, raw_input, now, new_id)
     }
 
-    fn on_tool_finished(
+    fn on_top_tool_finished(
         &mut self,
         tool_call_id: &str,
         fields: &ToolCallUpdateFields,
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
-        let Some(turn) = self.turn.as_mut() else {
+        let Some(trace_id) = self.turn.as_ref().map(|t| t.trace_id.clone()) else {
             return Vec::new();
         };
-        // 取回 Started 时分配的 span id；缺失（乱序）则现派生一个。
-        let span_id = turn
-            .tool_spans
-            .remove(tool_call_id)
-            .unwrap_or_else(|| format!("{}-tool-{}", turn.trace_id, tool_call_id));
-
-        let failed = matches!(fields.status, Some(ToolCallStatus::Failed));
-        let body = ObservationBody {
-            id: span_id,
-            trace_id: turn.trace_id.clone(),
-            end_time: Some(now.to_string()),
-            output: fields.raw_output.clone(),
-            level: failed.then_some(ObservationLevel::Error),
-            ..Default::default()
+        let Some(scope) = self.scopes.get_mut(&trace_id) else {
+            return Vec::new();
         };
-        vec![IngestionEvent::observation(
-            new_id(),
-            now.to_string(),
-            EventKind::SpanUpdate,
-            &body,
-        )]
+        scope_tool_finished(scope, &trace_id, tool_call_id, fields, now, new_id)
     }
 
     /// `cleared` 为 `Some` 表示微压缩（清理 tool_result，无 LLM）；`None` 表示全量
-    /// 摘要压缩。两者投成同形观测，仅 name/metadata 区分。
+    /// 摘要压缩。两者投成同形观测，仅 name/metadata 区分。压缩是 turn 级、跨 step 的
+    /// 操作（不属某次 llm_call），故直接挂 trace（无 parent）。
     fn on_context_compressed(
         &mut self,
         tokens_before: u64,
@@ -489,7 +375,7 @@ impl TraceProjector {
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
-        let Some(turn) = self.turn.as_ref() else {
+        let Some(trace_id) = self.turn.as_ref().map(|t| t.trace_id.clone()) else {
             return Vec::new();
         };
         let mut meta = serde_json::Map::new();
@@ -503,10 +389,9 @@ impl TraceProjector {
         } else {
             "context_compaction"
         };
-
         let body = ObservationBody {
             id: new_id(),
-            trace_id: turn.trace_id.clone(),
+            trace_id,
             name: Some(name.into()),
             start_time: Some(now.to_string()),
             metadata: Some(serde_json::Value::Object(meta)),
@@ -528,12 +413,17 @@ impl TraceProjector {
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
-        // 先收尾仍进行中的 generation（其 update 须在 trace 收尾前发出）。
-        let mut events = self.flush_generation(now, new_id);
-
         let Some(turn) = self.turn.take() else {
-            return events;
+            return Vec::new();
         };
+        let trace_id = turn.trace_id.clone();
+        let mut events = Vec::new();
+        // 收尾顶层 scope：flush 仍进行中的 generation + 关闭当前 step，然后移除 scope。
+        if let Some(mut scope) = self.scopes.remove(&trace_id) {
+            events.extend(flush_generation(&mut scope, &trace_id, now, new_id));
+            events.extend(close_current_step(&mut scope, &trace_id, now, new_id));
+        }
+
         let mut meta = serde_json::Map::new();
         meta.insert(
             "stop_reason".into(),
@@ -542,9 +432,8 @@ impl TraceProjector {
         if let Some(details) = usage_to_details(&usage) {
             meta.insert("usage".into(), serde_json::Value::Object(details));
         }
-
         let body = TraceBody {
-            id: turn.trace_id,
+            id: trace_id,
             name: Some(TRACE_NAME.into()),
             session_id: Some(self.session_id.clone()),
             input: turn.input.map(serde_json::Value::String),
@@ -564,45 +453,43 @@ impl TraceProjector {
         events
     }
 
-    /// 处理一个 subagent 子 turn 事件（`AgentEvent::Subagent` 解包后的 `inner`）。
+    // ---- subagent 事件（任意深度，同构）----
+
+    /// 处理一个 subagent 子 turn 的**叶子**事件（`AgentEvent::Subagent` 解包后的 `inner`）。
     ///
-    /// 工具 span 与 subagent span **分两层**（用户构想）：首次见到该 subagent 的事件时
-    /// 懒创建一个独立 subagent span（父 = 发起它的 `spawn_agent` 工具 span，坐标取自
-    /// session 级 `subagent_anchors`），子 turn 的 generation / 工具 span 再挂在 subagent
-    /// span 之下。这样工具 span 可独立关闭：
-    /// - **前台**：工具 span 全程张开，subagent span 嵌在其内（视觉嵌套）；
-    /// - **后台**：工具 span 早早关闭（"已启动"），subagent span 作为它的相邻子节点自行
-    ///   张开到子 turn `TurnEnded`，两者时间轴各自真实、互不牵连。
+    /// `path` = 从顶层 `spawn_agent` 工具调用到当前层的 `ToolCallId` 链。trace_id 经
+    /// `anchors[path[0]]` 取回；scope 前缀与 subagent span 的父（发起它的 tool span）由
+    /// `path` 确定性派生。首次见到某 path 时懒创建其 subagent span + scope；之后把 inner
+    /// 投到该 scope（与顶层共用 step/gen/tool 逻辑）。
     ///
-    /// 锚点是 session 级、跨 turn 存活，故后台子事件在发起 turn 结束后到达也能挂回。找不到
-    /// 锚点（从未见过该 spawn_agent 工具调用）时丢弃——不造孤儿。
+    /// 找不到顶层 anchor（从未见过那个 spawn_agent 工具调用）时丢弃——不造孤儿。
     fn on_subagent(
         &mut self,
-        parent_tool_call_id: &str,
+        path: &[String],
         agent_type: String,
         inner: AgentEvent,
         now: &str,
         new_id: &mut dyn FnMut() -> String,
     ) -> Vec<IngestionEvent> {
-        // 锚点是 session 级、跨 turn 存活——前台（发起 turn 仍在）与后台（发起 turn 已结束）
-        // 都从它找父 tool span 坐标。缺失说明从未见过这个 spawn_agent 工具调用——丢弃，不造孤儿。
-        let Some(anchor) = self.subagent_anchors.get(parent_tool_call_id).cloned() else {
+        let Some(first) = path.first() else {
             return Vec::new();
         };
-        let trace_id = anchor.trace_id.clone();
+        let Some(trace_id) = self.anchors.get(first).cloned() else {
+            // 没有顶层锚点：从未见过这个 spawn_agent 工具调用——丢弃，不造孤儿。
+            return Vec::new();
+        };
+        let prefix = scope_prefix(&trace_id, path);
 
-        // 首次见到该 subagent 的事件：懒创建一个**独立 subagent span**（父 = 工具 span）。
-        // 前台时工具 span 仍张开（嵌套）；后台时工具 span 已关闭，本 span 作为其相邻子节点
-        // 自行张开。无论哪种，子 turn 的 gen / tool 都挂在这个 subagent span 之下。
         let mut events = Vec::new();
-        if !self.subagents.contains_key(parent_tool_call_id) {
-            let subagent_span_id = format!("{trace_id}-sub-{parent_tool_call_id}");
+        // 首次见到该 path：懒创建独立 subagent span（父 = 发起它的 tool span，由 path 派生）。
+        if !self.scopes.contains_key(&prefix) {
+            let parent_tool = parent_tool_span_id(&trace_id, path);
             let mut meta = serde_json::Map::new();
             meta.insert("agent_type".into(), agent_type.clone().into());
             let body = ObservationBody {
-                id: subagent_span_id.clone(),
+                id: prefix.clone(),
                 trace_id: trace_id.clone(),
-                parent_observation_id: Some(anchor.tool_span_id.clone()),
+                parent_observation_id: Some(parent_tool),
                 name: Some(format!("{SUBAGENT_SPAN_NAME}:{agent_type}")),
                 start_time: Some(now.to_string()),
                 metadata: Some(serde_json::Value::Object(meta)),
@@ -615,20 +502,16 @@ impl TraceProjector {
                 EventKind::SpanCreate,
                 &body,
             ));
-            self.subagents.insert(
-                parent_tool_call_id.to_string(),
-                SubagentState {
-                    subagent_span_id,
-                    call_seq: 0,
-                    current_gen: None,
-                    tool_spans: HashMap::new(),
-                },
+            // subagent scope：step 挂在这个 subagent span（= prefix）下。
+            self.scopes.insert(
+                prefix.clone(),
+                ScopeState::new(prefix.clone(), Some(prefix.clone())),
             );
         }
-        let sub = self
-            .subagents
-            .get_mut(parent_tool_call_id)
-            .expect("subagent state just ensured");
+        let scope = self
+            .scopes
+            .get_mut(&prefix)
+            .expect("subagent scope just ensured");
 
         match inner {
             AgentEvent::LlmCallStarted {
@@ -636,115 +519,62 @@ impl TraceProjector {
                 attempt,
                 request,
             } => {
-                events.extend(flush_sub_generation(&trace_id, sub, now, new_id));
-                sub.call_seq += 1;
-                let gen_id = format!("{trace_id}-sub-{parent_tool_call_id}-gen-{}", sub.call_seq);
-                sub.current_gen = Some(PendingGeneration {
-                    id: gen_id.clone(),
-                    model: model.clone(),
-                    output: String::new(),
-                    thinking: String::new(),
-                    usage: Usage::default(),
-                    error: None,
-                });
-                let mut meta = serde_json::Map::new();
-                meta.insert("attempt".into(), attempt.into());
-                let body = ObservationBody {
-                    id: gen_id,
-                    trace_id,
-                    parent_observation_id: Some(sub.subagent_span_id.clone()),
-                    name: Some(GENERATION_NAME.into()),
-                    model: Some(model),
-                    start_time: Some(now.to_string()),
-                    // 与父 turn 的 generation 一致：把请求快照还原成 chat messages 数组写进
-                    // input。此前用 `{ .., }` 丢掉了 request，导致 subagent generation 无 input。
-                    input: Some(request_to_input(request.as_ref())),
-                    metadata: Some(serde_json::Value::Object(meta)),
-                    environment: Some(DEFAULT_ENVIRONMENT.into()),
-                    ..Default::default()
-                };
-                events.push(IngestionEvent::observation(
-                    new_id(),
-                    now.to_string(),
-                    EventKind::GenerationCreate,
-                    &body,
+                events.extend(scope_llm_started(
+                    scope,
+                    &trace_id,
+                    model,
+                    attempt,
+                    request.as_ref(),
+                    now,
+                    new_id,
                 ));
-                events
             }
             AgentEvent::AssistantText { content } => {
-                if let (ContentBlock::Text(text), Some(pg)) = (&content, sub.current_gen.as_mut()) {
+                if let (ContentBlock::Text(text), Some(pg)) = (&content, scope.current_gen.as_mut())
+                {
                     pg.output.push_str(&text.text);
                 }
-                events
             }
             AgentEvent::AssistantThought { content } => {
-                if let (ContentBlock::Text(text), Some(pg)) = (&content, sub.current_gen.as_mut()) {
+                if let (ContentBlock::Text(text), Some(pg)) = (&content, scope.current_gen.as_mut())
+                {
                     pg.thinking.push_str(&text.text);
                 }
-                events
             }
             AgentEvent::LlmCallFinished { usage, error, .. } => {
-                if let Some(pg) = sub.current_gen.as_mut() {
-                    pg.usage = usage;
-                    if error.is_some() {
-                        pg.error = error;
-                    }
-                }
-                events
+                note_llm_finished(scope, usage, error);
+                events.extend(flush_generation(scope, &trace_id, now, new_id));
             }
             AgentEvent::ToolCallStarted { id, name, fields } => {
-                let tool_id = id.to_string();
-                let span_id = format!("{trace_id}-sub-{parent_tool_call_id}-tool-{tool_id}");
-                sub.tool_spans.insert(tool_id, span_id.clone());
-                let body = ObservationBody {
-                    id: span_id,
-                    trace_id,
-                    parent_observation_id: Some(sub.subagent_span_id.clone()),
-                    name: Some(name),
-                    start_time: Some(now.to_string()),
-                    input: fields.raw_input,
-                    environment: Some(DEFAULT_ENVIRONMENT.into()),
-                    ..Default::default()
-                };
-                events.push(IngestionEvent::observation(
-                    new_id(),
-                    now.to_string(),
-                    EventKind::SpanCreate,
-                    &body,
+                events.extend(scope_tool_started(
+                    scope,
+                    &trace_id,
+                    &id.to_string(),
+                    name,
+                    fields.raw_input,
+                    now,
+                    new_id,
                 ));
-                events
             }
             AgentEvent::ToolCallFinished { id, fields } => {
-                let tool_id = id.to_string();
-                let span_id = sub.tool_spans.remove(&tool_id).unwrap_or_else(|| {
-                    format!("{trace_id}-sub-{parent_tool_call_id}-tool-{tool_id}")
-                });
-                let failed = matches!(fields.status, Some(ToolCallStatus::Failed));
-                let body = ObservationBody {
-                    id: span_id,
-                    trace_id,
-                    end_time: Some(now.to_string()),
-                    output: fields.raw_output.clone(),
-                    level: failed.then_some(ObservationLevel::Error),
-                    ..Default::default()
-                };
-                events.push(IngestionEvent::observation(
-                    new_id(),
-                    now.to_string(),
-                    EventKind::SpanUpdate,
-                    &body,
+                events.extend(scope_tool_finished(
+                    scope,
+                    &trace_id,
+                    &id.to_string(),
+                    &fields,
+                    now,
+                    new_id,
                 ));
-                events
             }
-            // 子 turn 结束：收尾进行中的子 generation，**关闭 subagent span**（写 end_time），
-            // 清掉 session 级子状态与锚点。subagent span 的 end_time 标记子 turn 真正结束——
-            // 后台时它晚于工具 span 的关闭，时间轴各自真实。
+            // 子 turn 结束：收尾进行中的 generation + 关闭当前 step + 关闭 subagent span，
+            // 清掉 session 级 scope；顶层那一跳（path 长度 1）的 anchor 也清掉。
             AgentEvent::TurnEnded { .. } => {
-                events.extend(flush_sub_generation(&trace_id, sub, now, new_id));
-                let subagent_span_id = sub.subagent_span_id.clone();
+                events.extend(flush_generation(scope, &trace_id, now, new_id));
+                events.extend(close_current_step(scope, &trace_id, now, new_id));
+                let subagent_span_id = scope.prefix.clone();
                 let body = ObservationBody {
                     id: subagent_span_id,
-                    trace_id,
+                    trace_id: trace_id.clone(),
                     end_time: Some(now.to_string()),
                     ..Default::default()
                 };
@@ -754,37 +584,122 @@ impl TraceProjector {
                     EventKind::SpanUpdate,
                     &body,
                 ));
-                self.subagents.remove(parent_tool_call_id);
-                self.subagent_anchors.remove(parent_tool_call_id);
-                events
+                self.scopes.remove(&prefix);
+                if path.len() == 1 {
+                    self.anchors.remove(first);
+                }
             }
-            // 子 turn 的其余事件（TurnStarted / UserPromptCommitted / 进度 / 审计 /
-            // 嵌套 Subagent——结构性不会发生）不单独上报。
-            _ => events,
+            // 子 turn 的其余事件（TurnStarted / UserPromptCommitted / 进度 / 审计）不单独上报。
+            _ => {}
+        }
+        events
+    }
+}
+
+// ---- scope 通用投影（顶层 turn 与 subagent 共用）----
+
+/// 一次 LLM 调用开始：收尾上一个 step（若有）→ 开新 step → 在新 step 下建 generation。
+fn scope_llm_started(
+    scope: &mut ScopeState,
+    trace_id: &str,
+    model: String,
+    attempt: u32,
+    request: &LlmRequestSnapshot,
+    now: &str,
+    new_id: &mut dyn FnMut() -> String,
+) -> Vec<IngestionEvent> {
+    // 防御：上一个 generation 理应已在它的 LlmCallFinished 收尾（gen 时长 = 纯 LLM）；
+    // 若仍在则先 flush，保证 create 先于 update。
+    let mut events = flush_generation(scope, trace_id, now, new_id);
+    // 收尾上一个 step（它含上一次 llm_call + 那轮触发的工具）。
+    events.extend(close_current_step(scope, trace_id, now, new_id));
+
+    // 开新 step。
+    scope.step_seq += 1;
+    let step_id = format!("{}-step-{}", scope.prefix, scope.step_seq);
+    scope.current_step_id = Some(step_id.clone());
+    let step_body = ObservationBody {
+        id: step_id.clone(),
+        trace_id: trace_id.to_string(),
+        parent_observation_id: scope.step_parent.clone(),
+        name: Some(STEP_NAME.into()),
+        start_time: Some(now.to_string()),
+        environment: Some(DEFAULT_ENVIRONMENT.into()),
+        ..Default::default()
+    };
+    events.push(IngestionEvent::observation(
+        new_id(),
+        now.to_string(),
+        EventKind::SpanCreate,
+        &step_body,
+    ));
+
+    // generation 挂在新 step 下。
+    let gen_id = format!("{step_id}-gen");
+    scope.current_gen = Some(PendingGeneration {
+        id: gen_id.clone(),
+        parent_step_id: step_id.clone(),
+        model: model.clone(),
+        output: String::new(),
+        thinking: String::new(),
+        usage: Usage::default(),
+        error: None,
+    });
+    let mut meta = serde_json::Map::new();
+    meta.insert("attempt".into(), attempt.into());
+    let gen_body = ObservationBody {
+        id: gen_id,
+        trace_id: trace_id.to_string(),
+        parent_observation_id: Some(step_id),
+        name: Some(GENERATION_NAME.into()),
+        model: Some(model),
+        start_time: Some(now.to_string()),
+        // input = 标准 chat messages 数组（system 作为第一条 {role:"system"}）。
+        input: Some(request_to_input(request)),
+        metadata: Some(serde_json::Value::Object(meta)),
+        environment: Some(DEFAULT_ENVIRONMENT.into()),
+        ..Default::default()
+    };
+    events.push(IngestionEvent::observation(
+        new_id(),
+        now.to_string(),
+        EventKind::GenerationCreate,
+        &gen_body,
+    ));
+    events
+}
+
+/// 记录 LlmCallFinished 的 usage / error 到当前 generation（收尾时写出）。
+fn note_llm_finished(scope: &mut ScopeState, usage: Usage, error: Option<String>) {
+    if let Some(pg) = scope.current_gen.as_mut() {
+        pg.usage = usage;
+        if error.is_some() {
+            pg.error = error;
         }
     }
 }
 
-/// 收尾一个 subagent 子 generation：把累积 output / thinking / usage / endTime
-/// flush 成 generation-update。无进行中 generation 时 no-op。与父级 `flush_generation`
-/// 同形，但写 `parent_observation_id` 让 update 也挂在父 tool span 下。
-fn flush_sub_generation(
+/// 收尾当前 generation：output / thinking / usage / endTime → generation-update。
+/// 无进行中 generation 时 no-op。在 `LlmCallFinished`（成功路径流已 drain，output/
+/// thinking 已到齐）调用——generation 时长 = 纯 LLM 调用，不含工具执行。
+fn flush_generation(
+    scope: &mut ScopeState,
     trace_id: &str,
-    sub: &mut SubagentState,
     now: &str,
     new_id: &mut dyn FnMut() -> String,
 ) -> Vec<IngestionEvent> {
-    let Some(pg) = sub.current_gen.take() else {
+    let Some(pg) = scope.current_gen.take() else {
         return Vec::new();
     };
     let mut meta = serde_json::Map::new();
     if !pg.thinking.is_empty() {
+        // thinking/reasoning 没有 ingestion 专用字段——放 metadata，不污染 output。
         meta.insert("reasoning".into(), serde_json::Value::String(pg.thinking));
     }
     let body = ObservationBody {
         id: pg.id,
         trace_id: trace_id.to_string(),
-        parent_observation_id: Some(sub.subagent_span_id.clone()),
+        parent_observation_id: Some(pg.parent_step_id),
         name: Some(GENERATION_NAME.into()),
         model: Some(pg.model),
         end_time: Some(now.to_string()),
@@ -802,6 +717,117 @@ fn flush_sub_generation(
         &body,
     )]
 }
+
+/// 关闭当前 step span（写 end_time）。无进行中 step 时 no-op。
+fn close_current_step(
+    scope: &mut ScopeState,
+    trace_id: &str,
+    now: &str,
+    new_id: &mut dyn FnMut() -> String,
+) -> Vec<IngestionEvent> {
+    let Some(step_id) = scope.current_step_id.take() else {
+        return Vec::new();
+    };
+    let body = ObservationBody {
+        id: step_id,
+        trace_id: trace_id.to_string(),
+        end_time: Some(now.to_string()),
+        ..Default::default()
+    };
+    vec![IngestionEvent::observation(
+        new_id(),
+        now.to_string(),
+        EventKind::SpanUpdate,
+        &body,
+    )]
+}
+
+/// 工具调用开始 → span-create，挂在当前 step 下（与 llm_call 互为兄弟）。
+fn scope_tool_started(
+    scope: &mut ScopeState,
+    trace_id: &str,
+    tool_call_id: &str,
+    name: String,
+    raw_input: Option<serde_json::Value>,
+    now: &str,
+    new_id: &mut dyn FnMut() -> String,
+) -> Vec<IngestionEvent> {
+    let span_id = format!("{}-tool-{}", scope.prefix, tool_call_id);
+    scope
+        .tool_spans
+        .insert(tool_call_id.to_string(), span_id.clone());
+    let body = ObservationBody {
+        id: span_id,
+        trace_id: trace_id.to_string(),
+        // 工具挂在当前 step 下；理论上工具调用恒在某次 llm_call 之后，故 step 必存在。
+        // 防御性地允许 None（乱序 / 无 step）——退化为直接挂 trace。
+        parent_observation_id: scope.current_step_id.clone(),
+        name: Some(name),
+        start_time: Some(now.to_string()),
+        input: raw_input,
+        environment: Some(DEFAULT_ENVIRONMENT.into()),
+        ..Default::default()
+    };
+    vec![IngestionEvent::observation(
+        new_id(),
+        now.to_string(),
+        EventKind::SpanCreate,
+        &body,
+    )]
+}
+
+/// 工具调用结束 → span-update（endTime + output + level）。
+fn scope_tool_finished(
+    scope: &mut ScopeState,
+    trace_id: &str,
+    tool_call_id: &str,
+    fields: &ToolCallUpdateFields,
+    now: &str,
+    new_id: &mut dyn FnMut() -> String,
+) -> Vec<IngestionEvent> {
+    // 取回 Started 时分配的 span id；缺失（乱序）则现派生一个。
+    let span_id = scope
+        .tool_spans
+        .remove(tool_call_id)
+        .unwrap_or_else(|| format!("{}-tool-{}", scope.prefix, tool_call_id));
+    let failed = matches!(fields.status, Some(ToolCallStatus::Failed));
+    let body = ObservationBody {
+        id: span_id,
+        trace_id: trace_id.to_string(),
+        end_time: Some(now.to_string()),
+        output: fields.raw_output.clone(),
+        level: failed.then_some(ObservationLevel::Error),
+        ..Default::default()
+    };
+    vec![IngestionEvent::observation(
+        new_id(),
+        now.to_string(),
+        EventKind::SpanUpdate,
+        &body,
+    )]
+}
+
+// ---- id 派生 ----
+
+/// 某 scope 的 id 前缀：顶层（path 空）= `{trace}`；subagent 路径 `[A,B]` =
+/// `{trace}-sub-A-sub-B`。subagent scope 的前缀同时就是其 subagent span 的 id。
+fn scope_prefix(trace_id: &str, path: &[String]) -> String {
+    let mut s = trace_id.to_string();
+    for id in path {
+        s.push_str("-sub-");
+        s.push_str(id);
+    }
+    s
+}
+
+/// 一个 subagent span 的父 observation（发起它的 `spawn_agent` 工具 span）id。
+/// = `{父 scope 前缀}-tool-{该 subagent 的发起 tool_call_id}`。`path` 非空。
+fn parent_tool_span_id(trace_id: &str, path: &[String]) -> String {
+    let (last, parent_path) = path.split_last().expect("path is non-empty");
+    format!("{}-tool-{}", scope_prefix(trace_id, parent_path), last)
+}
+
+// ---- 数据转换 helper ----
 
 /// 把 [`Usage`] 转成 langfuse `usageDetails` map。全 None 时返回 None（不上报）。
 fn usage_to_details(usage: &Usage) -> Option<serde_json::Map<String, serde_json::Value>> {
