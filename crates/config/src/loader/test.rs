@@ -1154,7 +1154,7 @@ fn loads_tools_background_section_into_effective_config() {
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
 [tools.background]
-ring_cap = 16
+default_recent_blocks = 16
 block_text_limit = 200
 "#,
     );
@@ -1162,7 +1162,7 @@ block_text_limit = 200
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
     let bg = &loaded.effective.tools.background;
-    assert_eq!(bg.ring_cap, 16);
+    assert_eq!(bg.default_recent_blocks, 16);
     assert_eq!(bg.block_text_limit, 200);
 }
 
@@ -1175,8 +1175,8 @@ fn tools_background_defaults_when_absent() {
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
     let bg = &loaded.effective.tools.background;
-    // 默认：环 64、正文上限 0（鸟瞰、不灌子 turn 正文）。
-    assert_eq!(bg.ring_cap, 64);
+    // 默认：最近 10 条、正文上限 0（鸟瞰、不灌子 turn 正文）。
+    assert_eq!(bg.default_recent_blocks, 10);
     assert_eq!(bg.block_text_limit, 0);
 }
 

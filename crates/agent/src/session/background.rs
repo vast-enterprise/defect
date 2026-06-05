@@ -25,14 +25,22 @@
 //! ## 内省与单点中断（控制面）
 //!
 //! 任务**完成后不立刻从表里消失**：每个任务在 `tasks` 表里保留一条 [`TaskEntry`]，记录
-//! 状态（运行 / 完成 / 失败 / 取消）与一个**有界进度环** [`ProgressRing`]。发起任务的工具
-//! （`spawn_agent`）把子 turn 的"最近几个 block"（assistant 文本 / 思考 / 工具调用起止）经
-//! [`ProgressSink`] 喂进这个环。于是主 agent 能用 `inspect_background_task` 查某个后台
-//! subagent 的进度，用 `cancel_background_task` 经 [`cancel_task`](BackgroundTasks::cancel_task)
-//! 提前掐掉单个任务——不波及其它任务（每个任务一个独立子 token）。完成的任务条目按 FIFO
-//! 上限淘汰，避免长会话无界增长。
+//! 状态（运行 / 完成 / 失败 / 取消）与一个**指向该任务 history 的共享句柄**。
+//!
+//! 进度的"block"粒度刻意取**提交给 LLM 的消息块**（[`crate::llm::Message`]）——不是流式
+//! 增量。流式 `AssistantText` / `AssistantThought` 是逐 chunk 几个词一条（对位 ACP
+//! `AgentMessageChunk`），对"这个 subagent 现在大致在干嘛"毫无帮助。真正有意义的是 turn
+//! 主循环把整段 drain 完、coalesce 成一条 assistant `Message` append 进 history 的那一刻
+//! ——那才是"发给 AI 的一个 block"。因此 `spawn_agent` 把子 turn 的 history `Arc` 共享进
+//! 本表（子 turn 自己往里 append），`peek` 直接 snapshot 这份 history、取**最近 N 条
+//! 消息块**——单一真相源（与喂给 LLM 的完全一致），无需在别处重放/coalesce 流式增量。
+//!
+//! 于是主 agent 能用 `inspect_background_task` 查某个后台 subagent 的进度，用
+//! `cancel_background_task` 经 [`cancel_task`](BackgroundTasks::cancel_task) 提前掐掉单个
+//! 任务——不波及其它任务（每个任务一个独立子 token）。完成的任务条目按 FIFO 上限淘汰，
+//! 避免长会话无界增长。
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -40,9 +48,11 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// 进度环默认容量（block 数）。够覆盖"最近几个 block"的查询，又不让单个长跑任务
-/// 把内存吃光。可经 [`BackgroundProgressConfig::ring_cap`] 覆盖。
-const DEFAULT_PROGRESS_RING_CAP: usize = 64;
+use crate::llm::{Message, MessageContent, Role};
+use crate::session::History;
+
+/// `inspect_background_task` 不带 `recent_blocks` 时默认返回多少条最近消息块。
+const DEFAULT_RECENT_BLOCKS: usize = 10;
 
 /// `tasks` 表里保留多少个**已结束**的任务条目。运行中的条目不计入上限——它们必须留着
 /// 才能被 cancel / peek。超过上限时按结束顺序淘汰最旧的那条。
@@ -51,29 +61,28 @@ const FINISHED_TASKS_CAP: usize = 64;
 /// 后台任务**进度视图**的配置。
 ///
 /// 目的：给主 agent 一个"这个 subagent 此刻大致在干嘛"的**鸟瞰**，而**不是**把子 turn
-/// 的完整正文灌回主 agent 上下文。所以默认偏保守——只留元信息（工具调用标题这类本就是
-/// 摘要的东西），assistant/thought 正文默认**不留**（`block_text_limit = 0`）。需要更细
-/// 时用户再放大 `block_text_limit`。
+/// 的完整正文灌回主 agent 上下文。所以默认偏保守——assistant/思考的正文默认**不留**
+/// （`block_text_limit = 0`，只报"有一条 assistant 文本 / 思考"这类元信息）；工具调用
+/// 这类本就简短的块原样保留。需要更细时用户再放大 `block_text_limit`。
 ///
 /// 配置真相源在 agent 侧（这里），`defect-config` 的 `ToolsConfig.background` 直接复用本
 /// 结构（与 `TurnConfig` / `SessionCapabilitiesConfig` 同款跨 crate 复用——config 依赖
 /// agent，不能反向）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackgroundProgressConfig {
-    /// 每个任务的进度环最多保留多少个 block。溢出淘汰最旧。`0` 视作 `1`（至少留一格，
-    /// 否则环恒空、peek 永远看不到东西）。
-    pub ring_cap: usize,
-    /// 单个 block 的**正文**字符上限（按 Unicode 标量计），仅作用于 assistant 文本 /
-    /// 思考这类自由正文。超出即在边界截断并加省略标记。`0` = 不留正文（只记"发生了
-    /// 一段 assistant 文本 / 思考"这一元信息）——默认值，最不污染。工具调用的标题
-    /// **不受**本上限约束：它本身就是一行摘要。
+    /// `inspect_background_task` 不带 `recent_blocks` 参数时，默认返回多少条最近消息块。
+    /// `0` 视作 `1`（至少给一条，否则 peek 永远空）。
+    pub default_recent_blocks: usize,
+    /// 单个 block 的**正文**字符上限（按 Unicode 标量计），作用于 assistant 文本 / 思考 /
+    /// 工具结果这类自由正文。超出即在边界截断并加省略标记。`0` = 不留正文（只报块的
+    /// 类型与元信息，如工具名）——默认值，最不污染主 agent 上下文。
     pub block_text_limit: usize,
 }
 
 impl Default for BackgroundProgressConfig {
     fn default() -> Self {
         Self {
-            ring_cap: DEFAULT_PROGRESS_RING_CAP,
+            default_recent_blocks: DEFAULT_RECENT_BLOCKS,
             // 默认只给摘要 / 元信息，不灌正文——目的是鸟瞰，不是搬运上下文。
             block_text_limit: 0,
         }
@@ -81,9 +90,9 @@ impl Default for BackgroundProgressConfig {
 }
 
 impl BackgroundProgressConfig {
-    /// 规整成可用值：`ring_cap` 至少 1。
-    fn normalized_ring_cap(&self) -> usize {
-        self.ring_cap.max(1)
+    /// 规整 `recent_blocks`：调用方传 `Some(n)` 用 `n`（至少 1），`None` 用配置默认（至少 1）。
+    fn resolve_recent(&self, requested: Option<usize>) -> usize {
+        requested.unwrap_or(self.default_recent_blocks).max(1)
     }
 }
 
@@ -150,73 +159,64 @@ impl TaskStatus {
     }
 }
 
-/// 后台任务进度环里的一个 block 的类别。直接对位 `spawn_agent` 桥接的子 turn 事件。
+/// 一条进度 block 的角色/类别。直接对位提交给 LLM 的 [`crate::llm::Message`] 内容。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgressKind {
-    /// 子 agent 的 assistant 文本增量。
+pub enum BlockKind {
+    /// 用户/任务输入消息（含回流进来的后台结果、工具结果回灌等）。
+    User,
+    /// 助手产出的文本。
     AssistantText,
-    /// 子 agent 的思考链增量。
+    /// 助手的思考链。
     Thought,
-    /// 子 agent 发起了一次工具调用。
-    ToolStart,
-    /// 子 agent 的一次工具调用结束。
-    ToolFinish,
+    /// 助手发起的一次工具调用。
+    ToolUse,
+    /// 工具结果（喂回给模型的）。
+    ToolResult,
+    /// 其它（多模态 / provider 活动等），归一展示。
+    Other,
 }
 
-impl ProgressKind {
+impl BlockKind {
     /// 稳定的小写字符串名，进控制面工具输出。
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            ProgressKind::AssistantText => "assistant",
-            ProgressKind::Thought => "thought",
-            ProgressKind::ToolStart => "tool_start",
-            ProgressKind::ToolFinish => "tool_finish",
+            BlockKind::User => "user",
+            BlockKind::AssistantText => "assistant",
+            BlockKind::Thought => "thought",
+            BlockKind::ToolUse => "tool_use",
+            BlockKind::ToolResult => "tool_result",
+            BlockKind::Other => "other",
         }
     }
 
-    /// 这类 block 的文本是否为**自由正文**（assistant 文本 / 思考）——受
-    /// [`BackgroundProgressConfig::block_text_limit`] 约束。工具调用的标题
-    /// 本身就是一行摘要，不算正文、不受上限约束。
+    /// 该类 block 的文本是否为**自由正文**——受 [`BackgroundProgressConfig::block_text_limit`]
+    /// 约束。工具调用名这类本就是一行摘要，不算正文、不受上限约束。
     fn is_free_form_body(&self) -> bool {
-        matches!(self, ProgressKind::AssistantText | ProgressKind::Thought)
+        matches!(
+            self,
+            BlockKind::User | BlockKind::AssistantText | BlockKind::Thought | BlockKind::ToolResult
+        )
     }
 }
 
-/// 进度环里的一个 block：类别 + 文本摘要。
+/// peek 返回的单条进度 block：类别 + 文本摘要（已按配置截断）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgressBlock {
-    pub kind: ProgressKind,
+    pub kind: BlockKind,
     pub text: String,
 }
 
-/// 有界进度环。每个任务一个，由 [`ProgressSink`] 写、由 `peek` 读。最多保留 `cap` 个
-/// block，溢出时淘汰最旧的。
-struct ProgressRing {
-    blocks: VecDeque<ProgressBlock>,
-    cap: usize,
-}
-
-impl ProgressRing {
-    fn with_cap(cap: usize) -> Self {
-        Self {
-            blocks: VecDeque::new(),
-            cap,
-        }
-    }
-
-    fn push(&mut self, block: ProgressBlock) {
-        while self.blocks.len() >= self.cap {
-            self.blocks.pop_front();
-        }
-        self.blocks.push_back(block);
-    }
-
-    /// 取最近 `n` 个 block（保持时间顺序：旧→新）。
-    fn recent(&self, n: usize) -> Vec<ProgressBlock> {
-        let skip = self.blocks.len().saturating_sub(n);
-        self.blocks.iter().skip(skip).cloned().collect()
-    }
+/// 一个任务在控制面里的快照（`list` / `peek` 返回）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskSnapshot {
+    pub task_id: String,
+    pub label: String,
+    pub status: TaskStatus,
+    /// 该任务 history 里现有的消息块总数（`peek` 才填；`list` 为 `0`，因为列举不读 history）。
+    pub block_count: usize,
+    /// 最近的若干 block（`list` 不带、为空；`peek` 带最近 N 个）。
+    pub recent: Vec<ProgressBlock>,
 }
 
 /// 把自由正文按字符上限截断（按 Unicode 标量切，不会切坏字符）。`limit == 0` ⇒ 空串
@@ -233,44 +233,63 @@ fn truncate_body(text: &str, limit: usize) -> String {
     format!("{kept} …(+{} more chars)", total - limit)
 }
 
-/// 写进度环的句柄。`Clone` 廉价（内部 `Arc`）。交给发起任务的工具（`spawn_agent`），
-/// 让它把子 turn 的"最近几个 block"流式喂进对应任务的进度环。任务结束后写入静默无害
-/// （环还在表里、可被最后 peek 到）。
-///
-/// 截断策略在**写入这一处**统一执行（不在读取处）——无论谁产事件，进环的正文就已经
-/// 按 [`BackgroundProgressConfig::block_text_limit`] 收敛，省内存也省读取期再处理。
-#[derive(Clone)]
-pub struct ProgressSink {
-    ring: Arc<Mutex<ProgressRing>>,
-    /// 自由正文（assistant / thought）的字符上限快照。工具调用标题不受其约束。
-    block_text_limit: usize,
-}
-
-impl ProgressSink {
-    /// 追加一个进度 block。自由正文按 `block_text_limit` 截断；工具调用标题原样保留
-    /// （本就是摘要）。锁中毒时静默丢弃（进度环纯诊断，不该让任务崩）。
-    pub fn push(&self, kind: ProgressKind, text: String) {
-        let text = if kind.is_free_form_body() {
-            truncate_body(&text, self.block_text_limit)
-        } else {
-            text
-        };
-        if let Ok(mut ring) = self.ring.lock() {
-            ring.push(ProgressBlock { kind, text });
-        }
+/// 把 [`ToolResultBody`](crate::llm::ToolResultBody) 提一段可读文本出来（仅用于鸟瞰摘要）。
+fn tool_result_text(body: &crate::llm::ToolResultBody) -> String {
+    use crate::llm::{ToolResultBody, ToolResultContent};
+    match body {
+        ToolResultBody::Text { text } => text.clone(),
+        ToolResultBody::Json { value } => value.to_string(),
+        ToolResultBody::Content { blocks } => blocks
+            .iter()
+            .map(|b| match b {
+                ToolResultContent::Text { text } => text.clone(),
+                ToolResultContent::Image { .. } => "<image>".to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }
 
-/// 一个任务在控制面里的快照（`list` / `peek` 返回）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskSnapshot {
-    pub task_id: String,
-    pub label: String,
-    pub status: TaskStatus,
-    /// 进度环里现有的 block 总数。
-    pub block_count: usize,
-    /// 最近的若干 block（`list` 不带、为空；`peek` 带最近 N 个）。
-    pub recent: Vec<ProgressBlock>,
+/// 把一条 [`MessageContent`] 映射成一条进度 block，正文按 `limit` 截断（仅自由正文）。
+fn block_of_content(content: &MessageContent, role: Role, limit: usize) -> ProgressBlock {
+    let (kind, raw): (BlockKind, String) = match content {
+        MessageContent::Text { text } => {
+            let kind = if role == Role::Assistant {
+                BlockKind::AssistantText
+            } else {
+                BlockKind::User
+            };
+            (kind, text.clone())
+        }
+        MessageContent::Thinking { text, .. } => (BlockKind::Thought, text.clone()),
+        // 工具名是一行摘要，不当正文截断；参数不进鸟瞰（要看细节去 langfuse trace）。
+        MessageContent::ToolUse { name, .. } => (BlockKind::ToolUse, name.clone()),
+        MessageContent::ToolResult { output, .. } => (BlockKind::ToolResult, tool_result_text(output)),
+        MessageContent::Image { .. } => (BlockKind::Other, "<image>".to_string()),
+        MessageContent::ProviderActivity { kind, .. } => {
+            (BlockKind::Other, format!("provider activity: {kind:?}"))
+        }
+    };
+    let text = if kind.is_free_form_body() {
+        truncate_body(&raw, limit)
+    } else {
+        raw
+    };
+    ProgressBlock { kind, text }
+}
+
+/// 从一份 history snapshot 里取**最近 `n` 条**消息块（把每条 [`Message`] 的各 content 片段
+/// 摊平成独立 block，保持时间顺序），正文按 `limit` 截断。返回 `(总块数, 最近 n 块)`。
+fn recent_blocks_of(messages: &[Message], n: usize, limit: usize) -> (usize, Vec<ProgressBlock>) {
+    let mut all: Vec<ProgressBlock> = Vec::new();
+    for m in messages {
+        for c in m.content.iter() {
+            all.push(block_of_content(c, m.role, limit));
+        }
+    }
+    let total = all.len();
+    let skip = total.saturating_sub(n);
+    (total, all.into_iter().skip(skip).collect())
 }
 
 /// `tasks` 表里的一条任务条目。
@@ -279,8 +298,10 @@ struct TaskEntry {
     status: TaskStatus,
     /// 本任务专属取消令牌（session 级 token 的子 token）。`cancel_task` 取它单独 `cancel`。
     cancel: CancellationToken,
-    /// 进度环的共享句柄——与交给任务的 [`ProgressSink`] 同一个 `Arc`。
-    ring: Arc<Mutex<ProgressRing>>,
+    /// 指向该任务 history 的共享句柄。`peek` 经它 snapshot 出**提交给 LLM 的消息块**。
+    /// `Some`：发起任务的工具（`spawn_agent`）把子 turn 的 history `Arc` 共享了进来；
+    /// `None`：任务没暴露 history（无进度可查，peek 只回状态）。
+    history: Option<Arc<dyn History>>,
     /// 运行中的 `JoinHandle`，使任务活过发起它的 turn。结束后置 `None`。
     handle: Option<JoinHandle<()>>,
     /// 结束顺序序号（仅已结束条目有），供 FIFO 淘汰。
@@ -340,7 +361,7 @@ pub struct BackgroundTasks {
     /// 任务完成通知。每当一个任务结果入队就 `notify_one`——session driver 等在它上面，
     /// 被唤醒后起一个自主 turn 主动续转（阶段二）。被动回流不依赖它。
     completed_notify: Arc<Notify>,
-    /// 进度视图配置（环容量 / 正文上限）。`spawn` 据此给每个任务建环与 sink。
+    /// 进度视图配置（默认返回块数 / 正文上限）。`peek` 据此渲染。
     progress_config: BackgroundProgressConfig,
     inner: Arc<Mutex<BackgroundInner>>,
 }
@@ -385,15 +406,16 @@ impl BackgroundTasks {
     /// Spawn 一个后台任务，**立即**返回它的 id。
     ///
     /// `make_fut` 收到两个句柄：本任务专属的 [`CancellationToken`]（session 级 token 的
-    /// 子 token，任务体应在其上感知取消）与一个 [`ProgressSink`]（往本任务进度环里喂"最近
-    /// 几个 block"，供控制面 peek）。任务完成时结果进 `completed` 队列、并把 `tasks` 表里
-    /// 本条标记为终态（保留条目以便事后查询）。
+    /// 子 token，任务体应在其上感知取消）与一个 [`TaskHandle`]（任务体把自己的 history
+    /// `Arc` 经 [`TaskHandle::attach_history`] 共享进表，供控制面 peek **提交给 LLM 的
+    /// 消息块**）。任务完成时结果进 `completed` 队列、并把 `tasks` 表里本条标记为终态
+    /// （保留条目以便事后查询）。
     ///
-    /// 取这个"收 token / sink 再造 future"的闭包形态，是因为两者都要在 spawn 内部 mint，
+    /// 取这个"收 token / handle 再造 future"的闭包形态，是因为两者都要在 spawn 内部 mint，
     /// 而 future 需要捕获它们——直接收 future 就拿不到这个生命周期独立于 turn 的 token。
     pub fn spawn<F, Fut>(&self, label: String, make_fut: F) -> String
     where
-        F: FnOnce(CancellationToken, ProgressSink) -> Fut,
+        F: FnOnce(CancellationToken, TaskHandle) -> Fut,
         Fut: Future<Output = BackgroundResult> + Send + 'static,
     {
         let mut inner = self.inner.lock().expect("BackgroundTasks mutex poisoned");
@@ -401,22 +423,19 @@ impl BackgroundTasks {
         inner.next_id += 1;
 
         let task_cancel = self.cancel.child_token();
-        let ring = Arc::new(Mutex::new(ProgressRing::with_cap(
-            self.progress_config.normalized_ring_cap(),
-        )));
-        let sink = ProgressSink {
-            ring: ring.clone(),
-            block_text_limit: self.progress_config.block_text_limit,
+        let handle = TaskHandle {
+            inner: self.inner.clone(),
+            task_id: id.clone(),
         };
         // 任务体感知"是否被取消"，用于完成时区分 Failed / Canceled 状态。
         let cancel_for_task = task_cancel.clone();
-        let fut = make_fut(task_cancel.clone(), sink);
+        let fut = make_fut(task_cancel.clone(), handle);
 
         let inner_arc = self.inner.clone();
         let notify = self.completed_notify.clone();
         let id_for_task = id.clone();
         let label_for_task = label.clone();
-        let handle = tokio::spawn(async move {
+        let join = tokio::spawn(async move {
             let result = fut.await;
             // 区分"任务报错"与"被显式取消"：后者把状态记成 Canceled，前者记 Failed。
             let status = if cancel_for_task.is_cancelled() {
@@ -447,8 +466,8 @@ impl BackgroundTasks {
                 label,
                 status: TaskStatus::Running,
                 cancel: task_cancel,
-                ring,
-                handle: Some(handle),
+                history: None,
+                handle: Some(join),
                 finished_seq: None,
             },
         );
@@ -473,8 +492,8 @@ impl BackgroundTasks {
             .count()
     }
 
-    /// 列出所有任务（运行中 + 近期已结束）的快照，**不带**进度 block（`recent` 为空、
-    /// 只给 `block_count`）。按 task id 升序。供 `inspect_background_task` 无参列举。
+    /// 列出所有任务（运行中 + 近期已结束）的快照，**不读 history**（`recent` 空、
+    /// `block_count` 为 0）。按 task id 升序。供 `inspect_background_task` 无参列举。
     #[must_use]
     pub fn list(&self) -> Vec<TaskSnapshot> {
         let inner = self.inner.lock().expect("BackgroundTasks mutex poisoned");
@@ -485,27 +504,34 @@ impl BackgroundTasks {
                 task_id: id.clone(),
                 label: e.label.clone(),
                 status: e.status,
-                block_count: e.ring.lock().map(|r| r.blocks.len()).unwrap_or(0),
+                block_count: 0,
                 recent: Vec::new(),
             })
             .collect()
     }
 
-    /// 取单个任务的快照，带最近 `n` 个进度 block。任务不存在（从未 spawn / 已被淘汰）
-    /// 返回 `None`。供 `inspect_background_task` 带 task_id 查进度。
+    /// 取单个任务的快照，带最近 `recent_blocks` 条**提交给 LLM 的消息块**（`None` ⇒ 用配置
+    /// 默认）。任务不存在（从未 spawn / 已被淘汰）返回 `None`；任务未暴露 history 则块为空。
+    ///
+    /// 实现：clone 出该任务的 history `Arc`（在锁内）后**释放表锁**，再 snapshot（snapshot
+    /// 走 history 自己的锁）——避免在持表锁期间做可能较重的历史深拷贝、阻塞 spawn/finish。
     #[must_use]
-    pub fn peek(&self, id: &str, n: usize) -> Option<TaskSnapshot> {
-        let inner = self.inner.lock().expect("BackgroundTasks mutex poisoned");
-        let entry = inner.tasks.get(id)?;
-        let (block_count, recent) = entry
-            .ring
-            .lock()
-            .map(|r| (r.blocks.len(), r.recent(n)))
-            .unwrap_or((0, Vec::new()));
+    pub fn peek(&self, id: &str, recent_blocks: Option<usize>) -> Option<TaskSnapshot> {
+        let n = self.progress_config.resolve_recent(recent_blocks);
+        let limit = self.progress_config.block_text_limit;
+        let (label, status, history) = {
+            let inner = self.inner.lock().expect("BackgroundTasks mutex poisoned");
+            let entry = inner.tasks.get(id)?;
+            (entry.label.clone(), entry.status, entry.history.clone())
+        };
+        let (block_count, recent) = match history {
+            Some(h) => recent_blocks_of(&h.snapshot(), n, limit),
+            None => (0, Vec::new()),
+        };
         Some(TaskSnapshot {
             task_id: id.to_string(),
-            label: entry.label.clone(),
-            status: entry.status,
+            label,
+            status,
             block_count,
             recent,
         })
@@ -529,6 +555,27 @@ impl BackgroundTasks {
     /// 取消所有后台任务（session 终结时调用）。幂等。
     pub fn cancel_all(&self) {
         self.cancel.cancel();
+    }
+}
+
+/// 交给后台任务体的句柄：让任务把自己的 history `Arc` 共享进任务表，从而控制面能 peek
+/// 它**提交给 LLM 的消息块**。`Clone` 廉价（内部 `Arc` + 小字符串）。
+#[derive(Clone)]
+pub struct TaskHandle {
+    inner: Arc<Mutex<BackgroundInner>>,
+    task_id: String,
+}
+
+impl TaskHandle {
+    /// 把本任务的 history 句柄共享进任务表。`spawn_agent` 后台路径在构造子 turn 前调用，
+    /// 传子 turn 的 history `Arc`——之后 `peek` 就能 snapshot 出子 agent 已提交的消息块。
+    /// 任务条目可能已被淘汰（极端情况下任务瞬时结束并被 FIFO 挤掉），那时静默忽略。
+    pub fn attach_history(&self, history: Arc<dyn History>) {
+        if let Ok(mut inner) = self.inner.lock()
+            && let Some(entry) = inner.tasks.get_mut(&self.task_id)
+        {
+            entry.history = Some(history);
+        }
     }
 }
 

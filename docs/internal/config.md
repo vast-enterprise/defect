@@ -261,9 +261,9 @@ max_timeout_ms = 600000
 read_default_limit = 2000
 read_max_limit = 20000
 
-[tools.background]                   # 后台 subagent 进度视图（inspect_background_task 看到的"最近几个 block"）
-ring_cap = 64                        # 每个后台任务进度环容量（block 数）
-block_text_limit = 0                 # 单 block 自由正文(assistant/思考)字符上限；0=只留摘要/元信息(默认，不灌子 turn 正文)；工具调用标题不受此限
+[tools.background]                   # 后台 subagent 进度视图（inspect_background_task 看到的"最近几个消息块"）
+default_recent_blocks = 10           # inspect 不带 recent_blocks 时默认返回多少条最近消息块（=提交给 LLM 的 Message 块，非流式增量）
+block_text_limit = 0                 # 单 block 自由正文(assistant/思考/工具结果)字符上限；0=只留摘要/元信息(默认，不灌子 turn 正文)；工具名不受此限
 
 [sandbox]
 mode = "ask-writes"

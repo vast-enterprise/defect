@@ -971,9 +971,9 @@ pub(crate) struct ToolsSection {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BackgroundToolSection {
-    /// 每个后台任务进度环的容量（block 数）。缺省 64。
-    pub(crate) ring_cap: Option<usize>,
-    /// 单 block 自由正文（assistant/thought）的字符上限。缺省 0 = 只留摘要/元信息。
+    /// inspect 不带 recent_blocks 时默认返回多少条最近消息块。缺省 10。
+    pub(crate) default_recent_blocks: Option<usize>,
+    /// 单 block 自由正文（assistant/thought/工具结果）的字符上限。缺省 0 = 只留摘要/元信息。
     pub(crate) block_text_limit: Option<usize>,
 }
 

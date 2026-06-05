@@ -38,8 +38,8 @@ mod tool_registry;
 mod turn;
 
 pub use background::{
-    BackgroundOutcome, BackgroundProgressConfig, BackgroundResult, BackgroundTasks, ProgressBlock,
-    ProgressKind, ProgressSink, TaskSnapshot, TaskStatus, format_background_outcome,
+    BackgroundOutcome, BackgroundProgressConfig, BackgroundResult, BackgroundTasks, BlockKind,
+    ProgressBlock, TaskHandle, TaskSnapshot, TaskStatus, format_background_outcome,
 };
 pub use capabilities::{
     ResolvedSessionCapabilities, SessionCapabilitiesConfig, WebSearchCapabilityConfig,

@@ -356,7 +356,9 @@ fn build_effective_config(
         .tools
         .background
         .map(|cfg| BackgroundProgressConfig {
-            ring_cap: cfg.ring_cap.unwrap_or(background_default.ring_cap),
+            default_recent_blocks: cfg
+                .default_recent_blocks
+                .unwrap_or(background_default.default_recent_blocks),
             block_text_limit: cfg
                 .block_text_limit
                 .unwrap_or(background_default.block_text_limit),

@@ -93,7 +93,7 @@ async fn inspect_lists_running_and_finished() {
 
     // 等完成任务入表终态。
     for _ in 0..200 {
-        if bg.peek(&done_id, 1).map(|s| s.status) == Some(crate::session::TaskStatus::Completed) {
+        if bg.peek(&done_id, Some(1)).map(|s| s.status) == Some(crate::session::TaskStatus::Completed) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -146,7 +146,7 @@ async fn cancel_running_task_then_it_ends_canceled() {
     // 任务实际结束后状态应为 Canceled。
     let mut status = None;
     for _ in 0..200 {
-        status = bg.peek(&id, 1).map(|s| s.status);
+        status = bg.peek(&id, Some(1)).map(|s| s.status);
         if status == Some(crate::session::TaskStatus::Canceled) {
             break;
         }
@@ -175,7 +175,7 @@ async fn cancel_finished_task_is_noop() {
         BackgroundResult::Completed("done".to_string())
     });
     for _ in 0..200 {
-        if bg.peek(&id, 1).map(|s| s.status) == Some(crate::session::TaskStatus::Completed) {
+        if bg.peek(&id, Some(1)).map(|s| s.status) == Some(crate::session::TaskStatus::Completed) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;

@@ -36,9 +36,6 @@ pub(crate) const INSPECT_BACKGROUND_TASK_TOOL_NAME: &str = "inspect_background_t
 /// `cancel_background_task` 工具名。
 pub(crate) const CANCEL_BACKGROUND_TASK_TOOL_NAME: &str = "cancel_background_task";
 
-/// 带 `task_id` 查进度时默认返回多少个最近 block。
-const DEFAULT_RECENT_BLOCKS: usize = 10;
-
 fn io_err(msg: String) -> std::io::Error {
     std::io::Error::other(msg)
 }
@@ -102,7 +99,7 @@ fn completed_text(text: String) -> ToolEvent {
 
 // ===================== inspect_background_task =====================
 
-/// 查后台任务的状态与进度。无 `task_id` ⇒ 列举全部；有 ⇒ 查单个的最近 block。
+/// 查后台任务的状态与进度。无 `task_id` ⇒ 列举全部；有 ⇒ 查单个的最近消息块。
 pub struct InspectBackgroundTaskTool {
     schema: ToolSchema,
 }
@@ -120,11 +117,12 @@ impl InspectBackgroundTaskTool {
             name: INSPECT_BACKGROUND_TASK_TOOL_NAME.to_string(),
             description: "Inspect background tasks you started with `spawn_agent \
                           { run_in_background: true }`. Omit `task_id` to list all background \
-                          tasks with their id, label, status, and progress block count. Pass a \
-                          `task_id` to see that task's status and its most recent progress \
-                          blocks (the subagent's latest assistant text, thoughts, and tool \
-                          calls) — use this to check on a running subagent's context and \
-                          progress before deciding whether to wait, cancel, or move on."
+                          tasks with their id, label, and status. Pass a `task_id` to see that \
+                          task's status and its most recent conversation blocks — these are the \
+                          subagent's committed messages (the same blocks sent to the model: its \
+                          assistant text, thoughts, tool calls and tool results), NOT raw \
+                          streaming fragments. Use this to check a running subagent's context \
+                          and progress before deciding whether to wait, cancel, or move on."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -139,7 +137,8 @@ impl InspectBackgroundTaskTool {
                         "type": "integer",
                         "minimum": 1,
                         "description": "Optional. When inspecting a single task, how many of the \
-                                        most recent progress blocks to return. Defaults to 10."
+                                        most recent conversation blocks to return. Defaults to a \
+                                        configured value (10 unless overridden)."
                     }
                 },
                 "required": []
@@ -207,8 +206,8 @@ impl Tool for InspectBackgroundTaskTool {
                     completed_text(format!("{} background task(s):\n{body}", tasks.len()))
                 }
                 Some(id) => {
-                    let n = parsed.recent_blocks.unwrap_or(DEFAULT_RECENT_BLOCKS).max(1);
-                    match bg.peek(&id, n) {
+                    // recent_blocks=None ⇒ peek 用配置默认（默认 10）。
+                    match bg.peek(&id, parsed.recent_blocks) {
                         Some(snap) => completed_text(render_detail(&snap)),
                         None => ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(
                             format!("no background task with id `{id}`"),

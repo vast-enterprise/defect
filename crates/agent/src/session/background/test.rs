@@ -117,111 +117,125 @@ fn truncate_body_respects_limit() {
     assert!(cut.contains("+3 more chars"));
 }
 
+// 造一条 assistant 消息（文本 + 一个 tool_use）。
+fn assistant_msg(text: &str, tool: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: vec![
+            MessageContent::Text {
+                text: text.to_string(),
+            },
+            MessageContent::ToolUse {
+                id: "tu-1".to_string(),
+                name: tool.to_string(),
+                args: serde_json::json!({}),
+            },
+        ]
+        .into(),
+    }
+}
+
+fn user_msg(text: &str) -> Message {
+    Message {
+        role: Role::User,
+        content: vec![MessageContent::Text {
+            text: text.to_string(),
+        }]
+        .into(),
+    }
+}
+
 #[test]
-fn progress_ring_honors_cap_and_recent_order() {
-    let mut ring = ProgressRing::with_cap(3);
-    for i in 0..5 {
-        ring.push(ProgressBlock {
-            kind: ProgressKind::AssistantText,
-            text: i.to_string(),
-        });
-    }
-    // 容量 3：最旧的 0/1 被淘汰，保留 2/3/4，顺序旧→新。
-    let recent = ring.recent(10);
-    let texts: Vec<&str> = recent.iter().map(|b| b.text.as_str()).collect();
-    assert_eq!(texts, vec!["2", "3", "4"]);
-    // recent(n) 取尾部 n 个。
-    let last2 = ring.recent(2);
+fn recent_blocks_flattens_messages_and_orders() {
+    // 两条消息 → 摊平成 user + (assistant text + tool_use) = 3 个 block。
+    let msgs = vec![user_msg("do the thing"), assistant_msg("working on it", "read_file")];
+    // limit 大，正文保留。
+    let (total, recent) = recent_blocks_of(&msgs, 10, 1000);
+    assert_eq!(total, 3);
+    let kinds: Vec<BlockKind> = recent.iter().map(|b| b.kind).collect();
     assert_eq!(
-        last2.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(),
-        vec!["3", "4"]
+        kinds,
+        vec![BlockKind::User, BlockKind::AssistantText, BlockKind::ToolUse]
     );
+    // tool_use 的文本是工具名。
+    assert_eq!(recent[2].text, "read_file");
+    // recent(n) 取尾部 n。
+    let (_total, last2) = recent_blocks_of(&msgs, 2, 1000);
+    assert_eq!(last2.len(), 2);
+    assert_eq!(last2[0].kind, BlockKind::AssistantText);
+    assert_eq!(last2[1].kind, BlockKind::ToolUse);
+}
+
+#[test]
+fn recent_blocks_default_limit_drops_free_form_body_keeps_tool_name() {
+    let msgs = vec![assistant_msg("a long assistant reply", "read_file")];
+    // limit 0：自由正文(assistant text)清空，工具名(非正文)保留。
+    let (_total, recent) = recent_blocks_of(&msgs, 10, 0);
+    let text_block = recent.iter().find(|b| b.kind == BlockKind::AssistantText).unwrap();
+    assert_eq!(text_block.text, "", "free-form body dropped at limit 0");
+    let tool_block = recent.iter().find(|b| b.kind == BlockKind::ToolUse).unwrap();
+    assert_eq!(tool_block.text, "read_file", "tool name kept (not a free-form body)");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sink_truncates_bodies_but_keeps_tool_titles() {
-    // 默认配置：block_text_limit = 0 ⇒ 正文清空，工具标题保留。
+async fn peek_reads_attached_history_committed_blocks() {
+    use crate::session::{History, VecHistory};
+
     let bg = BackgroundTasks::new(CancellationToken::new(), BackgroundProgressConfig::default());
-    let id = bg.spawn("p".to_string(), |_c, sink| async move {
-        sink.push(ProgressKind::AssistantText, "a long assistant reply".to_string());
-        sink.push(ProgressKind::Thought, "deep thoughts".to_string());
-        sink.push(ProgressKind::ToolStart, "Read foo.rs".to_string());
-        sink.push(ProgressKind::ToolFinish, "Read foo.rs".to_string());
-        BackgroundResult::Completed(String::new())
+    // 用一个外部可控的 history Arc：任务体 attach 它，我们从外面往里 append 模拟子 turn 提交。
+    let history: Arc<dyn History> = Arc::new(VecHistory::new());
+    let history_for_task = history.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let id = bg.spawn("worker".to_string(), move |_c, handle| async move {
+        handle.attach_history(history_for_task);
+        let _ = rx.await; // 阻塞，保持 running，便于中途 peek
+        BackgroundResult::Completed("done".to_string())
     });
-    // sink.push 同步，但任务体在 tokio task 里跑——轮询等它把 4 个 block 写进去。
-    for _ in 0..200 {
-        if bg.peek(&id, 10).map(|s| s.block_count) == Some(4) {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
-    let snap = bg.peek(&id, 10).expect("task exists");
-    let by_kind = |k: ProgressKind| {
-        snap.recent
-            .iter()
-            .find(|b| b.kind == k)
-            .map(|b| b.text.clone())
-            .unwrap()
-    };
-    // 自由正文被清空（鸟瞰：只剩"发生了 assistant/thought"这一元信息）。
-    assert_eq!(by_kind(ProgressKind::AssistantText), "");
-    assert_eq!(by_kind(ProgressKind::Thought), "");
-    // 工具调用标题不受正文上限约束，原样保留。
-    assert_eq!(by_kind(ProgressKind::ToolStart), "Read foo.rs");
-    assert_eq!(by_kind(ProgressKind::ToolFinish), "Read foo.rs");
-}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sink_keeps_bodies_when_limit_set() {
-    let cfg = BackgroundProgressConfig {
-        ring_cap: 64,
-        block_text_limit: 8,
-    };
-    let bg = BackgroundTasks::new(CancellationToken::new(), cfg);
-    let id = bg.spawn("p".to_string(), |_c, sink| async move {
-        sink.push(ProgressKind::AssistantText, "short".to_string());
-        sink.push(ProgressKind::Thought, "way too long to keep".to_string());
-        BackgroundResult::Completed(String::new())
-    });
+    // 模拟子 turn 把消息块提交进 history（与任务体 attach 同一份 Arc）。
+    history.append(user_msg("task instructions"));
+    history.append(assistant_msg("on it", "read_file"));
+
+    // 轮询直到 attach 生效（任务体一进去就 attach；status==Running 在 spawn 时即翻，
+    // 早于 future 体执行，故必须等到 history 真正挂上、block_count 反映出来）。
+    let mut snap = bg.peek(&id, None).expect("task exists");
     for _ in 0..200 {
-        if bg.peek(&id, 10).map(|s| s.block_count) == Some(2) {
+        if snap.block_count == 3 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        snap = bg.peek(&id, None).expect("task exists");
     }
-    let snap = bg.peek(&id, 10).expect("task exists");
-    let texts: Vec<&str> = snap.recent.iter().map(|b| b.text.as_str()).collect();
-    assert!(texts.contains(&"short"), "under-limit kept whole: {texts:?}");
-    assert!(
-        texts.iter().any(|t| t.contains("more chars")),
-        "over-limit truncated with marker: {texts:?}"
+    assert_eq!(snap.status, TaskStatus::Running);
+    // 默认 limit=0：assistant 正文空，但 user/工具名等结构可见；共 3 个 block。
+    assert_eq!(snap.block_count, 3);
+    let kinds: Vec<BlockKind> = snap.recent.iter().map(|b| b.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![BlockKind::User, BlockKind::AssistantText, BlockKind::ToolUse]
     );
+    assert_eq!(snap.recent[2].text, "read_file");
+
+    // 放行任务收尾。
+    let _ = tx.send(());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ring_cap_zero_is_treated_as_one() {
-    let cfg = BackgroundProgressConfig {
-        ring_cap: 0,
-        block_text_limit: 0,
-    };
-    let bg = BackgroundTasks::new(CancellationToken::new(), cfg);
-    let id = bg.spawn("p".to_string(), |_c, sink| async move {
-        sink.push(ProgressKind::ToolStart, "a".to_string());
-        sink.push(ProgressKind::ToolStart, "b".to_string());
-        BackgroundResult::Completed(String::new())
+async fn peek_without_attached_history_returns_empty_blocks() {
+    let bg = BackgroundTasks::new(CancellationToken::new(), BackgroundProgressConfig::default());
+    // 任务不 attach history。
+    let id = bg.spawn("worker".to_string(), |_c, _handle| async {
+        BackgroundResult::Completed("done".to_string())
     });
-    // 至少能写进东西（cap 被规整成 1），且不溢出 panic。
     for _ in 0..200 {
-        if bg.peek(&id, 10).map(|s| s.status) == Some(TaskStatus::Completed) {
+        if bg.peek(&id, None).map(|s| s.status) == Some(TaskStatus::Completed) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    let snap = bg.peek(&id, 10).expect("task exists");
-    // cap=1：只剩最后一个 block。
-    assert_eq!(snap.block_count, 1);
-    assert_eq!(snap.recent.last().map(|b| b.text.as_str()), Some("b"));
+    let snap = bg.peek(&id, None).expect("task exists");
+    assert_eq!(snap.block_count, 0);
+    assert!(snap.recent.is_empty());
 }
 
 /// 轮询 `drain_completed` 直到拿到恰好一个结果（带超时上限，避免挂死）。
