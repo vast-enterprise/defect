@@ -292,5 +292,4 @@ impl StableHasher {
 }
 
 #[cfg(test)]
-#[path = "request_audit/test.rs"]
 mod test;

@@ -210,5 +210,4 @@ fn io_err(msg: String) -> std::io::Error {
 }
 
 #[cfg(test)]
-#[path = "skill/test.rs"]
 mod test;

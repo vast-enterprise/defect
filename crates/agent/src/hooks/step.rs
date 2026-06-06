@@ -822,5 +822,4 @@ fn parse_block_array(v: &Value, field: &'static str) -> Result<Vec<ContentBlock>
 }
 
 #[cfg(test)]
-#[path = "step/test.rs"]
 mod test;

@@ -424,9 +424,5 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     format!("{kept}\n…[truncated for summary]")
 }
 
-// 显式 `#[path]`：本文件经 turn.rs 的 `#[path]` 加载，其嵌套 mod 默认会落到
-// `session/turn/`（即解析成 turn.rs 自己的 test.rs），与父模块冲突。指明路径，
-// 让本模块的测试落在 `session/turn/compact/test.rs`。
 #[cfg(test)]
-#[path = "compact/test.rs"]
 mod test;

@@ -185,5 +185,4 @@ fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "prompt/test.rs"]
 mod test;

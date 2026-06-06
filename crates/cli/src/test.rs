@@ -9,7 +9,6 @@ use defect_config::ProviderConfigFile;
 use defect_config::SandboxMode;
 use serde_json::json;
 
-#[path = "test/subagents.rs"]
 mod subagents;
 
 #[test]

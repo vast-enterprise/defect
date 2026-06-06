@@ -605,5 +605,4 @@ pub fn format_background_outcome(outcome: &BackgroundOutcome) -> String {
 }
 
 #[cfg(test)]
-#[path = "background/test.rs"]
 mod test;

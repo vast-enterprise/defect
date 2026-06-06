@@ -122,5 +122,4 @@ fn shell_line() -> &'static str {
 }
 
 #[cfg(test)]
-#[path = "context/test.rs"]
 mod test;

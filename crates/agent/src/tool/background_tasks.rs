@@ -326,5 +326,4 @@ impl Tool for CancelBackgroundTaskTool {
 }
 
 #[cfg(test)]
-#[path = "background_tasks/test.rs"]
 mod test;

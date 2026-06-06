@@ -98,5 +98,4 @@ pub(crate) fn sanitize_tool_pairing(messages: Vec<Message>) -> Vec<Message> {
 }
 
 #[cfg(test)]
-#[path = "sanitize/test.rs"]
 mod test;

@@ -299,5 +299,4 @@ fn resolve_user_skills_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "skills/test.rs"]
 mod test;

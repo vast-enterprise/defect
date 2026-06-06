@@ -31,33 +31,26 @@ use crate::shell::ShellBackend;
 
 const DEFAULT_PROMPT_FILE: &str = "AGENTS.md";
 
-#[path = "turn/request_audit.rs"]
 mod request_audit;
 
-#[path = "turn/compact.rs"]
 mod compact;
 
-#[path = "turn/microcompact.rs"]
 mod microcompact;
 
-#[path = "turn/compaction_slot.rs"]
 mod compaction_slot;
 
 pub use compaction_slot::CompactionSlot;
 
-#[path = "turn/sanitize.rs"]
 mod sanitize;
 
-#[path = "turn/content.rs"]
 mod content;
 
+// 模块名与文件名不一致（llm_drive ← llm.rs），故必须显式 `#[path]`。
 #[path = "turn/llm.rs"]
 mod llm_drive;
 
-#[path = "turn/tools.rs"]
 mod tools;
 
-#[path = "turn/hooks.rs"]
 mod hooks;
 
 use content::content_block_to_message_content;

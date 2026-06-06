@@ -164,5 +164,4 @@ fn estimate_total(messages: &[Message]) -> u64 {
 }
 
 #[cfg(test)]
-#[path = "microcompact/test.rs"]
 mod test;

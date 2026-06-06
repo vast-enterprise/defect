@@ -390,5 +390,4 @@ fn resolve_user_agents_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "profiles/test.rs"]
 mod test;
