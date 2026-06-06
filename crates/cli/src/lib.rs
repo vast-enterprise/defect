@@ -21,7 +21,7 @@
 //! [`ProviderRegistry`]: defect_agent::llm::ProviderRegistry
 //! [`TurnConfig`]: defect_agent::session::TurnConfig
 
-#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+#![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 
 pub mod args;
 pub mod assembly;
@@ -29,13 +29,13 @@ pub mod hooks;
 pub mod http_stack;
 pub mod mcp_servers;
 pub mod observability;
+#[cfg(feature = "oneshot")]
+pub mod oneshot;
 pub mod paths;
 pub mod policy;
 pub mod providers;
 #[cfg(feature = "repl")]
 pub mod repl;
-#[cfg(feature = "oneshot")]
-pub mod oneshot;
 #[cfg(any(feature = "repl", feature = "oneshot"))]
 pub mod session_open;
 pub mod tools;

@@ -104,7 +104,9 @@ impl Tool for GoalDoneTool {
             }
             let text = match parsed.summary {
                 Some(s) if !s.is_empty() => {
-                    format!("Goal marked as complete. The run will finish once you stop. Summary: {s}")
+                    format!(
+                        "Goal marked as complete. The run will finish once you stop. Summary: {s}"
+                    )
                 }
                 _ => "Goal marked as complete. The run will finish once you stop.".to_string(),
             };

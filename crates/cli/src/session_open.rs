@@ -33,7 +33,14 @@ pub async fn open_session(
         None => {
             let session_id = SessionId::new(new_session_id());
             agent
-                .create_session(session_id, cwd.to_path_buf(), Vec::new(), fs, shell, Frontend::Cli)
+                .create_session(
+                    session_id,
+                    cwd.to_path_buf(),
+                    Vec::new(),
+                    fs,
+                    shell,
+                    Frontend::Cli,
+                )
                 .await
                 .map_err(|e| anyhow::anyhow!("create_session failed: {e}"))
         }

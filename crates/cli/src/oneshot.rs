@@ -35,9 +35,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use agent_client_protocol_schema::{
-    ContentBlock, SessionId, StopReason, TextContent, ToolCallId,
-};
+use agent_client_protocol_schema::{ContentBlock, SessionId, StopReason, TextContent, ToolCallId};
 use defect_agent::event::AgentEvent;
 use defect_agent::policy::PolicyDecision;
 use defect_agent::session::{AgentCore, TurnError};
@@ -142,11 +140,7 @@ enum ExitOutcome {
 }
 
 impl ExitOutcome {
-    fn from(
-        result: &Result<StopReason, TurnError>,
-        denied: bool,
-        goal_unreached: bool,
-    ) -> Self {
+    fn from(result: &Result<StopReason, TurnError>, denied: bool, goal_unreached: bool) -> Self {
         match result {
             Err(_) => Self::Error,
             Ok(StopReason::Refusal) => Self::Refusal,

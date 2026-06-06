@@ -226,7 +226,7 @@ async fn case29_read_png_returns_image_block() {
 #[tokio::test]
 async fn case30_read_image_ignores_offset_limit_and_mime_by_ext() {
     let h = Harness::new();
-    h.write_file("photo.JPEG", &[0xff, 0xd8, 0xff, 0xe0]);
+    h.write_file("photo.JPEG", [0xff, 0xd8, 0xff, 0xe0]);
     let tool = ReadFileTool::new();
     // offset/limit 对图片无意义，应被忽略而不报错；扩展名大小写不敏感。
     let events = drive(tool.execute(

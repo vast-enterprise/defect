@@ -57,9 +57,9 @@ pub(crate) fn sanitize_tool_pairing(messages: Vec<Message>) -> Vec<Message> {
 
     // 没有任何孤儿则快速返回，避免重建 Vec。
     let has_orphan = messages.iter().any(|msg| {
-        msg.content.iter().any(|c| {
-            matches!(c, MessageContent::ToolUse { id, .. } if !satisfied.contains(id))
-        })
+        msg.content
+            .iter()
+            .any(|c| matches!(c, MessageContent::ToolUse { id, .. } if !satisfied.contains(id)))
     });
     if !has_orphan {
         return messages;

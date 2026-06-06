@@ -12,7 +12,7 @@
     dead_code,
     unused_imports,
     rustdoc::bare_urls,
-    rustdoc::broken_intra_doc_links,
+    rustdoc::broken_intra_doc_links
 )]
 
 /// # Anthropic Messages API

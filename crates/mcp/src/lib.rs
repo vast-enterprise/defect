@@ -3,7 +3,7 @@
 //! 把外部 MCP server 暴露的工具包装为 [`defect_agent`] 的 per-session
 //! 工具表。
 
-#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+#![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 
 use std::collections::HashSet;
 use std::io;

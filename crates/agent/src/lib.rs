@@ -4,7 +4,7 @@
 //! [`event::AgentEvent`]，以及会话状态容器。具体的 provider / tool 实现位于
 //! sibling crate（`defect-llm`、`defect-tools`、`defect-mcp` 等），通过
 
-#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+#![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 //! 这里的 trait 接入。
 //!
 //! 模块按职责切分，对外**仅以模块为单位暴露**（不在 lib 顶层平铺 re-export），

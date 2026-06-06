@@ -16,7 +16,7 @@
 //!   trace，复用 `defect-http` 的 `HttpStack` 发 ingestion 请求）。
 //! - OTLP 导出（复用 `defect-config` 的 `OtlpTracingConfig` 脚手架）。
 
-#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+#![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 
 pub mod langfuse;
 pub mod tracing_init;

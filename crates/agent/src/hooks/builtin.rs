@@ -698,12 +698,7 @@ mod tests {
         assert_eq!(verdict["control"], "continue");
         let ctxs = verdict["additional_context"].as_array().expect("array");
         assert_eq!(ctxs.len(), 1);
-        assert!(
-            ctxs[0]
-                .as_str()
-                .expect("str")
-                .contains("ship the feature")
-        );
+        assert!(ctxs[0].as_str().expect("str").contains("ship the feature"));
     }
 
     #[tokio::test]

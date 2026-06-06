@@ -548,10 +548,7 @@ fn turn_ended_updates_trace_with_same_id() {
     // 再关闭 step span（[1]），最后发 trace 更新（[2]）。
     assert_eq!(ended[0]["type"], "generation-update");
     assert_eq!(ended[1]["type"], "span-update");
-    assert_eq!(
-        ended[1]["body"]["name"].is_null() || ended[1]["body"]["name"] == "step",
-        true
-    );
+    assert!(ended[1]["body"]["name"].is_null() || ended[1]["body"]["name"] == "step");
     assert_eq!(ended[2]["type"], "trace-create");
     // trace 用同一 trace_id 更新（合并 input/output/endTime）。
     assert_eq!(ended[2]["body"]["id"], trace_id);

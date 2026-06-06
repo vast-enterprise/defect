@@ -855,7 +855,7 @@ async fn set_mode_switches_session_permission_mode() {
         ..TurnConfig::default()
     };
     let agent_core = DefaultAgentCore::builder()
-        .provider(Arc::new(EchoProvider::default()))
+        .provider(Arc::new(EchoProvider::new()))
         .config(config)
         .modes(modes)
         .build();
@@ -932,7 +932,7 @@ async fn set_config_option_switches_reasoning_effort() {
         ..TurnConfig::default()
     };
     let agent_core = DefaultAgentCore::builder()
-        .provider(Arc::new(EchoProvider::default()))
+        .provider(Arc::new(EchoProvider::new()))
         .config(config)
         .build();
     let agent_core: Arc<dyn AgentCore> = Arc::new(agent_core);
@@ -944,7 +944,7 @@ async fn set_config_option_switches_reasoning_effort() {
     ));
 
     let cwd = std::env::current_dir().expect("cwd available");
-    let client_result = Client
+    Client
         .builder()
         .name("set-config-client")
         .connect_with(
@@ -1000,8 +1000,6 @@ async fn set_config_option_switches_reasoning_effort() {
         )
         .await
         .expect("client connection completed");
-
-    assert_eq!(client_result, ());
 
     server_handle.abort();
     let _ = server_handle.await;
@@ -1070,7 +1068,7 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
         ..TurnConfig::default()
     };
     let agent_core = DefaultAgentCore::builder()
-        .provider(Arc::new(EchoProvider::default()))
+        .provider(Arc::new(EchoProvider::new()))
         .config(config)
         .modes(modes)
         .build();
@@ -1083,7 +1081,7 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
     ));
 
     let cwd = std::env::current_dir().expect("cwd available");
-    let client_result = Client
+    Client
         .builder()
         .name("mode-config-client")
         .connect_with(
@@ -1157,8 +1155,6 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
         )
         .await
         .expect("client connection completed");
-
-    assert_eq!(client_result, ());
 
     server_handle.abort();
     let _ = server_handle.await;

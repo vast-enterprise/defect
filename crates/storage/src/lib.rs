@@ -3,7 +3,7 @@
 //! v0 起步以 jsonl 形式落盘会话恢复日志，支持 append 与回放；后续按需演进到
 //! snapshot + sqlite 等带索引的存储。
 
-#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+#![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Error, ErrorKind, Write};

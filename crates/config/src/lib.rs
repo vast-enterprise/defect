@@ -3,7 +3,7 @@
 //! P1 负责把用户配置、项目配置、本地项目覆盖与 CLI override 收敛成一份
 //! 可直接用于启动的强类型配置对象。
 
-#![warn(clippy::indexing_slicing, clippy::unwrap_used)]
+#![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 
 mod frontmatter;
 mod hooks;

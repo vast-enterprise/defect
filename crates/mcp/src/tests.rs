@@ -109,6 +109,6 @@ fn session_mcp_servers_override_config_defaults_by_name() {
     assert!(matches!(
         &merged[1],
         McpServer::Stdio(server)
-            if server.name == "echo" && server.command == std::path::PathBuf::from("/usr/bin/session-echo")
+            if server.name == "echo" && server.command == std::path::Path::new("/usr/bin/session-echo")
     ));
 }
