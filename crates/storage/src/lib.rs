@@ -619,15 +619,21 @@ impl RecordProjector {
             }
             AgentEvent::ToolCallStarted { id, name, fields } => {
                 append_if_some(&mut records, self.flush_tool_results());
-                self.current_assistant()
-                    .tool_uses
-                    .push(MessageContent::ToolUse {
-                        id: id.to_string(),
-                        name,
-                        args: fields
-                            .raw_input
-                            .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
-                    });
+                // 空 name 的 ToolCallStarted 是失败标记事件（tool-not-found /
+                // denied 等的 wire 信号），不是真实工具调用——持久化成 ToolUse
+                // 会让 name 为空，resume 时被 provider 拒（`tool_use.name` 至少 1
+                // 字符）。这类事件不入历史。
+                if !name.is_empty() {
+                    self.current_assistant()
+                        .tool_uses
+                        .push(MessageContent::ToolUse {
+                            id: id.to_string(),
+                            name,
+                            args: fields
+                                .raw_input
+                                .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
+                        });
+                }
             }
             AgentEvent::ToolCallFinished { id, fields } => {
                 append_if_some(&mut records, self.flush_assistant());

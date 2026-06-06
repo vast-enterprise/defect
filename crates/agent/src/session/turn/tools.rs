@@ -43,7 +43,7 @@ impl TurnRunner<'_> {
 
             let Some(tool) = self.tools.get(&tu.name) else {
                 let reason = format!("tool not found: {}", tu.name);
-                self.emit_tool_failed(&id, reason.clone()).await;
+                self.emit_tool_failed(&id, &tu.name, reason.clone()).await;
                 approved.push(Approved::FailedArgs {
                     id: id.clone(),
                     tool_use_id: tu.id.clone(),
@@ -57,7 +57,7 @@ impl TurnRunner<'_> {
                 Ok(v) => v,
                 Err(reason) => {
                     let reason = format!("invalid args: {reason}");
-                    self.emit_tool_failed(&id, reason.clone()).await;
+                    self.emit_tool_failed(&id, &tu.name, reason.clone()).await;
                     approved.push(Approved::FailedArgs {
                         id: id.clone(),
                         tool_use_id: tu.id.clone(),
@@ -80,7 +80,7 @@ impl TurnRunner<'_> {
                     args = new_args;
                 }
                 PreToolHookFlow::Block(reason) => {
-                    self.emit_tool_failed(&id, reason).await;
+                    self.emit_tool_failed(&id, &tu.name, reason).await;
                     approved.push(Approved::Denied {
                         id: id.clone(),
                         tool_use_id: tu.id.clone(),
@@ -133,7 +133,7 @@ impl TurnRunner<'_> {
                     args,
                 }),
                 PolicyDecision::Deny => {
-                    self.emit_tool_failed(&id, "denied by policy".to_string())
+                    self.emit_tool_failed(&id, &tu.name, "denied by policy".to_string())
                         .await;
                     approved.push(Approved::Denied {
                         id: id.clone(),
@@ -144,7 +144,7 @@ impl TurnRunner<'_> {
                 PolicyDecision::Ask(ask) => {
                     if ask.options.is_empty() {
                         // 空 options 等价 Deny（见 sandbox-policy.md §2）
-                        self.emit_tool_failed(&id, "denied by policy".to_string())
+                        self.emit_tool_failed(&id, &tu.name, "denied by policy".to_string())
                             .await;
                         approved.push(Approved::Denied {
                             id: id.clone(),
@@ -180,7 +180,7 @@ impl TurnRunner<'_> {
                                     args,
                                 });
                             } else {
-                                self.emit_tool_failed(&id, "denied by user".to_string())
+                                self.emit_tool_failed(&id, &tu.name, "denied by user".to_string())
                                     .await;
                                 approved.push(Approved::Denied {
                                     id: id.clone(),
@@ -204,12 +204,12 @@ impl TurnRunner<'_> {
         Ok(DecisionFlow::Continue(approved))
     }
 
-    async fn emit_tool_failed(&self, id: &ToolCallId, text: String) {
+    async fn emit_tool_failed(&self, id: &ToolCallId, name: &str, text: String) {
         let fields = failed_fields_text(text);
         self.events
             .emit(AgentEvent::ToolCallStarted {
                 id: id.clone(),
-                name: String::new(),
+                name: name.to_owned(),
                 fields: fields.clone(),
             })
             .await;
