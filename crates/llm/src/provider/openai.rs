@@ -487,7 +487,7 @@ impl WithRequestIdOpt for ProviderError {
 ///
 /// 关键分支：[`HttpStackError::Timeout`] 单独翻成
 /// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
-/// 决策——这条之前缺失，详见 [`docs/outbound/http.md`] §4。
+/// 决策——这条之前缺失，详见 `docs/outbound/http.md` §4。
 /// [`HttpStackError::ProxyConnect`] / [`HttpStackError::Config`] 都按
 /// transport 错处理（结构化原因写进 `Display`，turn-loop 拿到的就是
 /// transport-flavor 的 backoff 重试）。

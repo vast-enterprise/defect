@@ -211,7 +211,7 @@ impl SandboxPolicy for AskWritesPolicy {
 /// 时一律降级为 [`PolicyDecision::Deny`]，`Allow` / `Deny` 原样透传。
 ///
 /// 用于 subagent（`spawn_agent`）的嵌套 turn——子 agent 没有人在场回答
-/// 权限请求，若放任 `Ask` 进入主循环会在 [`crate::session::permissions::PermissionGate`]
+/// 权限请求，若放任 `Ask` 进入主循环会在 [`PermissionGate`](crate::session::PermissionGate)
 /// 上永久挂死。包一层本策略即可保证子 turn **永不阻塞、永不提权**：
 /// 子 agent 的实际授权恒 ≤ 它包装的父策略（父会 Ask 的，子直接 Deny）。
 ///

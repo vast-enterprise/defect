@@ -80,7 +80,7 @@ pub fn encode_request_with_echo(
 
 /// 与 [`encode_request_with_echo`] 同形态，但允许 provider 层强制覆盖
 /// `reasoning_effort` 字段。`effort_override` = `Some(_)` 时无视
-/// [`SamplingParams::thinking`] 的取值，直接落到 wire；`None` 时维持
+/// `SamplingParams::thinking` 的取值，直接落到 wire；`None` 时维持
 /// 旧行为（thinking enabled → medium）。
 pub fn encode_request_full(
     req: &CompletionRequest,
@@ -627,7 +627,7 @@ struct ToolCallState {
 /// SSE 流 → ProviderChunk 流。返回值实现 [`Stream`]，drop 即取消。
 ///
 /// `cancel` 触发后流静默终结，与
-/// [`docs/internal/llm-trait.md`] §2.2 一致。
+/// `docs/internal/llm-trait.md` §2.2 一致。
 pub fn decode_stream(
     sse: SseEventStream,
     cancel: CancellationToken,

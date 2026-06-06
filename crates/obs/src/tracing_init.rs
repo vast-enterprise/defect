@@ -8,7 +8,7 @@ const DEFAULT_FILTER: &str = "info,toac=warn";
 
 /// 初始化全局 tracing subscriber。
 ///
-/// 解析顺序：`RUST_LOG` env > 入参 `filter` > [`DEFAULT_FILTER`]。
+/// 解析顺序：`RUST_LOG` env > 入参 `filter` > `DEFAULT_FILTER`。
 /// 输出走 stderr，自动检测终端启用 ANSI 颜色。
 pub fn init_tracing(filter: Option<&str>) -> anyhow::Result<()> {
     let default_filter = filter.unwrap_or(DEFAULT_FILTER);

@@ -33,7 +33,7 @@ impl TurnRunner<'_> {
     ///
     /// 返回 `true` = 续命（调用方 `continue` 回循环顶）；`false` = 放停（正常结束 turn）。
     ///
-    /// 续命受**硬上限** [`MAX_STOP_HOOK_CONTINUES`] 约束——达上限后强制放停，防死循环。续命的反馈
+    /// 续命受**硬上限** `max_stop_hook_continues` 约束——达上限后强制放停，防死循环。续命的反馈
     /// 作为 **user 消息**注入 history（与用户 prompt 同一道工序，见设计 §4：末尾兜底交替）。
     pub(super) async fn decide_turn_end(&self, state: &mut TurnState) -> bool {
         // 达到续命硬上限：不再问 hook，强制放停。

@@ -261,7 +261,7 @@ pub fn build_engine_arc(
 ///
 /// 这让"自动激活"开箱即用、不要求用户手写 `[[hooks.*]]`。两个 hook 的 matcher
 /// 全空（命中该事件下所有触发）。skill 索引为空时不挂（保持零开销），且当用户
-/// 也没配 `[hooks]` 时直接走 [`NoopHookEngine`]。子 agent profile 不走这条路径
+/// 也没配 `[hooks]` 时直接走 [`NoopHookEngine`](defect_agent::hooks::NoopHookEngine)。子 agent profile 不走这条路径
 /// （仍用 [`build_engine_arc`]），故 skill hook 不会渗进子 agent。
 pub fn build_main_session_engine(
     hooks: &HooksConfig,

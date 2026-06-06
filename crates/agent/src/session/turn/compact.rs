@@ -11,7 +11,7 @@
 //!    必须由我们自己保证，详见 `crates/llm/src/protocol/*`）。
 //! 2. [`summarize`]：用当前 provider/model 对 head 跑一次「只产文本」的子请求，
 //!    要求按固定结构化模板输出摘要；检出旧摘要时走增量合并。
-//! 3. 重建历史：`[合成 assistant 摘要消息] ++ tail`，经 [`History::replace`] 回写。
+//! 3. 重建历史：`[合成 assistant 摘要消息] ++ tail`，经 [`History::replace`](crate::session::History::replace) 回写。
 //!
 //! 失败（无安全边界 / provider 出错 / 摘要为空 / 取消）一律**最佳努力**降级：
 //! 跳过本次压缩、不杀 turn——大不了下一次真实调用自己撞上下文上限。

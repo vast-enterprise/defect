@@ -2,7 +2,7 @@
 //!
 //! **范围严格**：只重试 [`HttpStackError::Transport`]——DNS / connect / TLS /
 //! hyper IO 层错误。HTTP status 任意值（200 / 4xx / 5xx）一律放行，
-//! 让上层 provider / turn-loop 解析。详见 [`docs/outbound/http.md`] §3.1。
+//! 让上层 provider / turn-loop 解析。详见 `docs/outbound/http.md` §3.1。
 //!
 //! 实现要点：
 //! - 请求体先 buffer 成 [`bytes::Bytes`]（LLM 请求都是小 JSON），重试

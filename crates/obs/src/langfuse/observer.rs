@@ -1,4 +1,4 @@
-//! `LangfuseObserver`：把每个 session 的 [`AgentEvent`] 流上报到 Langfuse。
+//! `LangfuseObserver`：把每个 session 的 [`AgentEvent`](defect_agent::event::AgentEvent) 流上报到 Langfuse。
 //!
 //! 形状照抄 `defect-storage::StorageObserver`（`crates/storage/src/lib.rs`）：
 //! [`SessionObserver::on_session_created`] 里 `session.subscribe()` 拿一条独立

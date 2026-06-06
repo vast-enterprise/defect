@@ -2,7 +2,7 @@
 //!
 //! 在 `client_util::build_https_client` 之上 stack 一层薄壳：超时、
 //! transport 抖动重试、HTTP/HTTPS 代理、统一 `User-Agent`。
-//! 设计详见 [`docs/outbound/http.md`].
+//! 设计详见 `docs/outbound/http.md`.
 //!
 //! 当前消费者：`defect-llm`（各 LLM provider）；规划中：`defect-tools`
 //! 的 fetch tool。把这层独立成 crate 是为了避免后者再次依赖 `defect-llm`
@@ -112,7 +112,7 @@ pub struct ProxySettings {
 ///
 /// 与 `toac::CallError<E>` 中的 `E` 对位——provider 在
 /// `call_error_to_provider` 里把这层错翻成 `ProviderErrorKind`
-/// （详见 [`docs/outbound/http.md`] §4）。
+/// （详见 `docs/outbound/http.md` §4）。
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum HttpStackError {
@@ -121,7 +121,7 @@ pub enum HttpStackError {
     Transport(#[source] BoxError),
 
     /// 请求超时。`phase` 标识在哪一阶段超时——v0 仅 `Total`，
-    /// 分阶段超时见 [`docs/outbound/http.md`] §1。
+    /// 分阶段超时见 `docs/outbound/http.md` §1。
     #[error("HTTP request timed out (phase = {phase:?})")]
     Timeout { phase: TimeoutPhase },
 

@@ -78,7 +78,7 @@ pub struct ProfileSpec {
     pub model: Option<String>,
     /// 已读好的 system prompt 文本（来自 `[prompt] file`）。
     pub system_prompt_text: String,
-    /// 工具白名单——子 agent 只看得到这些工具。省略 ⇒ [`DEFAULT_TOOL_ALLOW`]。
+    /// 工具白名单——子 agent 只看得到这些工具。省略 ⇒ `DEFAULT_TOOL_ALLOW`。
     pub tool_allow: Vec<String>,
     /// 可选采样参数覆盖。
     pub sampling: Option<SamplingParams>,

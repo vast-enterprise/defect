@@ -11,7 +11,7 @@
 //! ## 不用 broadcast 的理由
 //!
 //! [`tokio::sync::broadcast`] 在 receiver 跟不上时标 `Lagged` 并跳过事件，
-//! 直接违反 [`AgentEvent`](crate::event::AgentEvent) "不丢"约束（见
+//! 直接违反 [`AgentEvent`] "不丢"约束（见
 //! `docs/internal/event-model.md` §5）。
 
 use std::sync::Mutex;

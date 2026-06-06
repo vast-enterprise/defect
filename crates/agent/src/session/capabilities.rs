@@ -1,8 +1,6 @@
 //! session 级能力配置与启动期裁决。
 //!
-//! 设计详见
-//! [`docs/internal/capabilities.md`](../../../../docs/internal/capabilities.md)
-//! §3 / §5。
+//! 设计详见 `docs/internal/capabilities.md` §3 / §5。
 //!
 //! `WebSearchCapabilityMode` 表达「这个 session 要不要走 provider-hosted
 //! web search」：

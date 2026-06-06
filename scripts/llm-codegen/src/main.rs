@@ -145,7 +145,7 @@ fn generate(name: &str, oas_path: &Path, root_path: &str) -> Result<String> {
     out.push_str(&oas_rel.display().to_string());
     out.push_str("\n// Re-run via `cargo run -p defect-llm-codegen -- ");
     out.push_str(name);
-    out.push_str("`.\n#![allow(\n    clippy::manual_async_fn,\n    clippy::needless_return,\n    clippy::single_match,\n    clippy::match_single_binding,\n    clippy::too_many_arguments,\n    clippy::large_enum_variant,\n    clippy::enum_variant_names,\n    dead_code,\n    unused_imports,\n)]\n\n");
+    out.push_str("`.\n#![allow(\n    clippy::manual_async_fn,\n    clippy::needless_return,\n    clippy::single_match,\n    clippy::match_single_binding,\n    clippy::too_many_arguments,\n    clippy::large_enum_variant,\n    clippy::enum_variant_names,\n    dead_code,\n    unused_imports,\n    rustdoc::bare_urls,\n    rustdoc::broken_intra_doc_links,\n)]\n\n");
     out.push_str(&body);
     Ok(out)
 }

@@ -2,7 +2,7 @@
 //!
 //! 这一层把 `src/bin/cli.rs` 里原本散落的 provider / tool / hook / storage /
 //! MCP / observability 拼装逻辑收束成一个可扩展 builder。底层
-//! [`DefaultAgentCoreBuilder`] 仍然保持最小 agent 抽象；这里表达的是
+//! [`DefaultAgentCoreBuilder`](defect_agent::session::DefaultAgentCoreBuilder) 仍然保持最小 agent 抽象；这里表达的是
 //! defect CLI 的“默认 feature set”。
 
 use std::collections::BTreeMap;
@@ -150,7 +150,7 @@ pub struct BuiltCliAgent {
     pub sandbox_mode: SandboxMode,
     pub turn_config: TurnConfig,
     /// `--goal` 模式的共享状态句柄（非 goal 模式为 `None`）。oneshot runner 在 turn
-    /// 结束后读 [`GoalState::is_reached`]——续命耗尽但目标未达成时用非 0 退出码，
+    /// 结束后读 [`GoalState::is_reached`](defect_agent::session::GoalState::is_reached)——续命耗尽但目标未达成时用非 0 退出码，
     /// 避免 CI 把"跑满轮数仍未达成"误判成成功。
     ///
     /// [`GoalState`]: defect_agent::session::GoalState

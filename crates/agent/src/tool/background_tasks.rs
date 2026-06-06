@@ -13,7 +13,7 @@
 //! 装配时只叠进 overlay、不进子 agent 的裁子集来源，子 agent 结构性够不着（与禁递归同思路）。
 //!
 //! 进度数据来自 `spawn_agent` 后台路径挂的进度 forwarder：它订阅子 turn 事件、把"最近几个
-//! block"喂进任务进度环（[`crate::session::ProgressSink`]）。本模块只读这个环。
+//! block"喂进任务进度环（[`ProgressBlock`](crate::session::ProgressBlock)）。本模块只读这个环。
 
 use std::pin::Pin;
 

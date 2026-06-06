@@ -20,7 +20,7 @@
 //! ## 退出码（CI 判断成败的命脉）
 //!
 //! 优先级从高到低：`TurnError` > `Refusal` > `MaxTokens`/`MaxTurnRequests` >
-//! `Cancelled` > 无人值守被拒(`denied`) > `EndTurn`(0)。见 [`ExitOutcome`]。
+//! `Cancelled` > 无人值守被拒(`denied`) > `EndTurn`(0)。见 `ExitOutcome`。
 //!
 //! ## 非交互权限
 //!

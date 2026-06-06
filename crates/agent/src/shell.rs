@@ -2,8 +2,8 @@
 //!
 //! [`ShellBackend`] 是 `bash` 工具与底层进程管理之间的 trait 边界。两个 v0
 //! 实现：
-//! - [`defect_tools::shell::LocalShellBackend`]：直接 spawn 子进程
-//! - [`defect_acp::shell::AcpShellBackend`]：走 ACP `terminal/*` 反向请求
+//! - `defect_tools::shell::LocalShellBackend`：直接 spawn 子进程
+//! - `defect_acp::shell::AcpShellBackend`：走 ACP `terminal/*` 反向请求
 //!   委托给客户端
 //!
 //! 装配权在 `defect-acp` 的 `session/new` handler——按客户端的
@@ -134,8 +134,8 @@ pub enum ShellError {
 /// 仅用于测试的 no-op shell 后端。所有方法返回 [`ShellError::NotPermitted`]，
 /// 让需要 `Arc<dyn ShellBackend>` 的测试场景（不实际跑 shell 工具）能跳过装配。
 ///
-/// 真实运行时用 [`defect_tools::shell::LocalShellBackend`] 或
-/// [`defect_acp::shell::AcpShellBackend`]。
+/// 真实运行时用 `defect_tools::shell::LocalShellBackend` 或
+/// `defect_acp::shell::AcpShellBackend`。
 pub struct NoopShellBackend;
 
 impl ShellBackend for NoopShellBackend {

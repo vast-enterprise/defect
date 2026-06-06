@@ -341,7 +341,7 @@ impl WithRequestIdOpt for ProviderError {
 ///
 /// 关键分支：[`HttpStackError::Timeout`] 单独翻成
 /// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
-/// 决策——这条之前缺失，详见 [`docs/outbound/http.md`] §4。
+/// 决策——这条之前缺失，详见 `docs/outbound/http.md` §4。
 fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {

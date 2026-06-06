@@ -17,7 +17,7 @@ use crate::tool::SkillEntry;
 /// Builtin handler 的注册表：name → 工厂闭包。
 ///
 /// CLI 装配 `DefaultHookEngine` 时把 `HookHandlerSpec::Builtin { name }` 喂给
-/// [`Self::lookup`]，配置加载期未知名直接 fail-fast——避免用户在 turn 跑到
+/// [`Self::lookup_step`]，配置加载期未知名直接 fail-fast——避免用户在 turn 跑到
 /// 一半才发现拼错（见 hooks.md §4.1）。
 ///
 /// 工厂签名是 `Fn() -> Arc<dyn HookHandler>`：handler 没有 per-config 参数，
@@ -72,7 +72,7 @@ impl Default for BuiltinRegistry {
 /// 把 `Post*ToolUse` 事件转成结构化 tracing 记录。
 ///
 /// 适合挂在 `[[hooks.post_tool_use]]` / `[[hooks.post_tool_use_failure]]` 上做
-/// 审计 trail；其他事件上挂会被 [`HookHandler::handle`] 直接 `Pass`。
+/// 审计 trail；其他事件上挂会被 [`StepHandler::handle_step`] 直接 `Pass`。
 pub struct TracingAuditHook;
 
 impl StepHandler for TracingAuditHook {
@@ -362,7 +362,7 @@ impl StepHandler for SkillTriggersHook {
 /// - `after_session_enter`：把目标说明 + `goal_done` 使用契约作为 `additional_context`
 ///   注入 system prompt 后缀——**turn 1 就生效**。这样模型一开机就知道目标是什么、
 ///   完成后要主动调 `goal_done`，不必等第一次自愿停止才被告知（否则白白多耗一轮）。
-/// - `before_turn_end`：turn 自愿停止时读 [`GoalState::is_reached`]：reached（模型调过
+/// - `before_turn_end`：turn 自愿停止时读 [`GoalState::is_reached`](crate::session::GoalState::is_reached)：reached（模型调过
 ///   `goal_done`）→ `proceed` 放行结束；否则 → `continue` 续命 + 注入英文催促反馈。
 ///
 /// 续命硬上限由 turn loop 的 [`crate::session::TurnConfig::max_hook_continues`] 兜底

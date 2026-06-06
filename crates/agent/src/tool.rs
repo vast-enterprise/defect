@@ -149,26 +149,22 @@ pub struct ToolContext<'a> {
     pub fs: Arc<dyn FsBackend>,
     /// Shell 执行后端。`bash` 工具通过它创建 terminal 跑命令；装配时由
     /// `defect-acp` 按客户端协商的 [`ClientCapabilities::terminal`] 选择
-    /// [`LocalShellBackend`] 或 [`AcpShellBackend`]，工具实现不感知。
+    /// `LocalShellBackend` 或 `AcpShellBackend`，工具实现不感知。
     ///
     /// 与 `fs` 同款 `Arc` 取舍——`Tool::execute` 是 `'static` future。
     ///
     /// [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
-    /// [`LocalShellBackend`]: defect_tools::shell::LocalShellBackend
-    /// [`AcpShellBackend`]: defect_acp::shell::AcpShellBackend
     pub shell: Arc<dyn ShellBackend>,
     /// HTTP fetch 后端。`fetch` 工具通过它发起网络读取；装配在 CLI 入口完成
-    /// （按 [`HttpClientConfig`] 构造一个进程级 [`HttpClient`] 实例并复用）。
+    /// （按 `HttpClientConfig` 构造一个进程级 [`HttpClient`] 实例并复用）。
     /// 工具实现拿到的是 [`Arc`] 副本；`Tool::execute` 是 `'static` future，
     /// 借用形式无法跨过 await。
-    ///
-    /// [`HttpClientConfig`]: defect_config::HttpClientConfig
     pub http: Arc<dyn HttpClient>,
     /// 当前 turn 选中的 model id。绝大多数工具用不到；`spawn_agent`
     /// 子 agent 工具用它做"model 回落到父会话当前选择"——`ToolContext`
     /// 不携带 provider registry，但携带这个字符串就够 `spawn_agent` 在
     /// 自己捕获的 registry 上 `entry_for_model` 解析出父此刻用的 provider。
-    /// 由 [`crate::session::turn::TurnRunner`] 构造 ctx 时填入 `config.model`。
+    /// 由 [`TurnRunner`](crate::session::TurnRunner) 构造 ctx 时填入 `config.model`。
     pub current_model: &'a str,
     /// session 级后台任务句柄。`Some` 时工具可 fire-and-forget 地 spawn 一个
     /// 活过当前 turn 的任务（首要场景：`spawn_agent { run_in_background: true }`）；
@@ -176,15 +172,15 @@ pub struct ToolContext<'a> {
     /// 同步执行。
     ///
     /// 用 owned [`Arc`]-backed 句柄而非借用：`Tool::execute` 返回 `'static`
-    /// future，借用无法跨过 await。由顶层 [`crate::session::turn::TurnRunner`]
+    /// future，借用无法跨过 await。由顶层 [`TurnRunner`](crate::session::TurnRunner)
     /// 在构造 ctx 时注入；嵌套子 agent turn 不注入（结构性禁止后台任务自我繁殖）。
     pub background: Option<crate::session::BackgroundTasks>,
     /// subagent 事件桥：`Some` 时工具可把自己内部派生的子 turn 事件包成
     /// [`crate::event::AgentEvent::Subagent`] 转发回父 session 的事件流，供
     /// observability 嵌套展示。当前唯一使用者是 `spawn_agent`。由
-    /// [`crate::session::turn::TurnRunner`] 在驱动每个工具时按该工具的
+    /// `session::turn` 的 turn runner 在驱动每个工具时按该工具的
     /// [`ToolCallId`] 注入——**顶层与子 agent 嵌套 turn 都注入**（递归桥接），
-    /// 桥接深度由 [`SubagentBridge::ancestor_path`] / [`SubagentBridge::depth`] 表达。
+    /// 挂载坐标由 [`SubagentBridge::parent_tool_call_id`] 表达。
     pub subagent_bridge: Option<SubagentBridge>,
     /// 本 turn 快照的 active sandbox policy。`spawn_agent` 用它做"子 agent 包
     /// 父此刻的真实策略"——`session/set_mode` 切换后新起的 turn 把新策略经此
@@ -294,7 +290,7 @@ impl<'a> ToolContext<'a> {
         self
     }
 
-    /// 注入 subagent 事件桥。工具驱动 [`crate::session::turn`] 为每个工具调用按其
+    /// 注入 subagent 事件桥。工具驱动 `session::turn` 为每个工具调用按其
     /// [`ToolCallId`] 注入，让 `spawn_agent` 能把子 turn 事件嵌套回父 trace。
     #[must_use]
     pub fn with_subagent_bridge(mut self, bridge: SubagentBridge) -> Self {

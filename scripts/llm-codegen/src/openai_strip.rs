@@ -594,7 +594,7 @@ fn parse_components_ref(r: &str) -> Option<(String, String)> {
     Some((kind, name))
 }
 
-/// 重写 components.<kind>，只保留闭包里出现过的项。
+/// 重写 `components.<kind>`，只保留闭包里出现过的项。
 fn filter_components(spec: &mut Mapping, closure: &BTreeSet<(String, String)>) -> Result<()> {
     let components = spec
         .get_mut(Value::String("components".into()))

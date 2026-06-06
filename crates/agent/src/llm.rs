@@ -1,6 +1,6 @@
 //! LLM provider 抽象。
 //!
-//! 设计沉淀于 [`docs/internal/llm-trait.md`](../../../docs/internal/llm-trait.md)。
+//! 设计沉淀于 `docs/internal/llm-trait.md`。
 //! 子模块按职责切分（chunk / request / model / capability / error / provider），
 //! 外部仅通过本模块顶层访问公共类型，子模块本身对 crate 外不可见。
 

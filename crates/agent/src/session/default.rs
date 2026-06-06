@@ -81,10 +81,8 @@ pub struct DefaultAgentCore {
     observers: Vec<Arc<dyn SessionObserver>>,
     /// HTTP fetch 后端。本 core 的所有 session 共享一份——HTTP 没有 per-client
     /// capability 协商，多 session 间也无须隔离连接池。CLI 入口按
-    /// [`HttpClientConfig`] 构造一次后注入；测试 / `echo` provider 走
+    /// `HttpClientConfig` 构造一次后注入；测试 / `echo` provider 走
     /// [`NoopHttpClient`]。
-    ///
-    /// [`HttpClientConfig`]: defect_config::HttpClientConfig
     http: Arc<dyn HttpClient>,
     /// hook 引擎。本 core 的所有 session 共享——hook 配置走全局 + per-session
     /// matcher（`docs/internal/hooks.md` §5）。CLI 入口装配；不显式注入时走
@@ -126,7 +124,7 @@ pub struct DefaultAgentCoreBuilder {
     hook_engine: Option<Arc<dyn HookEngine>>,
     config: TurnConfig,
     /// 后台任务进度视图配置（环容量 / 正文上限）。每个 session 的 `BackgroundTasks`
-    /// 据此建进度环。未设置 ⇒ [`BackgroundProgressConfig::default`]（鸟瞰、不灌正文）。
+    /// 据此建进度环。未设置 ⇒ [`BackgroundProgressConfig::default`](crate::session::BackgroundProgressConfig)（鸟瞰、不灌正文）。
     background_progress: crate::session::BackgroundProgressConfig,
     /// `--goal` 目标驱动循环的共享状态。CLI 装配期按 `--goal` 注入；未设置 ⇒ 非目标模式。
     goal: Option<Arc<crate::session::GoalState>>,
@@ -150,7 +148,7 @@ impl DefaultAgentCoreBuilder {
 
     /// 单 provider 便捷入口下的 session capabilities 配置——会被合到
     /// `build()` 自动构造的单 entry registry 上。多 provider 路径下应直接
-    /// 把 capabilities 写到 [`ProviderEntry`] 里，本字段会被忽略。
+    /// 把 capabilities 写到 [`ProviderEntry`](crate::llm::ProviderEntry) 里，本字段会被忽略。
     pub fn capabilities(mut self, capabilities: SessionCapabilitiesConfig) -> Self {
         self.single_capabilities = capabilities;
         self
@@ -582,7 +580,7 @@ struct SessionProviderState {
 pub struct DefaultSession {
     id: SessionId,
     cwd: PathBuf,
-    /// `Arc` 而非 `Box`：后台压缩任务（[`CompactionSlot`]）要 `'static` 持有它
+    /// `Arc` 而非 `Box`：后台压缩任务（[`CompactionSlot`](crate::session::CompactionSlot)）要 `'static` 持有它
     /// 跨 turn，故须可共享引用计数。
     history: Arc<dyn History>,
     tools: Arc<dyn ToolRegistry>,

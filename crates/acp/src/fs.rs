@@ -20,9 +20,7 @@ use futures::future::BoxFuture;
 /// 持有 ACP 反向通道 [`ConnectionTo<Client>`] + session id + workspace root：
 /// - `cx`：把请求送给客户端的句柄；本身是 `Arc<...>` newtype，clone 廉价
 /// - `session_id`：每条反向请求都要带，客户端用它在多 session 场景里路由
-/// - `workspace_root`：agent 自己守工作区边界（[`docs/inbound/acp-fs.md`] §4）
-///
-/// [`docs/inbound/acp-fs.md`]: ../../../docs/inbound/acp-fs.md
+/// - `workspace_root`：agent 自己守工作区边界（`docs/inbound/acp-fs.md` §4）
 pub struct AcpFsBackend {
     cx: ConnectionTo<Client>,
     session_id: SessionId,

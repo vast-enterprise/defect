@@ -2,8 +2,8 @@
 //!
 //! [`FsBackend`] 是 fs 工具家族（`read_file` / `write_file` / `edit_file`）
 //! 与底层 IO 之间的 trait 边界。两个 v0 实现：
-//! - [`defect_tools::fs::LocalFsBackend`]：直接打盘
-//! - [`defect_acp::fs::AcpFsBackend`]：走 ACP `fs/read_text_file` /
+//! - `defect_tools::fs::LocalFsBackend`：直接打盘
+//! - `defect_acp::fs::AcpFsBackend`：走 ACP `fs/read_text_file` /
 //!   `fs/write_text_file` 反向请求委托给客户端
 //!
 //! 装配权在 `defect-acp` 的 `session/new` handler——按客户端的
@@ -51,8 +51,8 @@ impl Fingerprint {
 /// 仅用于测试的 no-op fs 后端。所有方法都返回 [`FsError::NotPermitted`]，
 /// 让需要 `Arc<dyn FsBackend>` 的测试场景（不实际跑 fs 工具）能跳过装配。
 ///
-/// 真实运行时用 [`defect_tools::fs::LocalFsBackend`] 或
-/// [`defect_acp::fs::AcpFsBackend`]。
+/// 真实运行时用 `defect_tools::fs::LocalFsBackend` 或
+/// `defect_acp::fs::AcpFsBackend`。
 pub struct NoopFsBackend;
 
 impl FsBackend for NoopFsBackend {
@@ -81,7 +81,7 @@ impl FsBackend for NoopFsBackend {
 /// fs 后端 trait。
 ///
 /// 两个动词足够表达 v0 fs 工具家族的全部底层操作：
-/// - `edit_file` 由工具层组合（先 [`read_text`] 再 [`write_text`]），
+/// - `edit_file` 由工具层组合（先 [`read_text`] 再 [`write_text`](FsBackend::write_text)），
 ///   后端不感知 patch 语义
 /// - 删除 / 移动 / mkdir 不进入 v0 fs 工具家族（ACP 没有对位反向方法），
 ///   LLM 用 `bash`
@@ -107,13 +107,10 @@ pub trait FsBackend: Send + Sync {
     /// 读取整个文件的原始字节。`read_file` 工具在识别到图片等二进制类型时
     /// 走这条，把字节交给上层 base64 编码成多模态 tool_result。
     ///
-    /// 默认实现返回 [`FsError::NotPermitted`]——委托后端（[`AcpFsBackend`]）
+    /// 默认实现返回 [`FsError::NotPermitted`]——委托后端（`AcpFsBackend`）
     /// 的 ACP `fs/read_text_file` 反向通道是纯文本的，拿不到二进制；ACP 环境
     /// 下读图片这件事由 system prompt 引导模型回避（`# Environment` 段会注明
-    /// frontend 是 delegated）。本地后端（[`LocalFsBackend`]）重写为直接读盘。
-    ///
-    /// [`AcpFsBackend`]: defect_acp::fs::AcpFsBackend
-    /// [`LocalFsBackend`]: defect_tools::fs::LocalFsBackend
+    /// frontend 是 delegated）。本地后端（`LocalFsBackend`）重写为直接读盘。
     fn read_bytes(&self, path: PathBuf) -> BoxFuture<'_, Result<Vec<u8>, FsError>> {
         Box::pin(async move {
             let _ = path;
@@ -136,10 +133,8 @@ pub trait FsBackend: Send + Sync {
     /// 中检测并发写冲突。
     ///
     /// 默认实现走 [`FsBackend::read_text`] 全文读 + [`Fingerprint::of`]——这
-    /// 让委托后端（如 [`AcpFsBackend`]）无需额外协议方法即可工作。本地后端
+    /// 让委托后端（如 `AcpFsBackend`）无需额外协议方法即可工作。本地后端
     /// 可重写此方法，用 mtime + size 做更便宜的判定。
-    ///
-    /// [`AcpFsBackend`]: defect_acp::fs::AcpFsBackend
     fn fingerprint(&self, path: PathBuf) -> BoxFuture<'_, Result<Fingerprint, FsError>> {
         Box::pin(async move {
             let text = self.read_text(path, None, None).await?;

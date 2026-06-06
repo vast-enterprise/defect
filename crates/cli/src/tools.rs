@@ -4,7 +4,7 @@
 //! [`StaticToolRegistry`] 上，作为某个 `AgentCore` 实例的 `process_tools`、被该
 //! core 的各 session 共享一份——**不是进程全局单例**（把 defect 当库引用时一个
 //! 进程可装配多个 `AgentCore`，各持自己的一份）。MCP 工具走 session-level
-//! [`McpToolFactory`] 在 `mcp_servers` 模块里组装。
+//! [`McpToolFactory`](defect_mcp::McpToolFactory) 在 `mcp_servers` 模块里组装。
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -130,7 +130,7 @@ pub struct ProfileHookBuildError {
 }
 
 /// 把 `defect-config` 的 [`SkillSpec`] 投影成 agent 侧 [`SkillEntry`]——与
-/// [`project_profiles`] 同款跨 crate 装配边界投影。
+/// `project_profiles` 同款跨 crate 装配边界投影。
 pub fn project_skills(specs: &BTreeMap<String, SkillSpec>) -> BTreeMap<String, SkillEntry> {
     specs
         .iter()
@@ -167,7 +167,7 @@ pub fn project_skills(specs: &BTreeMap<String, SkillSpec>) -> BTreeMap<String, S
 /// 的角色 prompt 另外叠在其后。
 ///
 /// `builtins` / `hook_rt` 供把每个 profile 自己的 `[hooks]` 编译成 hook 引擎
-/// （见 [`project_profiles`]）——子 agent 的钩子是它身份的一部分，不从父继承。
+/// （见 `project_profiles`）——子 agent 的钩子是它身份的一部分，不从父继承。
 ///
 /// # Errors
 /// 任一 profile 的 hook 引擎装配失败即 hard fail（[`ProfileHookBuildError`]）。

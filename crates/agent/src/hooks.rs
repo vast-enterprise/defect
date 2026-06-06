@@ -4,27 +4,10 @@
 //!
 //! ## 抽象层次
 //!
-//! - [`HookEvent`]：主循环 emit 的载荷（5 件 Sync 拦截 + 8 件 Async 观察 enum 占位）
-//! - [`HookHandler`]：单个执行器（Builtin / Command / Prompt 三种 v0 形态在子 crate 实现）
+//! - [`HookStep`](step::HookStep)：主循环在各 step 边界调用的拦截点（按事件名分桶）
+//! - [`StepHandler`]：单个执行器（Builtin / Command / Prompt 三种形态在子模块实现）
 //! - [`HookMatcher`]：单条 hook 的匹配条件（按 tool / glob / safety 过滤）
-//! - [`HookEngine`]：主循环面向的派发器；持有 handler 表、执行 pipeline、合并 outcome
-//!
-//! v0 主循环只 emit 5 件 Sync 拦截事件；8 件 Async 观察事件仅 enum 占位。
-//!
-//! ## Async 观察事件的现状（未落地）
-//!
-//! 核心 gap 是 [`HookEngine::observe`] 的 **AgentEvent → HookEvent 投影器缺失**：
-//! 没有任何 task 订阅 [`crate::event::AgentEvent`] 流、把它投影成 [`HookEvent`]
-//! 再调 `observe()`。`DefaultHookEngine::observe()` 当前是空函数。
-//!
-//! 数据源大多已就绪——8 件里 6 件能直接从现有 `AgentEvent` 投影
-//! （`TurnStart`←`TurnStarted`、`TurnEnd`←`TurnEnded`、`PreLlmCall`←`LlmCallStarted`、
-//! `PostLlmCall`←`LlmCallFinished`、`PostCompact`←`ContextCompressed`、
-//! `PermissionAsk`←`PolicyDecision{Ask}`）。两个例外要先补数据源：
-//! - `PreCompact`：`AgentEvent` 只有压缩**完成后**的 `ContextCompressed`，没有压缩前事件 → 需在 turn loop 新增 emit 点
-//! - `SessionEnd`：`AgentEvent` 无任何 session 终结事件 → 需先在 session 生命周期造终结信号
-//!
-//! 完整落地步骤见 `docs/internal/hooks.md` §11。
+//! - [`HookEngine`]：主循环面向的派发器；持有 [`HandlerTable`]、执行 pipeline、合并 verdict
 //!
 //! ## 默认实现
 //!
@@ -275,8 +258,7 @@ impl HandlerTable {
 /// - 用 [`ArcSwap`] 持有 [`HandlerTable`]，[`Self::reload`] 可整体热替换
 /// - `fire` 内部按 matcher 过滤 → 串行 await，每个 handler 看到的是前序
 ///   patch 应用之后的事件
-/// - 单条 handler 超时 / panic / 错误按 §3.5 表降级；具体规则见
-///   [`Self::merge_outcome`]
+/// - 单条 handler 超时 / panic / 错误按 §3.5 表降级
 pub struct DefaultHookEngine {
     table: ArcSwap<HandlerTable>,
 }

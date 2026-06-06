@@ -1,4 +1,4 @@
-//! Prompt hook handler — 把 [`HookEvent`] 喂给一次 LLM 调用。
+//! Prompt hook handler — 把 step 信封喂给一次 LLM 调用。
 //!
 //! 详见 `docs/internal/hooks.md` §4.3。
 //!
@@ -41,7 +41,7 @@ use super::{HookCtx, HookError, StepHandler};
 /// 模板渲染策略。详见 `docs/internal/hooks.md` §4.3。
 ///
 /// `Template` 形态用极简 `{{key}}` 字符串替换——不引入 handlebars/tera
-/// 这类重型依赖。可识别的 key 见 [`render_template`] 的实现：
+/// 这类重型依赖。可识别的 key 见 `render_envelope` 的实现：
 /// - 全部事件：`{{event}}` / `{{cwd}}` / `{{session_id}}`
 /// - PreToolUse / Post*：`{{tool}}` / `{{tool_input}}` / `{{tool_error}}`
 /// - UserPromptSubmit：`{{prompt}}`
@@ -51,7 +51,7 @@ use super::{HookCtx, HookError, StepHandler};
 /// 给模型）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptRender {
-    /// 直接喂 [`HookEvent`] 的 JSON 序列化结果。
+    /// 直接喂 step 信封的 JSON 序列化结果。
     Json,
     /// 用 `{{key}}` 字符串替换从 event 字段取值。
     Template { template: String },

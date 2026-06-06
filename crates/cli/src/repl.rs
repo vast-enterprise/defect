@@ -11,7 +11,7 @@
 //!
 //! 一开始偷懒让终端 canonical（cooked）模式做行编辑，有两个 bug：退格能把
 //! 提示符也擦掉；删中文时按字节删而非按 unicode char 删。所以读行阶段进 raw
-//! 模式自己接管（[`read_line`]）：维护一个 `String` 缓冲（`pop()` 天然按 `char`
+//! 模式自己接管：维护一个 `String` 缓冲（`pop()` 天然按 `char`
 //! 删），每次按键用「回行首 + 清行 + 重绘 prompt+buffer」重画——提示符是重绘
 //! 出来的删不掉，CJK 宽字符靠终端按显示宽度推进光标也对。raw 模式只在读行时
 //! 开，turn 期间的事件渲染仍在 cooked 模式，`\n` 正常。
@@ -22,7 +22,7 @@
 //!
 //! ## 与 ACP 路径的关系
 //!
-//! 复用同一个 [`AgentCore`]：用 [`Frontend::Cli`] 建 session、本地
+//! 复用同一个 [`AgentCore`]：用 [`Frontend::Cli`](defect_agent::session::Frontend::Cli) 建 session、本地
 //! `LocalFsBackend` / `LocalShellBackend`（REPL 跑在本机，文件与命令都直接
 //! 执行，无委托）。事件流的消费逻辑是 `defect-acp` event pump 的极简版——
 //! 那边翻译成 wire notification，这里翻译成终端文本。
@@ -274,7 +274,7 @@ async fn run_user_turn(
 
 /// turn 进行中处理一个按键消息。编辑动作更新 buffer（流式态下静默，turn 结束重绘
 /// 时显示）；回车返回 `Some(line)` 让调用方排队。Ctrl-C **打断正在跑的 turn**——
-/// 调 [`Session::cancel_turn`]（幂等），turn loop 在下一个检查点退出并发出
+/// 调 [`Session::cancel_turn`](defect_agent::session::Session::cancel_turn)（幂等），turn loop 在下一个检查点退出并发出
 /// `TurnEnded{Cancelled}`，由事件渲染收尾；同时清掉当前编辑行。Ctrl-D 在 turn
 /// 进行中不打断，忽略（turn 结束回输入循环会再次读到而退出）。channel 关闭
 /// （`None`）由调用方的 select 守卫处理，不进本函数。

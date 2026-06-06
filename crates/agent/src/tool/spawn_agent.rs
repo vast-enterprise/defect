@@ -27,7 +27,7 @@
 //! 继承"够得着世界的能力"（provider registry / fs / shell / http），不继承
 //! "身份与行为"（父的 system prompt / hooks / 任务框架）。子 agent 的 system
 //! prompt = 继承的 base_prompt + profile 自己的 `system.md`，**不**走
-//! [`resolve_system_prompt`]（那会去爬工作区 `AGENTS.md`，那是父的身份）。
+//! [`resolve_system_prompt`](crate::session::resolve_system_prompt)（那会去爬工作区 `AGENTS.md`，那是父的身份）。
 
 use std::collections::BTreeMap;
 use std::pin::Pin;

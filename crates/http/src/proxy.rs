@@ -1,10 +1,10 @@
 //! HTTP/HTTPS 代理 connector 装配。
 //!
-//! 设计详见 [`docs/outbound/http.md`] §3.5。
+//! 设计详见 `docs/outbound/http.md` §3.5。
 //!
 //! 形态：连接层装一份 [`hyper_http_proxy::ProxyConnector<HttpConnector>`]，
 //! 外面再用 [`hyper_rustls::HttpsConnector`] 包出 TLS。`ProxyConnector`
-//! 在 `proxies` 列表为空时透明放行（见上游 [`Service<Uri>`] impl 的
+//! 在 `proxies` 列表为空时透明放行（见上游 `Service<Uri>` impl 的
 //! `match_proxy` 分支），所以无论用户是否启用代理，连接器类型保持一致——
 //! `HttpsConnector<ProxyConnector<HttpConnector>>`——避免 [`build_http_stack`]
 //! 出现两份不同的连接器类型。

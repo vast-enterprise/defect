@@ -784,7 +784,7 @@ pub async fn serve(agent: Arc<dyn AgentCore>) -> Result<(), AcpError> {
 }
 
 /// 同 [`serve`]，但带一次性 `--resume` 目标：首个 `session/new` 透明改走
-/// load_session 恢复该会话（见 [`ServeState::resume_on_session_new`]）。
+/// load_session 恢复该会话（见 `ServeState::resume_on_session_new`）。
 /// `resume = None` 时与 [`serve`] 等价。
 pub async fn serve_with_resume(
     agent: Arc<dyn AgentCore>,

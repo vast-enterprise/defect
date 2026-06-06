@@ -28,7 +28,7 @@ pub(crate) enum Projection {
     /// 需要发反向 `session/request_permission`。
     Permission(PermissionAsk),
     /// turn 终态——驱动 `PromptResponse`。事件本身仅作哨兵，权威 stop_reason
-    /// 由 [`Session::run_turn`] 的返回值给出。
+    /// 由 [`Session::run_turn`](defect_agent::session::Session::run_turn) 的返回值给出。
     EndTurn,
     /// 仅审计，不入 wire。
     Ignore,

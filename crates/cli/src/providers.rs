@@ -74,7 +74,7 @@ pub async fn build_registry(
     Ok((Arc::new(registry), turn_config))
 }
 
-/// 按 `[providers]` 段为每个有效 [`ProviderKind`] 装配一个
+/// 按 `[providers]` 段为每个有效 `ProviderKind` 装配一个
 /// [`ProviderEntry`]——默认 provider 必在；其他 entry 仅在它们声明了
 /// `default_model` / `models` 时才装配。
 pub async fn build_provider_entries(
@@ -116,7 +116,7 @@ pub async fn build_provider_entries(
     Ok(entries)
 }
 
-/// 按 [`ProviderKind`] 实例化一个 provider。
+/// 按 `ProviderKind` 实例化一个 provider。
 ///
 /// 下游二次开发想"自己换 OpenAI 实现"时——独立调用此函数构造默认
 /// 那家，再 push 一份自定义 entry 进 [`ProviderRegistry::new`]。

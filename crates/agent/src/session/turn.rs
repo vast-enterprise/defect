@@ -140,7 +140,7 @@ pub struct TurnConfig {
     /// [`crate::tool::ToolContext::subagent_depth`] 把"剩余深度"传给工具；子 agent
     /// 嵌套 turn 的 `subagent_max_depth` = 父注入的剩余深度减一。`0` ⇒ 本 turn 的
     /// 工具集不含 `spawn_agent`，结构性禁止派发——取代旧的"白名单永不含 spawn_agent"
-    /// 硬编码闸门。默认 [`DEFAULT_SUBAGENT_MAX_DEPTH`]。
+    /// 硬编码闸门。默认 `DEFAULT_SUBAGENT_MAX_DEPTH`。
     pub subagent_max_depth: u32,
 }
 
@@ -209,7 +209,7 @@ pub struct TurnRunner<'a> {
     pub provider: &'a dyn LlmProvider,
     /// 本轮快照的 active policy。owned `Arc` 而非借用：它要随
     /// [`crate::tool::ToolContext`] 流给 `spawn_agent`，子 agent 用
-    /// [`NonInteractivePolicy`] 包它——必须是父此刻的真实策略。
+    /// [`NonInteractivePolicy`](crate::policy::NonInteractivePolicy) 包它——必须是父此刻的真实策略。
     pub policy: Arc<dyn SandboxPolicy>,
     pub events: Arc<EventEmitter>,
     pub permissions: &'a PermissionGate,

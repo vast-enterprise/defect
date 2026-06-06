@@ -10,7 +10,9 @@
     clippy::large_enum_variant,
     clippy::enum_variant_names,
     dead_code,
-    unused_imports
+    unused_imports,
+    rustdoc::bare_urls,
+    rustdoc::broken_intra_doc_links,
 )]
 
 /// # Anthropic Messages API

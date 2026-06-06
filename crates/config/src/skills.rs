@@ -122,7 +122,7 @@ struct SkillTriggersToml {
 ///
 /// 先扫用户层、再扫项目层；同名 skill 项目层覆盖用户层。任一 skill 的
 /// `SKILL.md` 解析失败 / frontmatter 缺失 / `name` 与目录名不符，都是 hard
-/// error（fail loud，不静默跳过坏 skill——与 [`crate::profiles`] 同款，区别于
+/// error（fail loud，不静默跳过坏 skill——与 `profiles` 模块同款，区别于
 /// 旧设计稿的 warn-and-skip）。目录里非 skill 的杂项（无 `SKILL.md` 的子目录、
 /// 非目录项）静默跳过。
 ///

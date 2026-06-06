@@ -1,23 +1,16 @@
-//! Command hook handler — 把 [`HookEvent`] 喂给一个外部子进程，按
-//! `docs/internal/hooks.md` §4.2 的 IO 协议解析 stdout 成 [`HookOutcome`]。
+//! Command hook handler — 把 step 信封 JSON 喂给一个外部子进程，按
+//! `docs/internal/hooks.md` §4.2 的 IO 协议把 stdout 当 verdict JSON 透传。
 //!
 //! ## 形态
 //!
 //! - [`CommandSpec`]：handler 配置——argv 直 spawn / 显式 shell 二选一
-//! - [`CommandHandler`]：实现 [`HookHandler`]；spawn / kill_on_drop / 超时
-//!   走 §4.2.3 的语义
-//! - [`CommandEventEnvelope`]：stdin JSON 形态。仅供测试与诊断诊断；脚本
-//!   作者按 §4.2.1 的 env 表读环境变量也行，二选一。
+//! - [`CommandHandler`]：实现 [`StepHandler`]；spawn /
+//!   kill_on_drop / 超时走 §4.2.3 的语义
 //!
 //! 不依赖任何 shell：argv 直 spawn 是默认；显式 `shell` 字段才走 shell。
 //!
-//! 平台兜底：在 `cfg(unix)` 与 `cfg(windows)` 下 [`CommandHandler::spawn`]
-//! 用 `tokio::process::Command`；其它平台（纯 WASM）这个 handler 类型由
-//! 上层 cargo feature flag 关闭——v0 仅在能 spawn 子进程的环境装配。
-//!
-//! [`HookHandler`]: super::HookHandler
-//! [`HookEvent`]: super::HookEvent
-//! [`HookOutcome`]: super::HookOutcome
+//! 平台兜底：在 `cfg(unix)` 与 `cfg(windows)` 下用 `tokio::process::Command`
+//! spawn 子进程。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -96,8 +89,8 @@ impl CommandSpec {
 /// `Command` handler 实现。
 ///
 /// 见 `docs/internal/hooks.md` §4.2：
-/// - stdin = `HookEvent` 的 JSON 序列化（[`CommandEventEnvelope`]），单行
-/// - stdout = JSON 对象，按 [`CommandStdoutShape`] 解析
+/// - stdin = step 信封的 JSON 序列化，单行
+/// - stdout = verdict JSON 对象（空 = 不干预），原样透传给引擎
 /// - stderr 透传 tracing
 /// - exit 0 = 按 stdout 决定；非 0 = `HookError::HandlerFailed`
 pub struct CommandHandler {
@@ -111,7 +104,7 @@ impl CommandHandler {
     }
 
     /// 该 handler 配置上自带的超时。CLI 装配把它翻进
-    /// [`super::HandlerEntry::with_timeout`]，引擎默认值兜底见 §8。
+    /// [`StepHandlerEntry::with_timeout`](super::StepHandlerEntry::with_timeout)，引擎默认值兜底见 §8。
     #[must_use]
     pub fn timeout(&self) -> Option<Duration> {
         self.spec.timeout()

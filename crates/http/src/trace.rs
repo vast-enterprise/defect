@@ -1,6 +1,6 @@
 //! Tracing layer：在 `tracing::trace` 级别打 method/uri/status/elapsed。
 //!
-//! v0 不用 [`tower-http`] 的 `TraceLayer`——它会把 `Response<B>` 包成
+//! v0 不用 `tower-http` 的 `TraceLayer`——它会把 `Response<B>` 包成
 //! `Response<ResponseBody<B, _>>` 来挂 body chunk hook，跟我们
 //! `BoxCloneSyncService<_, http::Response<hyper::body::Incoming>, _>`
 //! 的签名打架。我们这层只看 status / elapsed，不需要 body chunk

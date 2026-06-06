@@ -24,9 +24,7 @@ use futures::future::BoxFuture;
 /// - `cx`：把请求送给客户端的句柄；本身是 `Arc<...>` newtype，clone 廉价
 /// - `session_id`：每条反向请求都要带，客户端用它在多 session 场景里路由
 /// - `workspace_root`：agent 自己守工作区边界，避免依赖客户端兜底
-///   （[`docs/inbound/acp-shell.md`] §5）
-///
-/// [`docs/inbound/acp-shell.md`]: ../../../docs/inbound/acp-shell.md
+///   （`docs/inbound/acp-shell.md` §5）
 pub struct AcpShellBackend {
     cx: ConnectionTo<Client>,
     session_id: SessionId,

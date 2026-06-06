@@ -10,12 +10,12 @@
 //!   并发不变式的前提——「飞行期间不增删中段消息」，而唯一会删中段的操作就是压缩
 //!   本身。两个并发压缩会互相作废对方算出的 `drop_count`。
 //! - **session 级**：压缩任务要活过发起它的 turn（摘要还没回来 turn 可能就结束了），
-//!   所以 `JoinHandle` 挂在 session 上，与 [`super::BackgroundTasks`] 同档生命周期。
+//!   所以 `JoinHandle` 挂在 session 上，与 [`BackgroundTasks`](crate::session::BackgroundTasks) 同档生命周期。
 //!
 //! ## 回写
 //!
 //! 任务完成后直接 `history.splice_prefix(drop_count, summary)` **静默改写历史**——
-//! 注意这与 [`super::BackgroundTasks`] 不同：那条路径把结果当 user 消息回灌对话，
+//! 注意这与 [`BackgroundTasks`](crate::session::BackgroundTasks) 不同：那条路径把结果当 user 消息回灌对话，
 //! 而压缩必须无声。完成时通过回调发 `ContextCompressed` 事件供 observability 消费。
 
 use std::sync::{Arc, Mutex};

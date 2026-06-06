@@ -696,9 +696,9 @@ pub enum ReasoningEffort {
 /// HTTP 客户端栈的 typed 配置。
 ///
 /// 仅描述用户意图（`None` 一律按"用 HTTP 栈层默认值"理解）；CLI 入口在
-/// 装配 provider 时把它翻成 [`defect_http::HttpStackConfig`]。
+/// 装配 provider 时把它翻成 `defect_http::HttpStackConfig`。
 ///
-/// 和 [`defect_http::HttpStackConfig`] 不直接共享类型是为了保持 crate
+/// 和 `defect_http::HttpStackConfig` 不直接共享类型是为了保持 crate
 /// 单向依赖：`defect-config` 不引 `defect-http`，避免 fetch tool 这类
 /// 后续消费者再次倒挂。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
