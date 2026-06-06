@@ -276,6 +276,9 @@ pub(super) async fn summarize(
         }]
         .into(),
     });
+    // head 切片可能含孤儿 tool_use（中断留下的）——发摘要子请求前同样要补全，
+    // 否则摘要调用也会被 provider 拒。与 `build_request` 同一道工序。
+    let messages = super::sanitize::sanitize_tool_pairing(messages);
 
     let req = CompletionRequest {
         model: ctx.model.clone(),

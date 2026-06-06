@@ -45,6 +45,9 @@ mod compaction_slot;
 
 pub use compaction_slot::CompactionSlot;
 
+#[path = "turn/sanitize.rs"]
+mod sanitize;
+
 #[path = "turn/content.rs"]
 mod content;
 
@@ -513,10 +516,13 @@ impl<'a> TurnRunner<'a> {
     }
 
     fn build_request(&self) -> CompletionRequest {
+        // 发请求前补全孤儿 tool_use（中断留下的、无对应 tool_result 的 tool_use）——
+        // 否则被 provider 永久拒。只补给 provider 的这一份，history 真相不动。见 `sanitize`。
+        let messages = sanitize::sanitize_tool_pairing(self.history.snapshot());
         let req = CompletionRequest {
             model: self.config.model.clone(),
             system: self.system_prompt.clone(),
-            messages: self.history.snapshot(),
+            messages,
             tools: self.tools.schemas(),
             tool_choice: ToolChoice::Auto,
             sampling: self.config.sampling.clone(),
