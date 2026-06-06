@@ -93,6 +93,10 @@ pub struct DefaultAgentCore {
     /// 后台任务进度视图配置。所有 session 共享同一份（与进程级工具配置同档）。
     /// 每个 session 建 `BackgroundTasks` 时传入。
     background_progress: crate::session::BackgroundProgressConfig,
+    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 core 的 session 跑在目标模式下；
+    /// 由 CLI 装配期按 `--goal` 注入。所有 session 共享同一份（一个 `--goal` 进程
+    /// 通常只跑一个 session）。`None` = 非目标模式（默认）。
+    goal: Option<Arc<crate::session::GoalState>>,
     sessions: DashMap<SessionId, Arc<dyn Session>>,
 }
 
@@ -124,6 +128,8 @@ pub struct DefaultAgentCoreBuilder {
     /// 后台任务进度视图配置（环容量 / 正文上限）。每个 session 的 `BackgroundTasks`
     /// 据此建进度环。未设置 ⇒ [`BackgroundProgressConfig::default`]（鸟瞰、不灌正文）。
     background_progress: crate::session::BackgroundProgressConfig,
+    /// `--goal` 目标驱动循环的共享状态。CLI 装配期按 `--goal` 注入；未设置 ⇒ 非目标模式。
+    goal: Option<Arc<crate::session::GoalState>>,
 }
 
 impl DefaultAgentCoreBuilder {
@@ -186,6 +192,14 @@ impl DefaultAgentCoreBuilder {
 
     pub fn config(mut self, config: TurnConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// 注入 `--goal` 目标驱动循环的共享状态。`Some` 时 session 跑在目标模式下：
+    /// 顶层 turn 把它经 [`crate::tool::ToolContext::goal`] 注入给 `goal_done` 工具，
+    /// `goal-gate` hook 据它驱动多轮自主循环。不调用 ⇒ 非目标模式（默认）。
+    pub fn goal(mut self, goal: Arc<crate::session::GoalState>) -> Self {
+        self.goal = Some(goal);
         self
     }
 
@@ -294,6 +308,7 @@ impl DefaultAgentCoreBuilder {
                 .unwrap_or_else(|| Arc::new(NoopHookEngine) as Arc<dyn HookEngine>),
             config: RwLock::new(self.config),
             background_progress: self.background_progress,
+            goal: self.goal,
             sessions: DashMap::new(),
         }
     }
@@ -367,6 +382,7 @@ impl AgentCore for DefaultAgentCore {
                     session_cancel.clone(),
                     self.background_progress,
                 ),
+                goal: self.goal.clone(),
                 compaction_slot: crate::session::CompactionSlot::new(),
                 turn_freed: Arc::new(tokio::sync::Notify::new()),
                 session_cancel,
@@ -468,6 +484,7 @@ impl AgentCore for DefaultAgentCore {
                     session_cancel.clone(),
                     self.background_progress,
                 ),
+                goal: self.goal.clone(),
                 compaction_slot: crate::session::CompactionSlot::new(),
                 turn_freed: Arc::new(tokio::sync::Notify::new()),
                 session_cancel,
@@ -595,6 +612,10 @@ pub struct DefaultSession {
     /// 把 clone 经 `TurnRunner` → `ToolContext` 注入给工具。详见
     /// `docs/proposals/task-arrange.md` §3.1。
     background: crate::session::BackgroundTasks,
+    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下；顶层 turn
+    /// 把它经 [`crate::tool::ToolContext::goal`] 注入工具，`goal-gate` hook 据它续命 /
+    /// 放行。从 [`DefaultAgentCore::goal`] 克隆而来。`None` = 非目标模式。
+    goal: Option<Arc<crate::session::GoalState>>,
     /// session 级后台压缩槽（single-flight）。越 soft 水位时由 turn 主循环异步起一次
     /// 摘要压缩，不阻塞本轮。详见 `session/turn/compaction_slot.rs`。
     compaction_slot: crate::session::CompactionSlot,
@@ -763,6 +784,9 @@ impl DefaultSession {
                 // 顶层 turn 注入 session 级后台任务句柄——工具的 run_in_background
                 // 能力由此开启。嵌套子 agent turn 不注入（见 spawn_agent）。
                 background: Some(self.background.clone()),
+                // 顶层 turn 注入目标循环状态（`--goal` 模式下 `Some`）：goal_done 工具
+                // 与 goal-gate hook 据它驱动多轮自主循环。非目标模式为 `None`。
+                goal: self.goal.clone(),
                 // 顶层 turn 注入后台压缩槽 + history/provider 的 Arc，使越 soft 水位时
                 // 能异步起摘要压缩。子 agent turn 全传 None（见 spawn_agent）。
                 compaction_slot: Some(self.compaction_slot.clone()),

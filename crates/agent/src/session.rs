@@ -33,6 +33,7 @@ mod capabilities;
 mod context;
 mod default;
 mod events;
+mod goal;
 mod history;
 mod permissions;
 mod prompt;
@@ -50,6 +51,7 @@ pub use capabilities::{
 pub use context::{Frontend, RunningContext};
 pub use default::{DefaultAgentCore, DefaultAgentCoreBuilder, DefaultSession, new_session_id};
 pub use events::EventEmitter;
+pub use goal::GoalState;
 pub use history::VecHistory;
 pub use permissions::PermissionGate;
 pub use prompt::resolve_system_prompt;

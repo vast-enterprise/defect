@@ -268,9 +268,10 @@ pub fn build_main_session_engine(
     builtins: &BuiltinRegistry,
     rt: &HookEngineCtx<'_>,
     skills: &Arc<std::collections::BTreeMap<String, defect_agent::tool::SkillEntry>>,
+    goal: Option<&Arc<defect_agent::session::GoalState>>,
 ) -> Result<Arc<dyn defect_agent::hooks::HookEngine>, HookEngineBuildError> {
     let mount_skills = !skills.is_empty();
-    if hooks.is_empty() && !mount_skills {
+    if hooks.is_empty() && !mount_skills && goal.is_none() {
         return Ok(Arc::new(defect_agent::hooks::NoopHookEngine));
     }
 
@@ -292,6 +293,28 @@ pub fn build_main_session_engine(
                 Arc::new(SkillTriggersHook::new(skills.clone())),
             )
             .with_name(Some("skill-triggers".to_string())),
+        );
+    }
+    // `--goal` 模式：挂 goal-gate 到两个事件——after_session_enter 注入目标说明 +
+    // goal_done 契约（turn 1 起生效，模型一开机就知道完成后要调 goal_done），
+    // before_turn_end 驱动"达成才退出"的循环。两个挂载点共用同一份 GoalState。
+    if let Some(goal) = goal {
+        use defect_agent::hooks::builtin::GoalGate;
+        table.push_step(
+            "after_session_enter",
+            StepHandlerEntry::new(
+                AgentHookMatcher::default(),
+                Arc::new(GoalGate::new(goal.clone())),
+            )
+            .with_name(Some("goal-gate".to_string())),
+        );
+        table.push_step(
+            "before_turn_end",
+            StepHandlerEntry::new(
+                AgentHookMatcher::default(),
+                Arc::new(GoalGate::new(goal.clone())),
+            )
+            .with_name(Some("goal-gate".to_string())),
         );
     }
 

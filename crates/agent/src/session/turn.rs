@@ -239,6 +239,10 @@ pub struct TurnRunner<'a> {
     /// （经 [`crate::tool::ToolContext::background`] 注入给工具）；嵌套子 agent
     /// turn 传 `None`，结构性禁止后台任务自我繁殖。详见 `docs/proposals/task-arrange.md`。
     pub background: Option<crate::session::BackgroundTasks>,
+    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下：经
+    /// [`crate::tool::ToolContext::goal`] 注入给 `goal_done` 工具，`goal-gate` hook
+    /// 在 `before_turn_end` 据它放行 / 续命。`None` = 非目标模式（默认）。
+    pub goal: Option<Arc<crate::session::GoalState>>,
     /// session 级后台压缩槽（single-flight）。`Some` 时后台全量压缩可用——越 soft
     /// 水位即异步起一次摘要压缩，不阻塞本轮。嵌套子 agent turn 传 `None`（子 agent
     /// 上下文短、且不应自繁衍后台任务）。需要 `Arc<dyn History>`/`Arc<dyn LlmProvider>`

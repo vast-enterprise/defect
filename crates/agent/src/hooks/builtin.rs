@@ -353,6 +353,79 @@ impl StepHandler for SkillTriggersHook {
     }
 }
 
+// ---------------------------------------------------------------------------
+// goal-gate
+// ---------------------------------------------------------------------------
+
+/// `--goal` 目标驱动循环的核心 hook，**同时挂两个事件**（据信封 `hook_event` 分流）：
+///
+/// - `after_session_enter`：把目标说明 + `goal_done` 使用契约作为 `additional_context`
+///   注入 system prompt 后缀——**turn 1 就生效**。这样模型一开机就知道目标是什么、
+///   完成后要主动调 `goal_done`，不必等第一次自愿停止才被告知（否则白白多耗一轮）。
+/// - `before_turn_end`：turn 自愿停止时读 [`GoalState::is_reached`]：reached（模型调过
+///   `goal_done`）→ `proceed` 放行结束；否则 → `continue` 续命 + 注入英文催促反馈。
+///
+/// 续命硬上限由 turn loop 的 [`crate::session::TurnConfig::max_hook_continues`] 兜底
+/// （`--max-turns` 映射到它）——本 hook 只管"达成没"，不自己计数。
+///
+/// 与 [`SkillManifestHook`] 一样是有状态 builtin（持 `Arc<GoalState>`），不能用
+/// [`BuiltinRegistry::defaults`] 的无参工厂构造——CLI 装配期按 `--goal` 用捕获
+/// 状态的闭包注册到两个事件上（见 `defect_cli::hooks`）。
+pub struct GoalGate {
+    goal: Arc<crate::session::GoalState>,
+}
+
+impl GoalGate {
+    pub fn new(goal: Arc<crate::session::GoalState>) -> Self {
+        Self { goal }
+    }
+
+    /// turn 1 起注入 system prompt 的目标说明 + `goal_done` 契约。
+    fn briefing(&self) -> String {
+        format!(
+            "## Goal\n\n\
+             You are running in goal-driven mode. Your objective:\n\n{}\n\n\
+             Work autonomously across as many turns as needed to achieve this goal. \
+             When — and only when — the goal is genuinely and fully achieved, call the \
+             `goal_done` tool to finish the run. Do not call it prematurely. If you stop \
+             without calling `goal_done`, you will be prompted to keep working.",
+            self.goal.objective()
+        )
+    }
+}
+
+impl StepHandler for GoalGate {
+    /// Step 模型：按信封 `hook_event` 分流——
+    /// - `after_session_enter` → 注入目标说明 + 契约（`additional_context`）；
+    /// - `before_turn_end` → reached?proceed:continue+催促。
+    fn handle_step<'a>(
+        &'a self,
+        envelope: &'a Value,
+        _ctx: HookCtx<'a>,
+    ) -> BoxFuture<'a, Result<Option<Value>, HookError>> {
+        let event = envelope
+            .get("hook_event")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let verdict = match event {
+            "after_session_enter" => {
+                serde_json::json!({ "additional_context": [self.briefing()] })
+            }
+            // before_turn_end（及兜底）：检测达成。
+            _ if self.goal.is_reached() => serde_json::json!({ "control": "proceed" }),
+            _ => serde_json::json!({
+                "control": "continue",
+                "additional_context": [format!(
+                    "The goal \"{}\" is not yet complete. Keep working toward it. \
+                     Once it is genuinely achieved, call the `goal_done` tool to finish.",
+                    self.goal.objective()
+                )],
+            }),
+        };
+        Box::pin(async move { Ok(Some(verdict)) })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -583,5 +656,72 @@ mod test {
         // 纯词不算路径。
         assert!(!toks.contains(&"please".to_string()));
         assert!(!toks.contains(&"look".to_string()));
+    }
+
+    // ----- goal-gate -----
+
+    #[tokio::test]
+    async fn goal_gate_briefs_at_session_enter() {
+        let goal = Arc::new(crate::session::GoalState::new("ship the feature"));
+        let h = GoalGate::new(goal);
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let envelope = serde_json::json!({ "hook_event": "after_session_enter" });
+        let verdict = h
+            .handle_step(&envelope, ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        // 注入 system prompt 后缀，不带 control（不干预控制流）。
+        assert!(verdict.get("control").is_none());
+        let ctxs = verdict["additional_context"].as_array().expect("array");
+        let briefing = ctxs[0].as_str().expect("str");
+        assert!(briefing.contains("ship the feature"));
+        assert!(briefing.contains("goal_done"));
+    }
+
+    #[tokio::test]
+    async fn goal_gate_not_reached_continues_with_feedback() {
+        let goal = Arc::new(crate::session::GoalState::new("ship the feature"));
+        let h = GoalGate::new(goal);
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let envelope = serde_json::json!({
+            "hook_event": "before_turn_end",
+            "stop_reason": "end_turn", "continues_so_far": 0, "voluntary": true,
+        });
+        let verdict = h
+            .handle_step(&envelope, ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        assert_eq!(verdict["control"], "continue");
+        let ctxs = verdict["additional_context"].as_array().expect("array");
+        assert_eq!(ctxs.len(), 1);
+        assert!(
+            ctxs[0]
+                .as_str()
+                .expect("str")
+                .contains("ship the feature")
+        );
+    }
+
+    #[tokio::test]
+    async fn goal_gate_reached_proceeds() {
+        let goal = Arc::new(crate::session::GoalState::new("ship the feature"));
+        goal.mark_reached();
+        let h = GoalGate::new(goal);
+        let session_id = agent_client_protocol_schema::SessionId::new("s1");
+        let cwd = std::path::Path::new("/");
+        let envelope = serde_json::json!({
+            "hook_event": "before_turn_end",
+            "stop_reason": "end_turn", "continues_so_far": 1, "voluntary": true,
+        });
+        let verdict = h
+            .handle_step(&envelope, ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        assert_eq!(verdict["control"], "proceed");
     }
 }

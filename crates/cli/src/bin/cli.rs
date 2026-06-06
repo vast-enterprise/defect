@@ -36,15 +36,22 @@ async fn main() -> anyhow::Result<ExitCode> {
         tracing::warn!("{warning:?}");
     }
 
-    let oneshot = cli.message.is_some();
+    // --message（单轮）与 --goal（目标驱动多轮循环）都是无人值守 headless 模式。
+    let headless = cli.message.is_some() || cli.goal.is_some();
     let mut builder = CliAgentBuilder::new(cwd.clone(), load_opts, config).repl(if cli.repl {
         ReplMode::Enabled
     } else {
         ReplMode::Disabled
     });
-    // 单轮无人值守模式：包 NonInteractivePolicy，避免无 TTY 挂死在权限确认上。
-    if oneshot {
+    // 无人值守模式：包 NonInteractivePolicy，避免无 TTY 挂死在权限确认上。
+    if headless {
         builder = builder.non_interactive();
+    }
+    if let Some(goal) = &cli.goal {
+        builder = builder.goal(goal.clone());
+        if let Some(max_turns) = cli.max_turns {
+            builder = builder.max_turns(max_turns);
+        }
     }
     if cli.local {
         builder = builder.local_sessions();
@@ -64,7 +71,9 @@ async fn main() -> anyhow::Result<ExitCode> {
         model = %built.turn_config.model,
         sandbox = ?built.sandbox_mode,
         "starting defect {}",
-        if oneshot {
+        if cli.goal.is_some() {
+            "goal-driven loop"
+        } else if cli.message.is_some() {
             "one-shot --message"
         } else if cli.repl {
             "repl on stdio"
@@ -73,18 +82,22 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
     );
 
-    // 三出口（优先级：--message > --repl > ACP server）。
-    if let Some(message) = cli.message {
+    // 出口优先级：--goal > --message > --repl > ACP server。
+    // --goal 与 --message 都复用 oneshot runner：单次 run_turn + 消费事件 + 退出码。
+    // 区别仅在 agent 装配——goal 模式挂了 goal-gate hook，turn 会在内部被续命多轮，
+    // 对 CLI 层透明（仍是一次 run_turn 调用）。
+    if let Some(prompt) = cli.goal.or(cli.message) {
         // ask-writes 下 Ask 被降级为 Deny 才算"无人值守缺口"；open/deny-all/read-only
         // 的 Deny 是用户预期的，不参与 denied 退出码。
         let track_denied = matches!(built.sandbox_mode, defect_config::SandboxMode::AskWrites);
         return run_oneshot(
             built.agent,
             cwd,
-            message,
+            prompt,
             cli.format,
             built.resume_session_id,
             track_denied,
+            built.goal,
         )
         .await;
     } else if cli.repl {
@@ -98,6 +111,7 @@ async fn main() -> anyhow::Result<ExitCode> {
 /// 跑单轮 prompt（`--message`）。由 `oneshot` feature gate——裁掉时 hard fail
 /// 提示重新带 feature 编译，不静默退化成 ACP。
 #[cfg(feature = "oneshot")]
+#[allow(clippy::too_many_arguments)]
 async fn run_oneshot(
     agent: Arc<dyn AgentCore>,
     cwd: std::path::PathBuf,
@@ -105,11 +119,13 @@ async fn run_oneshot(
     format: OutputFormat,
     resume: Option<SessionId>,
     track_denied: bool,
+    goal: Option<Arc<defect_agent::session::GoalState>>,
 ) -> anyhow::Result<ExitCode> {
-    defect_cli::oneshot::run(agent, cwd, message, format, resume, track_denied).await
+    defect_cli::oneshot::run(agent, cwd, message, format, resume, track_denied, goal).await
 }
 
 #[cfg(not(feature = "oneshot"))]
+#[allow(clippy::too_many_arguments)]
 async fn run_oneshot(
     _agent: Arc<dyn AgentCore>,
     _cwd: std::path::PathBuf,
@@ -117,10 +133,11 @@ async fn run_oneshot(
     _format: OutputFormat,
     _resume: Option<SessionId>,
     _track_denied: bool,
+    _goal: Option<Arc<defect_agent::session::GoalState>>,
 ) -> anyhow::Result<ExitCode> {
     anyhow::bail!(
         "this binary was built without the `oneshot` feature; \
-         rebuild with `--features oneshot` (on by default) to use --message"
+         rebuild with `--features oneshot` (on by default) to use --message / --goal"
     )
 }
 

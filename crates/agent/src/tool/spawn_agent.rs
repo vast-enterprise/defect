@@ -621,6 +621,9 @@ async fn run_subagent_core(
         // 子 agent turn 不携后台句柄：结构性禁止后台任务自我繁殖
         // （与"白名单永不含 spawn_agent 自己"同一道防递归思路）。
         background: None,
+        // 子 agent 不参与父的目标循环：父的 goal_done / goal-gate 只在顶层 turn 生效，
+        // 子 agent 有自己的有限步数上限（request_limit）兜底。
+        goal: None,
         // 子 agent turn 不做后台压缩：上下文短、生命周期随工具调用结束，无须跨
         // turn 的后台摘要。仍享 hard 水位的同步压缩兜底（compact_hard 路径要求
         // provider_arc）——故给它 provider_arc，其余后台压缩件留空。

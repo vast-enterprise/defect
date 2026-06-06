@@ -308,6 +308,7 @@ fn main_session_auto_mounts_skill_hooks() {
         &builtins,
         &hook_rt,
         &skills,
+        None,
     )
     .expect("engine");
 

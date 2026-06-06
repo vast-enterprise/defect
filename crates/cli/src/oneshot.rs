@@ -10,6 +10,13 @@
 //! - 走进程内直连 `AgentCore`（像 REPL），不走 wire——CI 跑的是自己的 agent，
 //!   不需要 ACP 的跨进程通用性。
 //!
+//! ## 输出约定：stdout = agent 内容，stderr = 框架日志
+//!
+//! agent 的**全部内容**（助手正文 / 思考 / 工具调用）按事件顺序打到 **stdout**
+//! 一条流；框架级诊断（被拒警告、turn error、goal 未达成）走 `tracing`——而
+//! `tracing` 由 `defect_obs::init_tracing` 统一写 **stderr**。于是 `2>/dev/null`
+//! 干净滤掉框架噪音、保留 agent 完整工作记录；两条流不再共用光标、不再黏连。
+//!
 //! ## 退出码（CI 判断成败的命脉）
 //!
 //! 优先级从高到低：`TurnError` > `Refusal` > `MaxTokens`/`MaxTurnRequests` >
@@ -20,8 +27,8 @@
 //! 调用方（`bin/cli.rs`）负责把 session 的 policy 包一层
 //! [`defect_agent::policy::NonInteractivePolicy`]，使 `Ask` 降级为 `Deny`、
 //! 不在无 TTY 环境挂死等输入。本模块监听事件流里的 `PolicyDecision::Deny`：
-//! 一旦发生，向 stderr 打警告并置 `denied` 标志，turn 即便正常 `EndTurn` 也用
-//! 非 0 退出码——fail loud，让 CI 知道"有操作被拒、本次结果不可信"。
+//! 一旦发生，经 `tracing` 打警告（→ stderr）并置 `denied` 标志，turn 即便正常
+//! `EndTurn` 也用非 0 退出码——fail loud，让 CI 知道"有操作被拒、本次结果不可信"。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -35,7 +42,7 @@ use defect_agent::event::AgentEvent;
 use defect_agent::policy::PolicyDecision;
 use defect_agent::session::{AgentCore, TurnError};
 use futures::{FutureExt, StreamExt};
-use tokio::io::{AsyncWriteExt, Stderr, Stdout};
+use tokio::io::{AsyncWriteExt, Stdout};
 
 use crate::args::OutputFormat;
 use crate::session_open::open_session;
@@ -49,6 +56,8 @@ use crate::session_open::open_session;
 /// # Errors
 ///
 /// session 开启失败、stdin 读取失败、stdout/stderr 写入失败。
+/// `goal` 为 `Some` 时（`--goal` 模式）：turn 结束后若目标未达成（续命耗尽仍没调
+/// `goal_done`），用 Exhausted 退出码——避免 CI 把"跑满轮数仍未达成"误判成功。
 pub async fn run(
     agent: Arc<dyn AgentCore>,
     cwd: PathBuf,
@@ -56,11 +65,11 @@ pub async fn run(
     format: OutputFormat,
     resume: Option<SessionId>,
     track_denied: bool,
+    goal: Option<Arc<defect_agent::session::GoalState>>,
 ) -> anyhow::Result<ExitCode> {
     let prompt = resolve_prompt(message).await?;
 
     let mut out = tokio::io::stdout();
-    let mut err = tokio::io::stderr();
 
     let session = open_session(&agent, &cwd, resume).await?;
 
@@ -80,7 +89,7 @@ pub async fn run(
             biased;
             ev = events.next() => {
                 if let Some(ev) = ev {
-                    sink.emit(&mut out, &mut err, ev).await?;
+                    sink.emit(&mut out, ev).await?;
                 }
             }
             r = &mut turn => break r,
@@ -89,13 +98,19 @@ pub async fn run(
 
     // turn 已结束，buffer 里可能还有刚 send、未被 poll 的尾部事件——立即就绪的全排掉。
     while let Some(Some(ev)) = events.next().now_or_never() {
-        sink.emit(&mut out, &mut err, ev).await?;
+        sink.emit(&mut out, ev).await?;
     }
 
-    let outcome = ExitOutcome::from(&result, sink.denied);
-    sink.finish(&mut out, &mut err, &result, &outcome).await?;
+    // goal 模式：turn 正常结束但目标未达成（续命耗尽仍没调 goal_done）→ Exhausted。
+    let goal_unreached = goal.as_ref().is_some_and(|g| !g.is_reached());
+    if goal_unreached {
+        tracing::warn!(
+            "goal not reached: the agent stopped (or ran out of turns) without calling `goal_done`"
+        );
+    }
+    let outcome = ExitOutcome::from(&result, sink.denied, goal_unreached);
+    sink.finish(&mut out, &result, &outcome).await?;
     out.flush().await?;
-    err.flush().await?;
     Ok(outcome.code())
 }
 
@@ -122,17 +137,24 @@ enum ExitOutcome {
     MaxTokens,
     Refusal,
     Error,
+    /// goal 模式：turn 正常结束但目标未达成（续命耗尽 / 模型放弃）。
+    GoalUnreached,
 }
 
 impl ExitOutcome {
-    fn from(result: &Result<StopReason, TurnError>, denied: bool) -> Self {
+    fn from(
+        result: &Result<StopReason, TurnError>,
+        denied: bool,
+        goal_unreached: bool,
+    ) -> Self {
         match result {
             Err(_) => Self::Error,
             Ok(StopReason::Refusal) => Self::Refusal,
             Ok(StopReason::MaxTokens) | Ok(StopReason::MaxTurnRequests) => Self::MaxTokens,
             Ok(StopReason::Cancelled) => Self::Cancelled,
-            // EndTurn（及未来新增的成功类终态）：被拒过则非 0，否则成功。
+            // EndTurn（及未来新增的成功类终态）：被拒过 > 目标未达成 > 成功。
             Ok(_) if denied => Self::Denied,
+            Ok(_) if goal_unreached => Self::GoalUnreached,
             Ok(_) => Self::Success,
         }
     }
@@ -146,6 +168,7 @@ impl ExitOutcome {
             Self::Refusal => 3,
             Self::Denied => 4,
             Self::Cancelled => 5,
+            Self::GoalUnreached => 6,
         }
     }
 
@@ -162,6 +185,9 @@ struct EventSink {
     denied: bool,
     /// `ToolCallId → 工具名`，用于在 `PolicyDecision::Deny` 时报出是哪个工具。
     tool_names: HashMap<ToolCallId, String>,
+    /// text 格式下：stdout 上是否还停在一行中间（最后写的不是 `\n`）。goal 模式下
+    /// 多轮助手输出之间靠它补换行，避免「上一段尾巴 + 下一段开头」黏成一行。
+    mid_line: bool,
 }
 
 impl EventSink {
@@ -171,22 +197,18 @@ impl EventSink {
             track_denied,
             denied: false,
             tool_names: HashMap::new(),
+            mid_line: false,
         }
     }
 
-    async fn emit(
-        &mut self,
-        out: &mut Stdout,
-        err: &mut Stderr,
-        event: AgentEvent,
-    ) -> anyhow::Result<()> {
+    async fn emit(&mut self, out: &mut Stdout, event: AgentEvent) -> anyhow::Result<()> {
         // 记录工具名（任何格式都要，用于被拒报告）。
         if let AgentEvent::ToolCallStarted { id, name, fields } = &event {
             let label = fields.title.clone().unwrap_or_else(|| name.clone());
             self.tool_names.insert(id.clone(), label);
         }
 
-        // 无人值守被拒：警告到 stderr + 置标志（任何格式都报，这是 fail loud）。
+        // 无人值守被拒：框架级诊断走 tracing（→ stderr）+ 置标志（fail loud）。
         if self.track_denied
             && let AgentEvent::PolicyDecision {
                 id,
@@ -199,18 +221,15 @@ impl EventSink {
                 .get(id)
                 .map(String::as_str)
                 .unwrap_or("<unknown>");
-            write(
-                err,
-                &format!(
-                    "[defect] tool `{tool}` denied: no operator present to approve (non-interactive)\n"
-                ),
-            )
-            .await?;
+            tracing::warn!(
+                tool = %tool,
+                "tool denied: no operator present to approve (non-interactive)"
+            );
         }
 
         match self.format {
             OutputFormat::Json => self.emit_json(out, &event).await,
-            OutputFormat::Text => self.emit_text(out, err, &event).await,
+            OutputFormat::Text => self.emit_text(out, &event).await,
             OutputFormat::Quiet => Ok(()),
         }
     }
@@ -223,48 +242,72 @@ impl EventSink {
         write_raw(out, "\n").await
     }
 
-    /// 纯文本：助手正文到 stdout（CI 可直接管道），思考/工具进度到 stderr。
-    async fn emit_text(
-        &self,
-        out: &mut Stdout,
-        err: &mut Stderr,
-        event: &AgentEvent,
-    ) -> anyhow::Result<()> {
+    /// 纯文本：**agent 的全部内容**（正文 / 思考 / 工具）都到 stdout，按事件顺序
+    /// 一条流——框架级日志（tracing）走 stderr，两者井水不犯河水（见模块头 §输出约定）。
+    ///
+    /// 边界换行：助手正文常无尾换行，而紧随其后可能是思考 / 工具行或下一轮生成。
+    /// 在切到「非正文行」（思考 / 工具）或开新生成段前，若 stdout 还停在行中间就补
+    /// 一个 `\n`，让每段各占整行、不黏连。
+    async fn emit_text(&mut self, out: &mut Stdout, event: &AgentEvent) -> anyhow::Result<()> {
         match event {
+            // 新一次 LLM 生成开始：上一段助手正文若没换行，先补一个再开新段。
+            AgentEvent::LlmCallStarted { .. } | AgentEvent::TurnEnded { .. } => {
+                self.break_line(out).await?;
+            }
             AgentEvent::AssistantText { content } => {
-                if let Some(text) = block_text(content) {
+                if let Some(text) = block_text(content)
+                    && !text.is_empty()
+                {
                     write_raw(out, &text).await?;
                     out.flush().await?;
+                    self.mid_line = !text.ends_with('\n');
                 }
             }
             AgentEvent::AssistantThought { content } => {
                 if let Some(text) = block_text(content) {
-                    write(err, &format!("[thinking] {text}\n")).await?;
+                    self.break_line(out).await?;
+                    write(out, &format!("[thinking] {text}\n")).await?;
+                    out.flush().await?;
                 }
             }
             AgentEvent::ToolCallStarted { name, fields, .. } => {
+                self.break_line(out).await?;
                 let title = fields.title.clone().unwrap_or_else(|| name.clone());
-                write(err, &format!("[tool] {title}\n")).await?;
+                write(out, &format!("[tool] {title}\n")).await?;
+                out.flush().await?;
             }
             _ => {}
         }
         Ok(())
     }
 
-    /// turn 结束后的收尾输出。
+    /// 若 stdout 还停在行中间，补一个 `\n` 收尾并 flush。用于在「非正文行」（思考 /
+    /// 工具）或新生成段前，让上一段助手正文独占整行——同一条流里也要按行分隔。
+    async fn break_line(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
+        if self.mid_line {
+            write_raw(out, "\n").await?;
+            out.flush().await?;
+            self.mid_line = false;
+        }
+        Ok(())
+    }
+
+    /// turn 结束后的收尾输出。框架级诊断（turn error）走 tracing（→ stderr）。
     async fn finish(
         &self,
         out: &mut Stdout,
-        err: &mut Stderr,
         result: &Result<StopReason, TurnError>,
         outcome: &ExitOutcome,
     ) -> anyhow::Result<()> {
+        if let Err(e) = result {
+            tracing::error!(error = %e, "turn error");
+        }
         match self.format {
             OutputFormat::Text => {
-                // 助手正文流式无尾随换行，补一个，避免和后续 shell 提示符黏在一起。
-                write_raw(out, "\n").await?;
-                if let Err(e) = result {
-                    write(err, &format!("[defect] turn error: {e}\n")).await?;
+                // 助手正文流式无尾随换行时补一个，避免和后续 shell 提示符黏在一起；
+                // 已在行首（mid_line=false）则不补，免得多出一行空白。
+                if self.mid_line {
+                    write_raw(out, "\n").await?;
                 }
             }
             OutputFormat::Json => {
@@ -279,12 +322,7 @@ impl EventSink {
                 write_raw(out, &summary.to_string()).await?;
                 write_raw(out, "\n").await?;
             }
-            OutputFormat::Quiet => {
-                // 仅在失败时落一行到 stderr，成功彻底静默。
-                if let Err(e) = result {
-                    write(err, &format!("[defect] turn error: {e}\n")).await?;
-                }
-            }
+            OutputFormat::Quiet => {}
         }
         Ok(())
     }

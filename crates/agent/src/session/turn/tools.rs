@@ -251,6 +251,7 @@ impl TurnRunner<'_> {
                     let http = self.http.clone();
                     let model = self.config.model.clone();
                     let background = self.background.clone();
+                    let goal = self.goal.clone();
                     // 把本轮 active policy 传给工具——`spawn_agent` 据此让子 agent
                     // 包父此刻的真实策略（反映 session 当前 permission mode）。
                     let policy = self.policy.clone();
@@ -287,6 +288,7 @@ impl TurnRunner<'_> {
                                 http,
                                 model,
                                 background,
+                                goal,
                                 policy,
                                 subagent_depth,
                             )
@@ -519,6 +521,7 @@ async fn drive_tool_stream(
     http: Arc<dyn HttpClient>,
     model: String,
     background: Option<crate::session::BackgroundTasks>,
+    goal: Option<Arc<crate::session::GoalState>>,
     policy: Arc<dyn crate::policy::SandboxPolicy>,
     subagent_depth: u32,
 ) -> ToolResult {
@@ -536,6 +539,9 @@ async fn drive_tool_stream(
     .with_subagent_depth(subagent_depth);
     if let Some(bg) = background {
         ctx = ctx.with_background(bg);
+    }
+    if let Some(goal) = goal {
+        ctx = ctx.with_goal(goal);
     }
     // 注入 subagent 事件桥：让 `spawn_agent` 能把子 turn 事件包成
     // AgentEvent::Subagent 转发回本 session 的事件流（按本次 tool_call_id 嵌套）。

@@ -112,9 +112,24 @@ pub struct CliArgs {
     #[arg(long, value_name = "PROMPT", conflicts_with = "repl")]
     pub message: Option<String>,
 
-    /// Output format for `--message` mode.
+    /// Output format for `--message` / `--goal` mode.
     #[arg(long, value_enum, default_value_t = OutputFormat::default())]
     pub format: OutputFormat,
+
+    /// Run a goal-driven autonomous loop and exit (CI / scripting). The agent
+    /// works across multiple turns until it calls the `goal_done` tool (goal
+    /// achieved) or hits `--max-turns`. Like `--message` but keeps going until
+    /// the goal is reached instead of stopping after one turn. Reads from
+    /// stdin if the value is `-` or omitted while piped. Mutually exclusive
+    /// with `--message` and `--repl`. Requires the `oneshot` build feature.
+    #[arg(long, value_name = "OBJECTIVE", conflicts_with_all = ["message", "repl"])]
+    pub goal: Option<String>,
+
+    /// Maximum number of times the goal-gate may keep the agent going before
+    /// giving up (maps to `[turn].max_hook_continues`). Only meaningful with
+    /// `--goal`. When exceeded, the run exits with a non-zero (exhausted) code.
+    #[arg(long, value_name = "N")]
+    pub max_turns: Option<u32>,
 }
 
 impl CliArgs {

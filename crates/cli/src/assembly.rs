@@ -149,6 +149,12 @@ pub struct BuiltCliAgent {
     pub resume_session_id: Option<SessionId>,
     pub sandbox_mode: SandboxMode,
     pub turn_config: TurnConfig,
+    /// `--goal` 模式的共享状态句柄（非 goal 模式为 `None`）。oneshot runner 在 turn
+    /// 结束后读 [`GoalState::is_reached`]——续命耗尽但目标未达成时用非 0 退出码，
+    /// 避免 CI 把"跑满轮数仍未达成"误判成成功。
+    ///
+    /// [`GoalState`]: defect_agent::session::GoalState
+    pub goal: Option<Arc<defect_agent::session::GoalState>>,
 }
 
 /// defect CLI 默认 AgentCore 装配 builder。
@@ -168,6 +174,10 @@ pub struct CliAgentBuilder {
     extra_process_registries: Vec<Arc<dyn ToolRegistry>>,
     policy_override: Option<Arc<dyn SandboxPolicy>>,
     non_interactive: bool,
+    goal: Option<Arc<defect_agent::session::GoalState>>,
+    /// `--max-turns`：goal 模式下 before_turn_end 续命上限，映射到
+    /// `TurnConfig::max_hook_continues`。`None` = 用配置/默认值。
+    max_turns: Option<u32>,
     modes_override: Option<ModeCatalog>,
     hook_engine_override: Option<Arc<dyn HookEngine>>,
     builtin_registry: BuiltinRegistry,
@@ -194,6 +204,8 @@ impl CliAgentBuilder {
             extra_process_registries: Vec::new(),
             policy_override: None,
             non_interactive: false,
+            goal: None,
+            max_turns: None,
             modes_override: None,
             hook_engine_override: None,
             builtin_registry: BuiltinRegistry::defaults(),
@@ -276,6 +288,25 @@ impl CliAgentBuilder {
         self
     }
 
+    /// 启用 `--goal` 目标驱动循环：注册 `goal_done` 工具 + 挂 `goal-gate` hook
+    /// （`before_turn_end`），并把 [`GoalState`] 接进 session。agent 多轮自主跑
+    /// 直到调用 `goal_done`（达成）或撞 `max_hook_continues` 上限（`--max-turns`）。
+    ///
+    /// [`GoalState`]: defect_agent::session::GoalState
+    pub fn goal(mut self, objective: impl Into<String>) -> Self {
+        self.goal = Some(Arc::new(defect_agent::session::GoalState::new(
+            objective.into(),
+        )));
+        self
+    }
+
+    /// `--max-turns`：goal 模式下 before_turn_end 续命上限（映射到
+    /// `TurnConfig::max_hook_continues`）。撞上限后强制放停 + Exhausted 退出。
+    pub fn max_turns(mut self, max_turns: u32) -> Self {
+        self.max_turns = Some(max_turns);
+        self
+    }
+
     /// 覆盖权限模式目录。
     pub fn modes(mut self, modes: ModeCatalog) -> Self {
         self.modes_override = Some(modes);
@@ -324,6 +355,10 @@ impl CliAgentBuilder {
         let skills = project_skills(&skill_specs);
         let (registry, mut turn_config) = self.build_registry().await?;
         apply_profile_to_turn_config(&mut turn_config, self.profile.as_deref(), &profiles)?;
+        // `--max-turns`：goal 模式的续命上限。映射到 before_turn_end 续命硬上限。
+        if let Some(max_turns) = self.max_turns {
+            turn_config.max_hook_continues = max_turns;
+        }
 
         let sandbox_mode = self.resolve_sandbox_mode();
         let mut policy = self
@@ -356,7 +391,7 @@ impl CliAgentBuilder {
             default_model: turn_config.model.as_str(),
         };
 
-        let process_tools = self.build_process_tools(
+        let mut process_tools = self.build_process_tools(
             &profiles,
             &skills,
             &registry,
@@ -364,6 +399,14 @@ impl CliAgentBuilder {
             builtin_registry,
             &hook_rt,
         )?;
+        // `--goal` 模式：叠加 goal_done 工具，让模型能声明目标达成。
+        if self.goal.is_some() {
+            process_tools = overlay_process_tools(
+                process_tools,
+                &[Arc::new(defect_agent::tool::GoalDoneTool::new()) as Arc<dyn Tool>],
+                &[],
+            );
+        }
         let hook_engine = self.build_hook_engine(builtin_registry, &hook_rt, &skills_arc)?;
         let storage = self.build_storage()?;
         let resume_session_id = self.resolve_resume(storage.as_ref())?;
@@ -379,6 +422,9 @@ impl CliAgentBuilder {
             .hook_engine(hook_engine);
         if let Some(modes) = modes {
             core = core.modes(modes);
+        }
+        if let Some(goal) = &self.goal {
+            core = core.goal(goal.clone());
         }
         if let Some(storage) = storage {
             core = core
@@ -403,6 +449,7 @@ impl CliAgentBuilder {
             resume_session_id,
             sandbox_mode,
             turn_config,
+            goal: self.goal,
         })
     }
 
@@ -514,7 +561,8 @@ impl CliAgentBuilder {
         if let Some(hook_engine) = &self.hook_engine_override {
             return Ok(hook_engine.clone());
         }
-        if self.features.hooks || self.features.skills {
+        // `--goal` 也需要挂 goal-gate hook，即便用户既没配 [hooks] 也没 skill。
+        if self.features.hooks || self.features.skills || self.goal.is_some() {
             let empty_hooks = HooksConfig::default();
             let hooks_config = if self.features.hooks {
                 &self.config.effective.hooks
@@ -526,6 +574,7 @@ impl CliAgentBuilder {
                 builtin_registry,
                 hook_rt,
                 skills,
+                self.goal.as_ref(),
             )
             .map_err(|e| anyhow::anyhow!("hook engine build failed: {e}"));
         }

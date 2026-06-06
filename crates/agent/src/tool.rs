@@ -33,9 +33,11 @@ use crate::session::EventEmitter;
 use crate::shell::ShellBackend;
 
 mod background_tasks;
+mod goal_done;
 mod skill;
 mod spawn_agent;
 pub use background_tasks::{CancelBackgroundTaskTool, InspectBackgroundTaskTool};
+pub use goal_done::{GOAL_DONE_TOOL_NAME, GoalDoneTool};
 pub use skill::{SkillEntry, SkillTool, SkillTriggers};
 pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
 
@@ -189,6 +191,11 @@ pub struct ToolContext<'a> {
     /// 传下去，子 agent 不会拿到陈旧的进程级默认。`None` 时 `spawn_agent`
     /// 回退到构造期捕获的 policy（测试 / 未注入场景）。绝大多数工具忽略本字段。
     pub policy: Option<Arc<dyn crate::policy::SandboxPolicy>>,
+    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下，
+    /// `goal_done` 工具调用 [`crate::session::GoalState::mark_reached`] 置位；
+    /// `goal-gate` hook 在 turn 自愿停止时据此决定放行还是续命。`None` = 非目标
+    /// 模式（默认），`goal_done` 工具不会被注册，本字段无人读。
+    pub goal: Option<Arc<crate::session::GoalState>>,
     /// 从当前层起还能再派发多少层 subagent。顶层 turn = 配置的初始上限；
     /// `spawn_agent` 为子 agent 嵌套 turn 注入时减一。`0` ⇒ 子 agent 拿不到
     /// `spawn_agent` 工具（深度耗尽，结构性禁止继续递归）——取代旧的"白名单永不
@@ -248,6 +255,7 @@ impl<'a> ToolContext<'a> {
             background: None,
             subagent_bridge: None,
             policy: None,
+            goal: None,
             subagent_depth: 0,
         }
     }
@@ -275,6 +283,14 @@ impl<'a> ToolContext<'a> {
     #[must_use]
     pub fn with_background(mut self, background: crate::session::BackgroundTasks) -> Self {
         self.background = Some(background);
+        self
+    }
+
+    /// 注入 `--goal` 目标驱动循环的共享状态。`goal_done` 工具据它置位 reached；
+    /// 不调用则 `goal` 为 `None`（非目标模式，默认）。
+    #[must_use]
+    pub fn with_goal(mut self, goal: Arc<crate::session::GoalState>) -> Self {
+        self.goal = Some(goal);
         self
     }
 
