@@ -3,9 +3,45 @@
 //! 与 `defect-config` 的 `LoadConfigOptions::cli` 对齐——CLI flag 优先级
 //! 见 `docs/internal/config.md` §2 / `defect_config::CliOverrides`。
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
-use defect_config::{CliOverrides, ProviderKind as ConfigProviderKind, parse_cli_override};
+use defect_config::{
+    CliOverrides, ProviderKind as ConfigProviderKind, SandboxMode, parse_cli_override,
+};
+
+/// `--sandbox` 取值。本地镜像 [`SandboxMode`]，让 clap 直接渲染可选值；
+/// config crate 不依赖 clap，故不在那侧 derive `ValueEnum`（沿用 provider
+/// 的"CLI 侧解析"模式）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SandboxModeArg {
+    ReadOnly,
+    AskWrites,
+    Open,
+    DenyAll,
+}
+
+impl From<SandboxModeArg> for SandboxMode {
+    fn from(arg: SandboxModeArg) -> Self {
+        match arg {
+            SandboxModeArg::ReadOnly => SandboxMode::ReadOnly,
+            SandboxModeArg::AskWrites => SandboxMode::AskWrites,
+            SandboxModeArg::Open => SandboxMode::Open,
+            SandboxModeArg::DenyAll => SandboxMode::DenyAll,
+        }
+    }
+}
+
+/// `--message` 单轮模式的 stdout 输出形态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum OutputFormat {
+    /// 纯文本，无 ANSI：助手正文到 stdout，思考/工具到 stderr。
+    #[default]
+    Text,
+    /// 每个 `AgentEvent` 一行 JSON（NDJSON）到 stdout。
+    Json,
+    /// 过程静默，仅在结束时输出最终结果 / 错误。
+    Quiet,
+}
 
 /// Headless agent over ACP/stdio.
 #[derive(Debug, Parser)]
@@ -24,6 +60,17 @@ pub struct CliArgs {
     /// Override the default model id. CLI flag wins over DEFECT_MODEL env.
     #[arg(long, env = "DEFECT_MODEL")]
     pub model: Option<String>,
+
+    /// Override the sandbox permission mode. CLI flag wins over config
+    /// `[sandbox].mode`. Useful for CI: `--sandbox open` runs every tool
+    /// without prompting. Note `--repl` always forces `open` regardless.
+    #[arg(long, value_enum)]
+    pub sandbox: Option<SandboxModeArg>,
+
+    /// Shortcut for `--sandbox open`: grant maximum permissions, run every
+    /// tool without prompting. Mutually exclusive with `--sandbox`.
+    #[arg(long, conflicts_with = "sandbox")]
+    pub yolo: bool,
 
     /// Run the whole session as a named subagent profile (from
     /// `.defect/agents/<name>/` or `~/.config/defect/agents/<name>/`).
@@ -55,6 +102,19 @@ pub struct CliArgs {
     /// built with `--no-default-features` rejects this flag at runtime.
     #[arg(long)]
     pub repl: bool,
+
+    /// Run a single prompt turn headlessly and exit (CI / scripting). The
+    /// assistant output goes to stdout; the process exit code reflects the
+    /// turn outcome. A value of `-`, or no value while stdin is piped, reads
+    /// the prompt from stdin. Combine with `--resume` to continue a previous
+    /// session. Mutually exclusive with `--repl`. Requires the `oneshot`
+    /// build feature (on by default).
+    #[arg(long, value_name = "PROMPT", conflicts_with = "repl")]
+    pub message: Option<String>,
+
+    /// Output format for `--message` mode.
+    #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+    pub format: OutputFormat,
 }
 
 impl CliArgs {
@@ -65,9 +125,16 @@ impl CliArgs {
             .iter()
             .map(|spec| parse_cli_override(spec).map_err(|e| anyhow::anyhow!("{e}")))
             .collect::<anyhow::Result<Vec<_>>>()?;
+        // `--yolo` 是 `--sandbox open` 的糖（clap 已保证二者互斥）。
+        let sandbox = if self.yolo {
+            Some(SandboxMode::Open)
+        } else {
+            self.sandbox.map(SandboxMode::from)
+        };
         Ok(CliOverrides {
             provider: self.provider.as_deref().map(ConfigProviderKind::from),
             model: self.model.clone(),
+            sandbox,
             config_overrides,
         })
     }

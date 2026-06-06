@@ -55,6 +55,14 @@ pub(crate) fn build_cli_layer(cli: &CliOverrides) -> Result<Option<ConfigLayerEn
         apply_toml_override(&mut root, "default.model", TomlValue::String(model.clone()));
         has_values = true;
     }
+    if let Some(sandbox) = &cli.sandbox {
+        apply_toml_override(
+            &mut root,
+            "sandbox.mode",
+            TomlValue::String(sandbox.as_str().to_string()),
+        );
+        has_values = true;
+    }
 
     if !has_values {
         return Ok(None);

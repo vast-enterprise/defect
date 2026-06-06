@@ -34,6 +34,10 @@ pub mod policy;
 pub mod providers;
 #[cfg(feature = "repl")]
 pub mod repl;
+#[cfg(feature = "oneshot")]
+pub mod oneshot;
+#[cfg(any(feature = "repl", feature = "oneshot"))]
+pub mod session_open;
 pub mod tools;
 
 #[cfg(test)]

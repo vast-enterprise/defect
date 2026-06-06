@@ -13,7 +13,7 @@ use agent_client_protocol_schema::SessionId;
 use defect_agent::hooks::HookEngine;
 use defect_agent::hooks::builtin::BuiltinRegistry;
 use defect_agent::llm::{ProviderEntry, ProviderRegistry};
-use defect_agent::policy::{ModeCatalog, SandboxPolicy};
+use defect_agent::policy::{ModeCatalog, NonInteractivePolicy, SandboxPolicy};
 use defect_agent::session::{
     AgentCore, DefaultAgentCore, SessionObserver, SessionToolFactory, StaticToolRegistry,
     ToolRegistry, TurnConfig,
@@ -167,6 +167,7 @@ pub struct CliAgentBuilder {
     extra_process_tools: Vec<Arc<dyn Tool>>,
     extra_process_registries: Vec<Arc<dyn ToolRegistry>>,
     policy_override: Option<Arc<dyn SandboxPolicy>>,
+    non_interactive: bool,
     modes_override: Option<ModeCatalog>,
     hook_engine_override: Option<Arc<dyn HookEngine>>,
     builtin_registry: BuiltinRegistry,
@@ -192,6 +193,7 @@ impl CliAgentBuilder {
             extra_process_tools: Vec::new(),
             extra_process_registries: Vec::new(),
             policy_override: None,
+            non_interactive: false,
             modes_override: None,
             hook_engine_override: None,
             builtin_registry: BuiltinRegistry::defaults(),
@@ -266,6 +268,14 @@ impl CliAgentBuilder {
         self
     }
 
+    /// 用 [`NonInteractivePolicy`] 包裹最终 policy：内层返回 `Ask` 时降级为
+    /// `Deny`，避免无 TTY 环境（`--message` 单轮模式）挂死在权限确认上。
+    /// `Allow` / `Deny` 原样透传。
+    pub fn non_interactive(mut self) -> Self {
+        self.non_interactive = true;
+        self
+    }
+
     /// 覆盖权限模式目录。
     pub fn modes(mut self, modes: ModeCatalog) -> Self {
         self.modes_override = Some(modes);
@@ -316,15 +326,25 @@ impl CliAgentBuilder {
         apply_profile_to_turn_config(&mut turn_config, self.profile.as_deref(), &profiles)?;
 
         let sandbox_mode = self.resolve_sandbox_mode();
-        let policy = self
+        let mut policy = self
             .policy_override
             .clone()
             .unwrap_or_else(|| build_policy(sandbox_mode));
-        let modes = self.modes_override.clone().or_else(|| {
-            self.features
-                .modes
-                .then(|| build_mode_catalog(sandbox_mode))
-        });
+        // 非交互（`--message`）：用 NonInteractivePolicy 包裹，且**不**装配 ModeCatalog。
+        // 关键：DefaultSession 装配了 catalog 时，active policy 取自 catalog 当前模式
+        // （`session_policy_state`），会绕过这里的 `policy`——包装就失效，Ask 不降级、
+        // 在无 TTY 下永久挂死。oneshot 没有 `set_mode` 客户端，catalog 本就无意义，
+        // 故直接置空，让 session 回退到这份包装过的 policy。
+        let modes = if self.non_interactive {
+            policy = Arc::new(NonInteractivePolicy::new(policy));
+            None
+        } else {
+            self.modes_override.clone().or_else(|| {
+                self.features
+                    .modes
+                    .then(|| build_mode_catalog(sandbox_mode))
+            })
+        };
 
         let skills_arc = Arc::new(skills.clone());
         if self.features.skills {

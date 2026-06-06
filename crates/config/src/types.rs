@@ -170,6 +170,7 @@ pub enum ConfigError {
 pub struct CliOverrides {
     pub provider: Option<ProviderKind>,
     pub model: Option<String>,
+    pub sandbox: Option<SandboxMode>,
     pub config_overrides: Vec<(String, TomlValue)>,
 }
 

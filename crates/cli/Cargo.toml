@@ -34,12 +34,18 @@ default = [
     "provider-deepseek",
     "yaml",
     "repl",
+    "oneshot",
 ]
 
 # `--repl`：进程内最小交互 REPL（tokio stdin/stdout + owo-colors 着色），
 # 不走 ACP。可裁剪：`--no-default-features` 时不编译 repl 模块也不拖入
 # owo-colors，`--repl` flag 在运行期报错提示重新带 feature 编译。
 repl = ["dep:owo-colors", "dep:crossterm"]
+
+# `--message`：单轮无人值守模式（CI / 脚本）。与 `repl` 解耦——本 feature 不拖入
+# owo-colors / crossterm，故 `--no-default-features --features oneshot` 能编出
+# 不含 TUI 依赖的精简 CI 二进制。serde_json 已是无条件依赖，无需额外 dep。
+oneshot = []
 
 # 转发给 defect-llm 的同名 feature。
 provider-anthropic = ["defect-llm/provider-anthropic"]

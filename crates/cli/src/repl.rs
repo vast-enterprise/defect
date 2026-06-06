@@ -37,12 +37,13 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use defect_agent::event::AgentEvent;
 use defect_agent::llm::{Message, MessageContent, Role};
-use defect_agent::session::{AgentCore, Frontend, TurnError, new_session_id};
-use defect_tools::{LocalFsBackend, LocalShellBackend};
+use defect_agent::session::{AgentCore, TurnError};
 use futures::{FutureExt, StreamExt};
 use owo_colors::OwoColorize;
 use tokio::io::{AsyncWriteExt, Stdout};
 use tokio::sync::mpsc;
+
+use crate::session_open::open_session;
 
 /// 跑一个交互 REPL，直到 stdin EOF（Ctrl-D）或读到 `:q` / `:quit` / `:exit`。
 ///
@@ -55,29 +56,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let mut out = tokio::io::stdout();
 
-    // 本机直跑：fs/shell 都用 local 后端，frontend 标 Cli。
-    let fs = Arc::new(LocalFsBackend::new(cwd.clone()));
-    let shell = Arc::new(LocalShellBackend::new());
-    let session = match resume {
-        Some(id) => agent
-            .load_session(id, fs, shell, Frontend::Cli)
-            .await
-            .map_err(|e| anyhow::anyhow!("load_session failed: {e}"))?,
-        None => {
-            let session_id = SessionId::new(new_session_id());
-            agent
-                .create_session(
-                    session_id,
-                    cwd.clone(),
-                    Vec::new(),
-                    fs,
-                    shell,
-                    Frontend::Cli,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("create_session failed: {e}"))?
-        }
-    };
+    let session = open_session(&agent, &cwd, resume).await?;
 
     let banner = format!(
         "defect repl — {} @ {}\n\
