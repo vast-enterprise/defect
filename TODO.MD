@@ -23,13 +23,10 @@
 | 域       | 功能点                                                         | 文档                                                                    | 优先级 | 完成情况 |
 | -------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- | ------ | -------- |
 | inbound  | ACP slash commands（`session/commands` 暴露 + 触发桥接）       | `docs/inbound/acp-slash-commands.md`                                    | P1     | 🕒 未开始 |
-| internal | 上下文 microcompact（Phase 2：原地把旧 tool_result 替换成占位、不调 LLM；现有结构化摘要压缩已落地） | `docs/internal/turn-loop.md` §4 | P2 | 🕒 未开始 |
 | internal | Workspace Checkpoint / Undo（git 隐藏引用做 turn 级文件快照，可回滚、不污染用户分支） | `docs/internal/workspace-checkpoints.md` | P2 | 🕒 未开始（设计已写） |
 | internal | LSP 语义理解（诊断注入、跳转定义、查找引用；P1 可用 hook 跑 linter 过渡） | `docs/report/lsp-integration-survey.md`（调研报告，待转设计） | P2 | 🕒 未开始 |
 | internal | 用 `schemars` 从 args struct 生成 Tool 参数 schema（替代手写 `json!`） | `docs/proposals/tool-schema-via-schemars.md` | P2 | 🕒 未开始（提案） |
 | internal | 任务编排（task arrange）                                       | `docs/proposals/task-arrange.md`（仅占位标题，内容待写）                | P2     | 🕒 未开始 |
-| internal | 同步 Hook 统一控制模型（hook = 改 ctx + `ControlFlow<TurnEnd>`；Stop/turn-end 续命、PreCompact 否决、PostToolBatch、替换旧 `HookOutcome`） | `docs/proposals/sync-hook-control-model.md` | P1 | 🕒 未开始（设计已定稿） |
-| internal | Hook async/observe 事件接入（核心 gap=投影器缺失；数据源 6/8 就绪，详见下方说明。注：`TurnEnd`/`PreCompact` 已按 sync-hook 提案迁回同步，不在 observe 范围） | `docs/internal/hooks.md` §7.2 / §11 | P2 | 🕒 未开始（仅 enum 占位） |
 
 ---
 
@@ -38,7 +35,6 @@
 | 域       | 功能点                                                         | 文档                          | 完成情况 |
 | -------- | -------------------------------------------------------------- | ----------------------------- | -------- |
 | outbound | tracing OTLP exporter（导出到外部 collector；走 tracing-opentelemetry Layer，权衡见 langfuse 文档 §8） | `docs/internal/observability-langfuse.md` §8 | 🕒 未开始 |
-| outbound | ObsContext 透传：工具内 embedding/后端调用挂回 langfuse trace | `docs/internal/observability-langfuse.md` §5 | 🕒 未开始 |
 | outbound | Provider/protocol polyfills（azure-openai、openai-responses、gemini-generate-content、bedrock-converse、ollama-native、vertex-anthropic、OpenAI 兼容预设集） | `docs/proposals/provider-protocol-polyfills.md` | 🕒 未开始（backlog，等真实场景） |
 | outbound | Hosted web_search（各 provider wire codec；现 capabilities 一律返回 false） | `docs/internal/capabilities.md` §143 | 🕒 未开始 |
 | outbound | HTTP 层增强：分阶段超时（connect/header/body）、retry & timeout & proxy 的 wiremock e2e、SSE 流中途 resume-from-last-event-id | `docs/outbound/http.md` §6 / §9 | 🕒 未开始 |
