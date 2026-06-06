@@ -1,8 +1,22 @@
 [package]
 name = "defect-cli"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "defect: a highly configurable, ACP-native, resource-frugal headless general-purpose agent CLI."
+
+# cargo-binstall：让下游 `cargo binstall defect-cli` 直接拉 GitHub Release 的预构建二进制，
+# 免去从源码 fat-LTO 全量编译。asset 命名与 .github/workflows/release.yml 的打包步骤对齐：
+# defect-v<version>-<target>.{tar.gz|zip}，归档内二进制位于根部（defect / defect.exe）。
+# 注意 tag 带 `v` 前缀而 { version } 不含，故模板里显式补 `v`。
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/defect-v{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
 
 [lib]
 name = "defect_cli"

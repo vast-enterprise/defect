@@ -1,0 +1,67 @@
+name: publish-crates
+
+# 把 workspace 各 crate 发布到 crates.io。
+#
+# ⚠️ 目前仅手动触发，且默认 dry-run——发布准备就绪、但尚未真正首发。
+# 真发布前需要：
+#   1. 在仓库 Secrets 配好 CARGO_REGISTRY_TOKEN（crates.io API token）。
+#   2. 确认各 crate 名未被占用、版本号已 bump。
+#   3. 先跑一次 dry_run=true 确认每个 crate 都能 package 通过。
+#
+# 发布顺序按内部依赖拓扑排序：被依赖者先发，否则 crates.io 解析不到依赖版本。
+# 顺序来源（真实 [dependencies]，已排除注释与 dev-deps）：
+#   agent, sandbox 无内部依赖 → 最先
+#   config/http/storage 依赖 agent
+#   tools 依赖 agent+config；llm/mcp/obs 依赖 agent+http
+#   acp 依赖 agent+tools+storage
+#   cli 依赖所有
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只 package 校验、不真正发布（强烈建议首次保持 true）"
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish crates in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 拓扑顺序：被依赖的 crate 在前。
+          CRATES=(
+            defect-agent
+            defect-sandbox
+            defect-config
+            defect-http
+            defect-storage
+            defect-tools
+            defect-llm
+            defect-mcp
+            defect-obs
+            defect-acp
+            defect-cli
+          )
+          FLAGS="--locked"
+          if [ "$DRY_RUN" = "true" ]; then
+            FLAGS="$FLAGS --dry-run"
+            echo "::notice::DRY RUN —— 仅 package 校验，不会真正发布"
+          fi
+          for c in "${CRATES[@]}"; do
+            echo "::group::publish $c"
+            cargo publish -p "$c" $FLAGS
+            echo "::endgroup::"
+            # 真发布时给 crates.io 索引留出传播时间，否则后一个 crate 可能解析不到刚发的依赖。
+            if [ "$DRY_RUN" != "true" ]; then sleep 30; fi
+          done

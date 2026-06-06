@@ -1,0 +1,119 @@
+name: release
+
+# 推 `v*` tag 时触发：跨平台构建 `defect` 二进制，打包上传到 GitHub Release。
+# 各 target 用对应平台的原生 runner 构建——bedrock provider 默认拖入 aws-lc-sys
+# （C/汇编），原生编译比 cross-compile 省心得多，避开交叉工具链与 sysroot 折腾。
+on:
+  push:
+    tags:
+      - "v*"
+  # 允许手动触发跑一次完整矩阵（不发 release，仅验证构建 + 产物 artifact）。
+  workflow_dispatch:
+
+permissions:
+  contents: write  # 创建 Release / 上传 asset 需要
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          # 全静态 musl 二进制：免 glibc 版本依赖，可在任意 linux 落地即跑。
+          # 去掉 bedrock —— aws-lc-sys 在 musl 上构建脆弱，而 anthropic/openai 走的
+          # rustls+ring 路径在 musl 下干净静态可编。需要 bedrock 的用户用 gnu 版。
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            build_args: "--no-default-features --features provider-anthropic,provider-openai,provider-deepseek,yaml,repl,oneshot"
+          - target: x86_64-apple-darwin
+            os: macos-13       # Intel runner
+          - target: aarch64-apple-darwin
+            os: macos-latest   # Apple Silicon runner
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false  # docs/ 下的参考子模块与构建无关，跳过省时间
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # aws-lc-sys 在部分平台需要 NASM（Windows）/ cmake；ubuntu/macos runner 已自带 cmake。
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      # musl target 需要 musl-gcc 链接 C 依赖（ring 的汇编 stub 等）。
+      - name: Install musl tools
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build (dist profile)
+        run: cargo build --bin defect --profile dist --locked --target ${{ matrix.target }} ${{ matrix.build_args }}
+
+      # 打包：unix 用 tar.gz，windows 用 zip。命名 defect-<tag>-<target>.<ext>。
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/dist/defect"
+          PKG="defect-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$PKG" -C "$(dirname "$BIN")" defect
+          echo "ASSET=$PKG" >> "$GITHUB_ENV"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/dist/defect.exe"
+          PKG="defect-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          7z a "$PKG" "$BIN"
+          echo "ASSET=$PKG" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # 仅在 tag push 时真正发 release；workflow_dispatch 只产 artifact 供验证。
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # 汇总所有归档的 SHA256 到单个 SHASUMS256.txt（格式同 `sha256sum`，
+      # 下游可 `sha256sum -c` 校验）。一并作为 release asset 上传。
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum * > SHASUMS256.txt
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

@@ -1,8 +1,10 @@
 [package]
 name = "defect-acp"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Agent Client Protocol (ACP) server and session layer for the defect headless agent."
 
 [dependencies]
 defect-agent.workspace = true

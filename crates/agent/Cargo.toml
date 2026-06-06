@@ -1,8 +1,10 @@
 [package]
 name = "defect-agent"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Core agent runtime for defect: turn loop, context compaction, tools and session orchestration."
 
 [dependencies]
 agent-client-protocol-schema.workspace = true

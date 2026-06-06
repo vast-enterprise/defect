@@ -1,8 +1,10 @@
 [package]
 name = "defect-tools"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Built-in tool implementations (filesystem, shell, subagents, skills) for the defect agent."
 
 [dependencies]
 defect-agent.workspace = true

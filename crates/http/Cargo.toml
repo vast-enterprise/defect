@@ -1,8 +1,10 @@
 [package]
 name = "defect-http"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "HTTP client service layer for defect, bridging generated wire types to provider transports."
 
 [dependencies]
 defect-agent.workspace = true

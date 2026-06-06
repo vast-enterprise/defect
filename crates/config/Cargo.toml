@@ -1,8 +1,10 @@
 [package]
 name = "defect-config"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Layered TOML configuration loading and merging for the defect agent."
 
 [features]
 # YAML frontmatter 支持（单文件 profile 的 `---` 头，社区标准；未来 skill

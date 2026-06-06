@@ -1,8 +1,10 @@
 [package]
 name = "defect-llm"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "LLM provider implementations (Anthropic, Bedrock, OpenAI, DeepSeek) for the defect agent."
 
 [lib]
 # 关掉本 crate 的 doctest。本 crate 唯一的 doctest 来源是 `wire/*`——它们由

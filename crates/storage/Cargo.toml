@@ -1,8 +1,10 @@
 [package]
 name = "defect-storage"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Session persistence and storage backend for the defect agent."
 
 [dependencies]
 defect-agent.workspace = true
