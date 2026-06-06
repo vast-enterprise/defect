@@ -196,7 +196,7 @@ P1 推荐的顶层 TOML 结构：
 
 ```toml
 [default]
-provider = "echo"
+provider = "defect"
 model = "echo"
 
 [base_prompt]
@@ -319,7 +319,7 @@ x-mcp-test = "enabled"
 说明：
 
 - `default.provider` / `default.model` 是全局默认选择。
-- `default.provider` 可指向内置 provider（`echo` / `anthropic` / `openai` / `deepseek` / `litellm`），也可指向 `[providers.<name>]` 中声明的自定义 provider。
+- `default.provider` 可指向内置 provider（`defect` 内置回送兜底 / `anthropic` / `openai` / `deepseek` / `litellm`），也可指向 `[providers.<name>]` 中声明的自定义 provider。
 - `providers.<name>.default_model` 是该 provider 的默认模型；当当前 provider 命中时可作为回退值。
 - `providers.<name>.models` 是该 provider 允许暴露的模型集合。
 - `providers.<name>.protocol` 是协议编解码选择，不是一个独立 instance 概念。P1 自定义 provider 只支持 `openai-chat`；后续 Bedrock 这类 provider 会复用其它 protocol 但单独处理 transport / auth。

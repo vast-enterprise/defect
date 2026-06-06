@@ -19,7 +19,9 @@ use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
 use defect_agent::fs::FsBackend;
 use defect_agent::llm::{ModelCandidate, ProviderError, ReasoningEffort};
-use defect_agent::session::{AgentCore, AgentError, Frontend, Session, TurnError, new_session_id};
+use defect_agent::session::{
+    AgentCore, AgentError, Frontend, ModelSelection, Session, TurnError, new_session_id,
+};
 use defect_agent::shell::ShellBackend;
 use defect_tools::{LocalFsBackend, LocalShellBackend};
 use futures::StreamExt;
@@ -303,6 +305,11 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
     //    时退而只列当前模型，保证 dropdown 非空。
     {
         let current_model = session.current_model();
+        let current_vendor = session.provider_info().vendor;
+        // 选择键是 (vendor, model) 对——同名 model 可来自多个 provider。value id
+        // 编码成 `vendor::model`（vendor 是 TOML section 名，不含 `::`；model 可含
+        // 任意字符，故解析时按首个 `::` 切）。当前值同样编码这对。
+        let current_value = encode_model_value(&current_vendor, &current_model);
         let candidates = session.list_candidates().await.unwrap_or_default();
         let mut model_options = candidates
             .into_iter()
@@ -313,19 +320,20 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
                     .clone()
                     .unwrap_or_else(|| c.model.id.clone());
                 let description = model_option_description(&c);
-                SessionConfigSelectOption::new(SessionConfigValueId::new(c.model.id), name)
+                let value = encode_model_value(&c.provider.vendor, &c.model.id);
+                SessionConfigSelectOption::new(SessionConfigValueId::new(value), name)
                     .description(Some(description))
             })
             .collect::<Vec<_>>();
         if !model_options
             .iter()
-            .any(|o| o.value.0.as_ref() == current_model)
+            .any(|o| o.value.0.as_ref() == current_value)
         {
             // 兜底：候选里没有当前模型（理论不该发生）。仍列出它，避免空 dropdown。
             model_options.insert(
                 0,
                 SessionConfigSelectOption::new(
-                    SessionConfigValueId::new(current_model.clone()),
+                    SessionConfigValueId::new(current_value.clone()),
                     current_model.clone(),
                 ),
             );
@@ -334,7 +342,7 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
             SessionConfigOption::select(
                 MODEL_CONFIG_ID,
                 "Model",
-                SessionConfigValueId::new(current_model),
+                SessionConfigValueId::new(current_value),
                 model_options,
             )
             .category(Some(SessionConfigOptionCategory::Model))
@@ -417,6 +425,26 @@ fn model_option_description(candidate: &ModelCandidate) -> String {
         parts.push("deprecated".to_string());
     }
     parts.join(", ")
+}
+
+/// 模型选择器 value id 的分隔符。vendor 是 TOML `[providers.<name>]` 段名，不含
+/// `::`；model id 可含任意字符（如 `us.anthropic.claude:1`），故 [`decode_model_value`]
+/// 只按**首个** `::` 切，保证 model 一侧完整保留。
+const MODEL_VALUE_SEP: &str = "::";
+
+/// 把 `(vendor, model)` 选择对编码成单个 ACP value id。
+fn encode_model_value(vendor: &str, model: &str) -> String {
+    format!("{vendor}{MODEL_VALUE_SEP}{model}")
+}
+
+/// 把 [`encode_model_value`] 产出的 value id 解码回 [`ModelSelection`]。无分隔符
+/// （非法/老格式）⇒ `None`。
+fn decode_model_value(value: &str) -> Option<ModelSelection> {
+    let (vendor, model) = value.split_once(MODEL_VALUE_SEP)?;
+    Some(ModelSelection {
+        provider: vendor.to_string(),
+        model: model.to_string(),
+    })
 }
 
 /// 连接级共享状态。`serve_on` 给每个 handler 克隆一份 `Arc<ServeState>`。
@@ -711,10 +739,13 @@ impl ServeState {
         let apply_result = match config_id.as_str() {
             // 模型：转调 session.set_model（与 deprecated `session/set_model`
             // 同一后端）。未知 / 越界 model id → InvalidConfigOption。
-            MODEL_CONFIG_ID => session
-                .set_model(value.clone())
-                .await
-                .map_err(|_| invalid_value()),
+            MODEL_CONFIG_ID => match decode_model_value(&value) {
+                Some(selection) => session
+                    .set_model(selection)
+                    .await
+                    .map_err(|_| invalid_value()),
+                None => Err(invalid_value()),
+            },
             // 权限模式：转调 session.set_mode（与 deprecated `session/set_mode`
             // 同一后端）。未知 mode id → InvalidConfigOption。
             MODE_CONFIG_ID => session.set_mode(value.clone()).map_err(|_| invalid_value()),

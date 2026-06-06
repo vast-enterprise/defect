@@ -69,7 +69,7 @@ pub async fn build_registry(
     let http_config = build_http_stack_config(&config.effective.http)?;
     let entries = build_provider_entries(config, http_config).await?;
     let turn_config = config.effective.turn.clone();
-    let registry = ProviderRegistry::new(entries, &turn_config.model)
+    let registry = ProviderRegistry::new(entries, &turn_config.provider, &turn_config.model)
         .map_err(|e| anyhow::anyhow!("provider registry init failed: {e}"))?;
     Ok((Arc::new(registry), turn_config))
 }
@@ -136,7 +136,7 @@ pub async fn build_single_llm_provider(
     http_config: defect_http::HttpStackConfig,
 ) -> anyhow::Result<Arc<dyn LlmProvider>> {
     match provider_kind {
-        ConfigProviderKind::Echo => Ok(Arc::new(EchoProvider::new()) as Arc<dyn LlmProvider>),
+        ConfigProviderKind::Defect => Ok(Arc::new(EchoProvider::new()) as Arc<dyn LlmProvider>),
         #[cfg(feature = "provider-anthropic")]
         ConfigProviderKind::Anthropic => Ok(Arc::new(
             AnthropicProvider::new(AnthropicConfig {
@@ -292,7 +292,7 @@ fn provider_session_capabilities(
             .litellm
             .capabilities
             .merge_into(config.effective.capabilities),
-        ConfigProviderKind::Echo => config.effective.capabilities,
+        ConfigProviderKind::Defect => config.effective.capabilities,
         ConfigProviderKind::Custom(name) => config
             .effective
             .providers

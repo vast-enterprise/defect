@@ -257,6 +257,7 @@ impl Tool for SpawnAgentTool {
         let shell = ctx.shell.clone();
         let http = ctx.http.clone();
         let parent_model = ctx.current_model.to_string();
+        let parent_provider = ctx.current_provider.to_string();
         let background = ctx.background.clone();
         // subagent 事件桥：把子 turn 事件嵌套回父 trace（observability）。
         let bridge = ctx.subagent_bridge.clone();
@@ -312,6 +313,7 @@ impl Tool for SpawnAgentTool {
                     shell,
                     http,
                     parent_model,
+                    parent_provider,
                     subagent_depth,
                     // 后台路径**也桥接**——与前台同一套 `AgentEvent::Subagent` 机制。
                     // 发起它的 spawn_agent tool span 会先正常 close（下方"已启动"的
@@ -373,6 +375,7 @@ impl Tool for SpawnAgentTool {
                 shell,
                 http,
                 parent_model,
+                parent_provider,
                 subagent_depth,
                 // 同步路径：父 spawn_agent tool span 全程张开（阻塞等子 turn），
                 // 子事件可嵌套其下。
@@ -411,6 +414,10 @@ struct SubagentDeps {
     shell: Arc<dyn crate::shell::ShellBackend>,
     http: Arc<dyn crate::http::HttpClient>,
     parent_model: String,
+    /// 父会话当前选中的 provider vendor。与 `parent_model` 组成 `(vendor, model)`
+    /// 选择对——子 agent model 回落到父选择时按这对精确解析 entry。空串表示父 ctx
+    /// 未注入 vendor（旧/测试路径），此时回退到按裸 model id 取首个 entry。
+    parent_provider: String,
     /// 本层（发起方）turn 的剩余派发深度。子 turn 跑在 `subagent_depth - 1` 上；
     /// 子工具集含 spawn_agent 当且仅当那个减一后的值 `> 0`（见 run_subagent_core）。
     subagent_depth: u32,
@@ -451,6 +458,7 @@ async fn run_subagent_core(
         shell,
         http,
         parent_model,
+        parent_provider,
         subagent_depth,
         bridge,
         task_handle,
@@ -465,12 +473,18 @@ async fn run_subagent_core(
     };
 
     // model 优先级：本次调用入参 > profile 指定 > 父会话当前选中的 model。
-    let model = parsed
-        .model
-        .clone()
-        .or_else(|| profile.model.clone())
-        .unwrap_or(parent_model);
-    let Some(entry) = registry.entry_for_model(&model) else {
+    // 仅当 model 来自父回落（无显式覆盖）时，才连父的 provider vendor 一起继承，
+    // 按 `(vendor, model)` 对精确解析（多网关同模型下不会选错 provider）。显式
+    // 覆盖了 model 时没有 provider 维度信息——退回按裸 model id 取首个 entry。
+    let model_override = parsed.model.clone().or_else(|| profile.model.clone());
+    let inherits_parent = model_override.is_none();
+    let model = model_override.unwrap_or(parent_model);
+    let entry = if inherits_parent && !parent_provider.is_empty() {
+        registry.entry_for(&parent_provider, &model)
+    } else {
+        registry.first_entry_for_model(&model)
+    };
+    let Some(entry) = entry else {
         return Err(ToolError::Execution(BoxError::new(io_err(format!(
             "subagent model `{model}` is not declared by any provider entry"
         )))));

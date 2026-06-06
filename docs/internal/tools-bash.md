@@ -257,7 +257,7 @@ fn resolve_workdir(cwd: &Path, requested: Option<&str>) -> Result<PathBuf, ToolE
 
 工具自己只产 `Destructive`。policy 决定 `Allow` / `Deny` / `Ask`：
 
-- 用户的 `--policy open`（cli 默认 echo provider 时也走这个）→ 一律 Allow，命令直接跑
+- 用户的 `--policy open`（cli 默认 defect provider 时也走这个）→ 一律 Allow，命令直接跑
 - 用户 `--policy ask_writes`（默认）→ 每条 bash 都 Ask；用户选 `AllowAlways` 后 policy 内部记 `tool_name="bash"` 加白
 - 用户 `--policy read_only` → 一律 Deny（bash 不该跑）；主循环把 "denied by policy" 当 tool_result 喂回 LLM
 

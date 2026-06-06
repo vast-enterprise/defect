@@ -239,6 +239,10 @@ fn build_effective_config(
     };
 
     let mut turn = TurnConfig {
+        // `ProviderKind::as_str()` 即运行时的 vendor 字符串（与
+        // `cli/providers.rs` 给每个 provider 装的 `ProviderInfo.vendor` 一致），
+        // 故它就是选择对的 provider 半边。
+        provider: provider.as_str().to_string(),
         model: model.clone(),
         allowed_models,
         base_prompt: BasePromptConfig {
@@ -523,7 +527,7 @@ fn raw_provider_config<'a>(
     provider: &ProviderKind,
 ) -> Option<&'a ProviderSection> {
     match provider {
-        ProviderKind::Echo => None,
+        ProviderKind::Defect => None,
         ProviderKind::Anthropic => providers.anthropic.as_ref(),
         ProviderKind::Openai => providers.openai.as_ref(),
         ProviderKind::Deepseek => providers.deepseek.as_ref(),
@@ -598,7 +602,7 @@ fn provider_default_model(
         return Some(default_model);
     }
     match provider {
-        ProviderKind::Echo => Some(DEFAULT_ECHO_MODEL.to_string()),
+        ProviderKind::Defect => Some(DEFAULT_ECHO_MODEL.to_string()),
         ProviderKind::Anthropic => Some(DEFAULT_ANTHROPIC_MODEL.to_string()),
         ProviderKind::Openai => Some(DEFAULT_OPENAI_MODEL.to_string()),
         ProviderKind::Deepseek => Some(DEFAULT_DEEPSEEK_MODEL.to_string()),

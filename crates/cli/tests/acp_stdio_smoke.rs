@@ -26,7 +26,7 @@ async fn stdio_echo_round_trip() {
         process_cwd.path().display().to_string(),
         binary.display().to_string(),
         "--provider".to_string(),
-        "echo".to_string(),
+        "defect".to_string(),
     ])
     .expect("valid defect command");
 

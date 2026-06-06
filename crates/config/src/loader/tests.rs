@@ -39,7 +39,7 @@ fn merges_user_project_and_local_by_precedence() {
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
 [default]
-provider = "echo"
+provider = "defect"
 model = "user-model"
 
 [turn]
@@ -64,7 +64,7 @@ model = "local-model"
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
-    assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Defect);
     assert_eq!(loaded.effective.cli.model, "local-model");
     assert_eq!(loaded.effective.turn.max_llm_retries, 5);
     assert_eq!(loaded.effective.turn.max_hook_continues, 7);
@@ -744,7 +744,7 @@ fn rejects_unknown_keys_with_source_path() {
         &config_path,
         r#"
 [default]
-provider = "echo"
+provider = "defect"
 bogus = "value"
 "#,
     );
@@ -782,7 +782,7 @@ fn parse_error_reports_source_path() {
         &config_path,
         r#"
 [default
-provider = "echo"
+provider = "defect"
 "#,
     );
 
@@ -804,7 +804,7 @@ fn missing_config_files_do_not_error() {
 
     assert_eq!(loaded.layers.layers.len(), 1);
     assert!(loaded.warnings.is_empty());
-    assert_eq!(loaded.effective.cli.provider, ProviderKind::Echo);
+    assert_eq!(loaded.effective.cli.provider, ProviderKind::Defect);
 }
 
 #[test]
@@ -1468,7 +1468,7 @@ fn compact_soft_ratio_not_below_hard_is_rejected() {
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
 [default]
-provider = "echo"
+provider = "defect"
 model = "m"
 
 [turn]
@@ -1498,7 +1498,7 @@ fn compact_ratio_out_of_range_is_rejected() {
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
 [default]
-provider = "echo"
+provider = "defect"
 model = "m"
 
 [turn]
@@ -1527,7 +1527,7 @@ fn valid_three_tier_watermarks_load() {
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
 [default]
-provider = "echo"
+provider = "defect"
 model = "m"
 
 [turn]
@@ -1553,7 +1553,7 @@ fn disabled_tier_skips_ordering_check() {
         &tmp.path().join("xdg/defect/config.toml"),
         r#"
 [default]
-provider = "echo"
+provider = "defect"
 model = "m"
 
 [turn]

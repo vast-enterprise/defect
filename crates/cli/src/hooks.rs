@@ -138,7 +138,8 @@ fn resolve_prompt_provider(
     rt: &HookEngineCtx<'_>,
 ) -> Result<Arc<dyn LlmProvider>, HookEngineBuildError> {
     let model_id = spec.model.as_deref().unwrap_or(rt.default_model);
-    let entry = rt.registry.entry_for_model(model_id).ok_or_else(|| {
+    // prompt hook 的 `model` 字段没有 provider 维度——按裸 id 取首个声明它的 entry。
+    let entry = rt.registry.first_entry_for_model(model_id).ok_or_else(|| {
         HookEngineBuildError::Configuration(format!(
             "prompt hook references unknown model `{model_id}` (no provider registered for it)"
         ))
@@ -389,6 +390,7 @@ mod tests {
                     vec![model],
                     SessionCapabilitiesConfig::default(),
                 )],
+                "stub",
                 "stub-1",
             )
             .expect("registry"),

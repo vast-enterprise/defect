@@ -22,7 +22,7 @@ pub(crate) const USER_CONFIG_RELATIVE: &str = "defect/config.toml";
 pub(crate) const PROJECT_CONFIG_RELATIVE: &str = ".defect/config.toml";
 pub(crate) const PROJECT_LOCAL_CONFIG_RELATIVE: &str = ".defect/config.local.toml";
 
-const PROVIDER_ECHO: &str = "echo";
+const PROVIDER_DEFECT: &str = "defect";
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_OPENAI: &str = "openai";
 const PROVIDER_DEEPSEEK: &str = "deepseek";
@@ -31,8 +31,10 @@ const PROVIDER_LITELLM: &str = "litellm";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum ProviderKind {
+    /// 内置占位 provider：把用户最近一条消息原样回送（model id `echo`）。
+    /// 无需任何外部凭据，是 `default.provider` 的兜底默认。
     #[default]
-    Echo,
+    Defect,
     Anthropic,
     Openai,
     Deepseek,
@@ -44,7 +46,7 @@ impl ProviderKind {
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Echo => PROVIDER_ECHO,
+            Self::Defect => PROVIDER_DEFECT,
             Self::Anthropic => PROVIDER_ANTHROPIC,
             Self::Openai => PROVIDER_OPENAI,
             Self::Deepseek => PROVIDER_DEEPSEEK,
@@ -69,7 +71,7 @@ impl From<ProviderKind> for String {
 impl From<String> for ProviderKind {
     fn from(value: String) -> Self {
         match value.as_str() {
-            PROVIDER_ECHO => Self::Echo,
+            PROVIDER_DEFECT => Self::Defect,
             PROVIDER_ANTHROPIC => Self::Anthropic,
             PROVIDER_OPENAI => Self::Openai,
             PROVIDER_DEEPSEEK => Self::Deepseek,
@@ -82,7 +84,7 @@ impl From<String> for ProviderKind {
 impl From<&str> for ProviderKind {
     fn from(value: &str) -> Self {
         match value {
-            PROVIDER_ECHO => Self::Echo,
+            PROVIDER_DEFECT => Self::Defect,
             PROVIDER_ANTHROPIC => Self::Anthropic,
             PROVIDER_OPENAI => Self::Openai,
             PROVIDER_DEEPSEEK => Self::Deepseek,
@@ -446,7 +448,7 @@ impl ProviderConfigs {
     #[must_use]
     pub fn get(&self, provider: &ProviderKind) -> Option<&ProviderConfigFile> {
         match provider {
-            ProviderKind::Echo => None,
+            ProviderKind::Defect => None,
             ProviderKind::Anthropic => Some(&self.anthropic),
             ProviderKind::Openai => Some(&self.openai),
             ProviderKind::Deepseek => Some(&self.deepseek),

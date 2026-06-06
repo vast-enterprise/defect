@@ -31,9 +31,11 @@ impl Default for EchoProvider {
 impl LlmProvider for EchoProvider {
     fn info(&self) -> ProviderInfo {
         ProviderInfo {
-            vendor: "echo".to_string(),
+            // provider 身份是 `defect`（内置兜底）；model id 仍是 `echo`——回送是它的
+            // 功能。选择对即 `defect::echo`。
+            vendor: "defect".to_string(),
             protocol: ProtocolId::AnthropicMessages,
-            display_name: "Echo (defect built-in stub)".to_string(),
+            display_name: "Defect built-in echo".to_string(),
         }
     }
 

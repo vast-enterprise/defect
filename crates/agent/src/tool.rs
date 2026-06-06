@@ -166,6 +166,12 @@ pub struct ToolContext<'a> {
     /// 自己捕获的 registry 上 `entry_for_model` 解析出父此刻用的 provider。
     /// 由 [`TurnRunner`](crate::session::TurnRunner) 构造 ctx 时填入 `config.model`。
     pub current_model: &'a str,
+    /// 当前 turn 选中的 provider vendor。与 [`Self::current_model`] 组成
+    /// `(vendor, model)` 选择对——`spawn_agent` 子 agent 回落到父选择时按这对在
+    /// registry 上 `entry_for` 精确解析（同名 model 多网关下避免选错 provider）。
+    /// 空串表示未注入（旧/测试路径），此时 `spawn_agent` 回退到按裸 model id 取
+    /// 首个 entry。由 turn runner 构造 ctx 时填入 `config.provider`。
+    pub current_provider: &'a str,
     /// session 级后台任务句柄。`Some` 时工具可 fire-and-forget 地 spawn 一个
     /// 活过当前 turn 的任务（首要场景：`spawn_agent { run_in_background: true }`）；
     /// `None` 表示本上下文不支持后台（子 agent 嵌套 turn / 测试），工具应回退到
@@ -248,12 +254,21 @@ impl<'a> ToolContext<'a> {
             shell,
             http,
             current_model,
+            current_provider: "",
             background: None,
             subagent_bridge: None,
             policy: None,
             goal: None,
             subagent_depth: 0,
         }
+    }
+
+    /// 注入当前 turn 选中的 provider vendor，与 `current_model` 组成选择对。
+    /// 不调用 ⇒ 空串（`spawn_agent` 回退到按裸 model id 取首个 entry）。
+    #[must_use]
+    pub fn with_current_provider(mut self, vendor: &'a str) -> Self {
+        self.current_provider = vendor;
+        self
     }
 
     /// 注入本层起的剩余 subagent 派发深度。顶层 turn 的工具驱动用配置的初始上限

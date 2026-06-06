@@ -464,7 +464,7 @@ impl CliAgentBuilder {
         let http_config = build_http_stack_config(&self.config.effective.http)?;
         let mut entries = build_provider_entries(&self.config, http_config).await?;
         entries.extend(self.extra_provider_entries.clone());
-        let registry = ProviderRegistry::new(entries, &turn_config.model)
+        let registry = ProviderRegistry::new(entries, &turn_config.provider, &turn_config.model)
             .map_err(|e| anyhow::anyhow!("provider registry init failed: {e}"))?;
         Ok((Arc::new(registry), turn_config))
     }

@@ -190,6 +190,16 @@ pub struct ModeDescriptor {
     pub description: Option<String>,
 }
 
+/// 模型选择键：`(provider vendor, model id)` 对。
+///
+/// 同一 model id 可由多个 provider 声明（多网关同模型），故选择必须同时带上
+/// provider vendor 与 model id。`provider` 即 [`ProviderInfo::vendor`]。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSelection {
+    pub provider: String,
+    pub model: String,
+}
+
 /// 单次会话。
 ///
 /// 所有方法都是 trait 对象友好（`&self` + `BoxFuture`）。`Arc<dyn Session>`
@@ -221,12 +231,15 @@ pub trait Session: Send + Sync {
 
     /// 切换当前 session 的模型。
     ///
-    /// 当前进行中的 turn 保持原模型；后续 turn 使用新模型。
+    /// 选择键是 `(provider vendor, model)` 对——同一 model id 可由多个 provider
+    /// 声明（多网关同模型），故必须显式带上 provider。当前进行中的 turn 保持原
+    /// 选择；后续 turn 使用新选择。
     ///
     /// # Errors
     ///
-    /// 当 provider 拉取模型列表失败，或请求的模型不存在时返回 [`ProviderError`]。
-    fn set_model(&self, model_id: String) -> BoxFuture<'_, Result<(), ProviderError>>;
+    /// 当 provider 拉取模型列表失败，或请求的 `(provider, model)` 对不存在时返回
+    /// [`ProviderError`]。
+    fn set_model(&self, selection: ModelSelection) -> BoxFuture<'_, Result<(), ProviderError>>;
 
     /// 当前生效的权限模式 id。未装配模式目录时返回 `None`。
     ///

@@ -98,6 +98,9 @@ impl TurnRequestLimit {
 /// turn 配置。详见 `docs/internal/turn-loop.md` §9。
 #[derive(Debug, Clone)]
 pub struct TurnConfig {
+    /// 选中的 provider vendor（选择键的 provider 半边）。与 [`Self::model`] 一起
+    /// 在 registry 上按 `(vendor, model)` 对解析出真实 provider entry。
+    pub provider: String,
     pub model: String,
     pub allowed_models: Option<Vec<String>>,
     pub base_prompt: BasePromptConfig,
@@ -147,6 +150,7 @@ pub struct TurnConfig {
 impl Default for TurnConfig {
     fn default() -> Self {
         Self {
+            provider: String::new(),
             model: String::new(),
             allowed_models: None,
             base_prompt: BasePromptConfig::default(),

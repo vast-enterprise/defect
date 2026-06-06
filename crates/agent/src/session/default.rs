@@ -56,8 +56,8 @@ use crate::session::prompt::resolve_system_prompt;
 use crate::session::tool_registry::{CompositeRegistry, StaticToolRegistry};
 use crate::session::turn::{RequestAuditTracker, TurnConfig, TurnRunner};
 use crate::session::{
-    AgentCore, AgentError, EventStream, History, Session, SessionCreateInfo, SessionLoader,
-    SessionObserver, SessionToolFactory, ToolRegistry, TurnError, VecHistory,
+    AgentCore, AgentError, EventStream, History, ModelSelection, Session, SessionCreateInfo,
+    SessionLoader, SessionObserver, SessionToolFactory, ToolRegistry, TurnError, VecHistory,
 };
 use crate::shell::ShellBackend;
 
@@ -227,11 +227,18 @@ impl DefaultAgentCoreBuilder {
     /// # Panics
     /// `registry` 与 `provider` 都未设置；或单 provider 路径下 `config.model`
     /// 是空字符串（registry 至少要有一个 default model）。
-    pub fn build(self) -> DefaultAgentCore {
-        let registry = self.registry.unwrap_or_else(|| {
+    pub fn build(mut self) -> DefaultAgentCore {
+        let registry = self.registry.take().unwrap_or_else(|| {
             let provider = self
                 .single_provider
+                .take()
                 .expect("DefaultAgentCore requires a provider or a registry");
+            let vendor = provider.info().vendor;
+            // 单 provider 路径下 config 通常不带选中的 vendor——补成本 provider 的
+            // vendor，让 `resolve_initial_provider` 能按 (vendor, model) 对找到 entry。
+            if self.config.provider.is_empty() {
+                self.config.provider = vendor.clone();
+            }
             let model_id = self.config.model.clone();
             assert!(
                 !model_id.is_empty(),
@@ -280,6 +287,7 @@ impl DefaultAgentCoreBuilder {
                         model_infos,
                         self.single_capabilities,
                     )],
+                    &vendor,
                     &model_id,
                 )
                 .expect("single-entry registry must satisfy invariants"),
@@ -529,15 +537,16 @@ impl DefaultAgentCore {
     /// [`ProviderRegistry::new`] 已经校验过 default model，能落到这里报错
     /// 的只剩 builder 误用（registry 与 turn config 不一致）。
     fn resolve_initial_provider(&self) -> Result<SessionProviderState, AgentError> {
-        let model = self
-            .config
-            .read()
-            .expect("DefaultAgentCore config rwlock poisoned")
-            .model
-            .clone();
-        let entry = self.registry.entry_for_model(&model).ok_or_else(|| {
+        let (vendor, model) = {
+            let cfg = self
+                .config
+                .read()
+                .expect("DefaultAgentCore config rwlock poisoned");
+            (cfg.provider.clone(), cfg.model.clone())
+        };
+        let entry = self.registry.entry_for(&vendor, &model).ok_or_else(|| {
             AgentError::Other(BoxError::new(io::Error::other(format!(
-                "default model `{model}` is not declared by any provider entry in the registry"
+                "default model `{model}` is not declared by provider `{vendor}` in the registry"
             ))))
         })?;
         let provider = entry.provider().clone();
@@ -955,25 +964,28 @@ impl Session for DefaultSession {
         })
     }
 
-    fn set_model(&self, model_id: String) -> BoxFuture<'_, Result<(), ProviderError>> {
+    fn set_model(&self, selection: ModelSelection) -> BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
+            let ModelSelection { provider, model } = selection;
             let allowed_models = self
                 .config
                 .read()
                 .expect("DefaultSession config rwlock poisoned")
                 .allowed_models
                 .clone();
+            // 注意：`allowed_models` 是裸 model id 清单，不带 vendor 维度——同名
+            // model 在所有 provider 下统一放行/拒绝。pair 化是后续工作。
             if let Some(allowed_models) = allowed_models.as_ref()
-                && !allowed_models.iter().any(|allowed| allowed == &model_id)
+                && !allowed_models.iter().any(|allowed| allowed == &model)
             {
                 return Err(ProviderError::new(ProviderErrorKind::ModelNotFound {
-                    model: model_id,
+                    model,
                 }));
             }
 
-            let Some(entry) = self.registry.entry_for_model(&model_id) else {
+            let Some(entry) = self.registry.entry_for(&provider, &model) else {
                 return Err(ProviderError::new(ProviderErrorKind::ModelNotFound {
-                    model: model_id,
+                    model,
                 }));
             };
 
@@ -1007,7 +1019,8 @@ impl Session for DefaultSession {
                 .config
                 .write()
                 .expect("DefaultSession config rwlock poisoned");
-            config.model = model_id;
+            config.provider = provider;
+            config.model = model;
             Ok(())
         })
     }
@@ -1120,8 +1133,8 @@ fn filter_allowed_models(
 }
 
 /// 给 model 的 display_name 拼上 provider 前缀，便于 ACP 客户端区分同一
-/// model id 在不同 provider 下的来源（虽然 [`ProviderRegistry::new`] 不允许
-/// 重复 id，但显示层仍然需要"OpenAI: gpt-4o"这样的人读名）。
+/// model id 在不同 provider 下的来源——多网关同模型时这是真正的消歧手段
+/// （"OpenAI: gpt-4o" vs "gw-b: gpt-4o"）。
 fn decorate_with_provider_display(mut model: ModelInfo, provider: &ProviderInfo) -> ModelInfo {
     let name = model
         .display_name

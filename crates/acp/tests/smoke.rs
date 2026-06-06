@@ -279,9 +279,9 @@ async fn echo_round_trip() {
                     .iter()
                     .find(|o| o.id.0.as_ref() == "model")
                     .expect("model config option present");
-                assert_eq!(select_current_value(model_opt), "echo");
+                assert_eq!(select_current_value(model_opt), "defect::echo");
                 let values = select_option_values(model_opt);
-                assert_eq!(values, vec!["echo".to_string()]);
+                assert_eq!(values, vec!["defect::echo".to_string()]);
 
                 let prompt_resp = cx
                     .send_request(PromptRequest::new(
@@ -392,7 +392,7 @@ async fn load_session_round_trip() {
                     .iter()
                     .find(|o| o.id.0.as_ref() == "model")
                     .expect("model config option present");
-                assert_eq!(select_current_value(new_model_opt), "echo");
+                assert_eq!(select_current_value(new_model_opt), "defect::echo");
 
                 let first = cx
                     .send_request(PromptRequest::new(
@@ -662,14 +662,16 @@ async fn set_model_updates_next_turn_model() {
                     .iter()
                     .find(|o| o.id.0.as_ref() == "model")
                     .expect("model config option present");
-                assert_eq!(select_current_value(model_opt), "alpha");
+                assert_eq!(select_current_value(model_opt), "switchable::alpha");
                 assert_eq!(select_option_values(model_opt).len(), 2);
 
                 cx.send_request(
                     agent_client_protocol::schema::SetSessionConfigOptionRequest::new(
                         new_session.session_id.clone(),
                         agent_client_protocol::schema::SessionConfigId::new("model"),
-                        agent_client_protocol::schema::SessionConfigValueId::new("beta"),
+                        agent_client_protocol::schema::SessionConfigValueId::new(
+                            "switchable::beta",
+                        ),
                     ),
                 )
                 .block_task()
@@ -738,14 +740,16 @@ async fn set_model_rejects_model_outside_configured_candidates() {
                     .find(|o| o.id.0.as_ref() == "model")
                     .expect("model config option present");
                 let values = select_option_values(model_opt);
-                assert_eq!(values, vec!["alpha".to_string()]);
+                assert_eq!(values, vec!["switchable::alpha".to_string()]);
 
                 let err = cx
                     .send_request(
                         agent_client_protocol::schema::SetSessionConfigOptionRequest::new(
                             new_session.session_id,
                             agent_client_protocol::schema::SessionConfigId::new("model"),
-                            agent_client_protocol::schema::SessionConfigValueId::new("beta"),
+                            agent_client_protocol::schema::SessionConfigValueId::new(
+                                "switchable::beta",
+                            ),
                         ),
                     )
                     .block_task()
@@ -1108,7 +1112,7 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
                     model_opt.category,
                     Some(agent_client_protocol::schema::SessionConfigOptionCategory::Model)
                 );
-                assert_eq!(select_current_value(model_opt), "echo");
+                assert_eq!(select_current_value(model_opt), "defect::echo");
                 let mode_opt = options
                     .iter()
                     .find(|o| o.id.0.as_ref() == "permission_mode")

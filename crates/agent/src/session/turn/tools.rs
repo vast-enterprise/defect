@@ -97,7 +97,8 @@ impl TurnRunner<'_> {
                 self.shell.clone(),
                 self.http.clone(),
                 &self.config.model,
-            );
+            )
+            .with_current_provider(&self.config.provider);
             let description = tool.describe(&args, describe_ctx).await;
             // raw_input 由主循环在外层填充原始 args（见 tool.rs 注释：工具自己不塞）。
             // 不填则 ACP wire 上的 tool_call 与 langfuse span 都没有 input。
@@ -250,6 +251,7 @@ impl TurnRunner<'_> {
                     let shell = self.shell.clone();
                     let http = self.http.clone();
                     let model = self.config.model.clone();
+                    let provider = self.config.provider.clone();
                     let background = self.background.clone();
                     let goal = self.goal.clone();
                     // 把本轮 active policy 传给工具——`spawn_agent` 据此让子 agent
@@ -287,6 +289,7 @@ impl TurnRunner<'_> {
                                 shell,
                                 http,
                                 model,
+                                provider,
                                 background,
                                 goal,
                                 policy,
@@ -520,6 +523,7 @@ async fn drive_tool_stream(
     shell: Arc<dyn ShellBackend>,
     http: Arc<dyn HttpClient>,
     model: String,
+    provider: String,
     background: Option<crate::session::BackgroundTasks>,
     goal: Option<Arc<crate::session::GoalState>>,
     policy: Arc<dyn crate::policy::SandboxPolicy>,
@@ -533,6 +537,7 @@ async fn drive_tool_stream(
         http.clone(),
         &model,
     )
+    .with_current_provider(&provider)
     .with_policy(policy)
     // 本 turn 起的剩余 subagent 派发深度——`spawn_agent` 据它决定子 agent 还能否
     // 继续递归（0 ⇒ 子工具集不含 spawn_agent）。
