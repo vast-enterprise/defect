@@ -138,14 +138,20 @@ impl StepHandler for CommandHandler {
                 .map_err(|err| HookError::HandlerFailed(BoxError::new(err)))?;
 
             if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(&stdin_payload)
-                    .await
-                    .map_err(|err| HookError::HandlerFailed(BoxError::new(err)))?;
-                stdin
-                    .write_all(b"\n")
-                    .await
-                    .map_err(|err| HookError::HandlerFailed(BoxError::new(err)))?;
+                // 写 stdin 可能撞上子进程不读 stdin 就先退出（如 `exit 2` 类脚本）——
+                // 此时管道被对端关闭，write 报 `BrokenPipe`。这是合法情形：脚本有权
+                // 忽略 stdin，退出码才是它的输出。把 BrokenPipe 当成"喂完了"静默收尾，
+                // 让后续按退出码裁决；其它写错误才视为 handler 失败。
+                let write_res = async {
+                    stdin.write_all(&stdin_payload).await?;
+                    stdin.write_all(b"\n").await
+                }
+                .await;
+                match write_res {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => {}
+                    Err(err) => return Err(HookError::HandlerFailed(BoxError::new(err))),
+                }
                 drop(stdin);
             }
 
@@ -418,6 +424,34 @@ mod tests {
         let session_id = SessionId::new("s1");
         let cwd = Path::new("/");
         let env = serde_json::json!({"tool": "bash"});
+        let v = h
+            .handle_step(&env, ctx(&session_id, cwd))
+            .await
+            .expect("ok")
+            .expect("verdict");
+        assert_eq!(v["control"], "veto");
+        assert_eq!(v["additional_context"][0], "tests failed\n");
+    }
+
+    /// 脚本不读 stdin 就退出（exit 2）且 envelope 大于管道缓冲 → 写 stdin 撞
+    /// `BrokenPipe`，但必须按退出码裁决（veto），不能把 BrokenPipe 当 handler 失败。
+    /// 回归测试：曾因把 BrokenPipe 直接上抛 HandlerFailed 而在 CI 偶发挂。
+    /// 用一个远超 64KiB 管道缓冲的 envelope，让 write_all 必然在子进程退出前阻塞，
+    /// 稳定复现竞态（小 payload 会侥幸塞进缓冲而漏掉这条路径）。
+    #[tokio::test]
+    async fn step_exit_2_vetoes_even_when_script_ignores_large_stdin() {
+        if !Path::new("/bin/sh").exists() {
+            return;
+        }
+        let h = CommandHandler::new(argv_spec(vec![
+            "/bin/sh",
+            "-c",
+            "echo 'tests failed' >&2; exit 2",
+        ]));
+        let session_id = SessionId::new("s1");
+        let cwd = Path::new("/");
+        // 1 MiB padding，远超典型 64KiB 管道缓冲。
+        let env = serde_json::json!({"tool": "bash", "pad": "x".repeat(1024 * 1024)});
         let v = h
             .handle_step(&env, ctx(&session_id, cwd))
             .await
