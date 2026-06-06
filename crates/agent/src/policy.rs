@@ -364,4 +364,4 @@ fn default_ask_options(tool_name: &str) -> Ask {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

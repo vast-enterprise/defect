@@ -427,7 +427,7 @@ impl StepHandler for GoalGate {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;

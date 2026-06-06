@@ -335,7 +335,7 @@ fn io_invalid(msg: impl Into<String>, detail: impl std::fmt::Display) -> std::io
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use agent_client_protocol_schema::SessionId;
     use std::path::Path;

@@ -299,4 +299,4 @@ fn resolve_user_skills_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

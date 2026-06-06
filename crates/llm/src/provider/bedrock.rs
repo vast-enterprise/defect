@@ -376,4 +376,4 @@ fn bedrock_service_error(source: &dyn ProvideErrorMetadata, model: Option<&str>)
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

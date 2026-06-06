@@ -98,4 +98,4 @@ pub(crate) fn sanitize_tool_pairing(messages: Vec<Message>) -> Vec<Message> {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

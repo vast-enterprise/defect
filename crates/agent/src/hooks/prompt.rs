@@ -195,7 +195,7 @@ async fn collect_text(mut stream: crate::llm::ProviderStream) -> Result<String, 
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::llm::{
         Capabilities, FeatureSupport, ModelInfo, ProtocolId, ProviderChunk, ProviderError,

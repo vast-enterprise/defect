@@ -683,5 +683,4 @@ fn io_err(msg: String) -> std::io::Error {
 }
 
 #[cfg(test)]
-#[path = "spawn_agent/test.rs"]
-mod test;
+mod tests;

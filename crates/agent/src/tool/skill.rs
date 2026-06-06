@@ -210,4 +210,4 @@ fn io_err(msg: String) -> std::io::Error {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

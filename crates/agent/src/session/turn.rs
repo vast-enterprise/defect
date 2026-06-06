@@ -841,4 +841,4 @@ fn turn_outcome(state: &TurnState, reason: AcpStopReason) -> TurnOutcome {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

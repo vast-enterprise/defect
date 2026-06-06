@@ -390,4 +390,4 @@ fn resolve_user_agents_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

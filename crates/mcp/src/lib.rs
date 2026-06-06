@@ -406,4 +406,4 @@ fn http_headers(
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

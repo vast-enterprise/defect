@@ -62,4 +62,4 @@ pub fn build_observer(setup: LangfuseSetup, http: HttpStack) -> LangfuseObserver
 // 豁免 indexing_slicing / unwrap_used。
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
-mod test;
+mod tests;

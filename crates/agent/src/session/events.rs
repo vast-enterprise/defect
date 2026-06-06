@@ -112,4 +112,4 @@ impl Default for EventEmitter {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

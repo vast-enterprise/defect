@@ -109,4 +109,4 @@ impl ToolRegistry for CompositeRegistry {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

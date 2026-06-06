@@ -254,4 +254,4 @@ fn find_existing_ancestor(path: &Path) -> Option<(&Path, PathBuf)> {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

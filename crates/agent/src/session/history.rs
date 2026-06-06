@@ -193,4 +193,4 @@ fn image_data_chars(data: &crate::llm::ImageData) -> usize {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

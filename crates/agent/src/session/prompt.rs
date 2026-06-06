@@ -185,4 +185,4 @@ fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

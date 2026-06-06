@@ -797,4 +797,4 @@ fn ensure_supported_schema(schema_version: u32) -> Result<(), StorageError> {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

@@ -74,4 +74,4 @@ impl PermissionGate {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

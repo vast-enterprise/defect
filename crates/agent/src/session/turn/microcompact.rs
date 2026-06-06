@@ -164,4 +164,4 @@ fn estimate_total(messages: &[Message]) -> u64 {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

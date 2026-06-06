@@ -41,4 +41,4 @@ pub mod session_open;
 pub mod tools;
 
 #[cfg(test)]
-mod test;
+mod tests;

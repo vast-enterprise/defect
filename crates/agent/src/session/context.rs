@@ -122,4 +122,4 @@ fn shell_line() -> &'static str {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

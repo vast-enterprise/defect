@@ -409,7 +409,7 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use agent_client_protocol_schema::StopReason as AcpStopReason;
 

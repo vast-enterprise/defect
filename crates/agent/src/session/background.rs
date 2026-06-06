@@ -605,4 +605,4 @@ pub fn format_background_outcome(outcome: &BackgroundOutcome) -> String {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

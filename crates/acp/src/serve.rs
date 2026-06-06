@@ -1010,4 +1010,4 @@ fn spawn_permission_request(
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

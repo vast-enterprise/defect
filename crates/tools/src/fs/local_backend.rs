@@ -361,4 +361,4 @@ impl Drop for TmpCleanup {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

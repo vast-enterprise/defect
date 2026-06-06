@@ -822,4 +822,4 @@ fn parse_block_array(v: &Value, field: &'static str) -> Result<Vec<ContentBlock>
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

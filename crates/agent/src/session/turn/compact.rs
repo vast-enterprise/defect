@@ -425,4 +425,4 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

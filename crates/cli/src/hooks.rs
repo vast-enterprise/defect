@@ -324,7 +324,7 @@ pub fn build_main_session_engine(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use defect_agent::llm::{
         Capabilities, FeatureSupport, LlmProvider, ModelInfo, ProtocolId, ProviderEntry,

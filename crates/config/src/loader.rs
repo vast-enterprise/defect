@@ -797,4 +797,4 @@ fn extract_base_prompt(
 }
 
 #[cfg(test)]
-mod test;
+mod tests;

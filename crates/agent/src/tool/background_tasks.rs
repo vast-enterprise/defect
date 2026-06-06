@@ -326,4 +326,4 @@ impl Tool for CancelBackgroundTaskTool {
 }
 
 #[cfg(test)]
-mod test;
+mod tests;
