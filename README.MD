@@ -73,7 +73,7 @@ Defect 使用 TOML 配置文件，按下面的优先级从低到高合并：
 4. 项目本地覆盖：`<repo>/.defect/config.local.toml`（机器本地，建议加入 `.gitignore`）
 5. CLI override（`--config key.path=value`，以及 `--provider` / `--model`、`DEFECT_PROVIDER` / `DEFECT_MODEL`）
 
-凭证（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` 等）只通过环境变量注入，不写入 TOML。出于安全考虑，仓库共享层（`config.toml`）中的 `default.provider`、`providers.*.base_url`、`http.proxy` 等出站/凭证相关字段会被忽略并产生 warning；如需本地覆盖请放到 `config.local.toml`。
+凭证（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` 等）只通过环境变量注入，不写入 TOML——配置里用 `api_key_env` 指定环境变量名，而非密钥本身。不该提交的本地字段（如个人 `base_url`、`http.proxy`）请放进 `config.local.toml` 并加入 `.gitignore`；Defect 不替你做"出站字段安全裁剪"，配置项要么按写的生效，要么（未知 key）带文件路径硬失败。
 
 一份可直接起步的最小配置（放在 `~/.config/defect/config.toml` 或 `<repo>/.defect/config.local.toml`）：
 

@@ -49,6 +49,7 @@ pub enum OutputFormat {
 #[derive(Debug, Parser)]
 #[command(
     name = "defect",
+    version,
     about = "Headless agent over ACP/stdio",
     long_about = "defect — headless agent over ACP/stdio.\n\n\
                   Auth env: ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY.\n\
