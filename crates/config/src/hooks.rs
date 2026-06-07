@@ -13,8 +13,8 @@
 //! ## Why hooks do not go through `ConfigToml::try_into`
 //!
 //! All other sections first flatten every layer into a single TOML via
-//! `merge_toml_values`, then decode. But the merge semantics for hook arrays are **append
-//! + dedupe** — TOML's default array overwrite would let a project-local layer
+//! `merge_toml_values`, then decode. But the merge semantics for hook arrays are
+//! **append + dedupe** — TOML's default array overwrite would let a project-local layer
 //! silently remove upstream hooks, mirroring claude-code issue #106. Therefore hooks must
 //! be merged by appending arrays at the layer stage, and each hook must retain its source
 //! [`ConfigSource`] for trust gating.

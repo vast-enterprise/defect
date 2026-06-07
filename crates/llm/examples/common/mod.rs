@@ -43,7 +43,6 @@ pub const EXIT_FAIL: i32 = 1;
 /// environment variable.
 ///
 /// `toac=warn` silences the `toac` wire crate's INFO-level request events by default.
-
 /// Use `RUST_LOG=...,toac=debug` to enable debug logging for the wire crate.
 ///
 /// # Panics
