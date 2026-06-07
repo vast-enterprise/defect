@@ -85,7 +85,7 @@ impl FsBackend for AcpFsBackend {
 
 /// Maps a wire `Error` from the client into [`FsError::Backend`].
 ///
-/// v0 does not subdivide by `code` (the ACP does not mandate specific error-code
+/// We currently do not subdivide by `code` (the ACP does not mandate specific error-code
 /// semantics for `fs/*`). The wire `code` and `message` are forwarded as the source of
 /// [`BoxError`] so that the LLM can inspect the original text in `tool_result` for
 /// troubleshooting. This mapping will be expanded once the client stabilizes error codes

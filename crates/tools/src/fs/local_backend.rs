@@ -1,10 +1,10 @@
 //! [`LocalFsBackend`]: a direct-to-disk [`FsBackend`] implementation.
 //!
 //! Local filesystem backend — implements two key invariants:
-//! - **Line-ending normalization** (§6.1): when writing to an existing file, normalizes
+//! - **Line-ending normalization**: when writing to an existing file, normalizes
 //!   new content to match the file's dominant line ending (CRLF / LF), avoiding mixed
 //!   line endings.
-//! - **Atomic writes** (§6.2): performs full overwrites via a temporary file + `rename`,
+//! - **Atomic writes**: performs full overwrites via a temporary file + `rename`,
 //!   preventing partial files.
 //!
 //! Path validation is delegated to [`defect_agent::fs::resolve_workspace_path`] —
@@ -20,8 +20,7 @@ use defect_agent::error::BoxError;
 use defect_agent::fs::{Fingerprint, FsBackend, FsError, resolve_workspace_path};
 use futures::future::BoxFuture;
 
-/// Hard upper bound for single-file size (shared by read and write). See `tools-fs.md`
-/// §3.1 / §4.1.
+/// Hard upper bound for single-file size (shared by read and write).
 pub const MAX_FS_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Monotonic in-process counter used during `tmp + rename` to prevent concurrent writes
@@ -63,10 +62,9 @@ impl FsBackend for LocalFsBackend {
 
             // Full reads are blocked by a hard size limit. Windowed reads (when `line` or
             // `limit` is `Some`) use a chunked-read path that streams line by line,
-            // buffering only the requested window. This implements the "large file
-            // pagination" from v1 §3.1, allowing the LLM to navigate log/data files
-            // larger than 10 MiB via offset/limit without exceeding the overall memory
-            // budget.
+            // buffering only the requested window. This implements large-file
+            // pagination, allowing the LLM to navigate log/data files larger than
+            // 10 MiB via offset/limit without exceeding the overall memory budget.
             let windowed = line.is_some() || limit.is_some();
             if !windowed && metadata.len() > MAX_FS_BYTES {
                 return Err(FsError::TooLarge {
@@ -121,7 +119,7 @@ impl FsBackend for LocalFsBackend {
     }
 
     /// Use mtime + size as the fingerprint — much cheaper than the default "read entire
-    /// file + hash" approach, and sufficient for v1 conflict detection semantics: a
+    /// file + hash" approach, and sufficient for conflict detection semantics: a
     /// change in mtime or size is treated as a conflict.
     fn fingerprint(&self, path: PathBuf) -> BoxFuture<'_, Result<Fingerprint, FsError>> {
         Box::pin(async move {

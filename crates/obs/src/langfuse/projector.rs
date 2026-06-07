@@ -36,7 +36,7 @@
 //!
 //! - **traceId**: Generated once with `Uuid::new_v4()` at `TurnStarted`, reused within
 //!   the turn. **Must not** use an auto-incrementing `{session}-turn-{seq}` — resuming
-//!   would cause id collisions (see design doc §3.5).
+//!   would cause id collisions.
 //! - **scope prefix**: Top-level = `{trace}`; subagent path `[A,B]` =
 //!   `{trace}-sub-A-sub-B`. The subagent span's id **is** its scope prefix.
 //! - **step / generation / tool span id**: Derived from the scope prefix + sequence

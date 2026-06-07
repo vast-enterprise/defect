@@ -92,7 +92,7 @@ fn schema_includes_fetch_name_and_required_url() {
     assert!(arr.iter().any(|v| v.as_str() == Some("url")));
 }
 
-// ─── §10 #1 ────────────────────────────────────────────────────────────────
+// ─── #1 ────────────────────────────────────────────────────────────────────
 #[tokio::test]
 async fn case1_text_markdown_passthrough() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -114,7 +114,7 @@ async fn case1_text_markdown_passthrough() {
     assert_eq!(raw["status"], 200);
 }
 
-// ─── §10 #2 ────────────────────────────────────────────────────────────────
+// ─── #2 ────────────────────────────────────────────────────────────────────
 #[tokio::test]
 async fn case2_html_to_markdown_rendered() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -137,7 +137,7 @@ async fn case2_html_to_markdown_rendered() {
     assert!(!text.contains("<h1>"));
 }
 
-// §10 #3
+// #3
 #[tokio::test]
 async fn case3_format_html_with_markdown_content_type_fails() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -164,7 +164,7 @@ async fn case3_format_html_with_markdown_content_type_fails() {
     assert!(msg.contains("not HTML"), "got: {msg}");
 }
 
-// §10 #4
+// #4
 #[tokio::test]
 async fn case4_format_text_strips_html_tags() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -210,7 +210,7 @@ async fn case5_404_is_completed_with_status_marker() {
     assert_eq!(raw["status"], 404);
 }
 
-// §10 #6
+// #6
 #[tokio::test]
 async fn case6_500_is_completed_with_status_marker() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -228,7 +228,7 @@ async fn case6_500_is_completed_with_status_marker() {
     assert!(text.contains("[http status: 500]"), "got: {text}");
 }
 
-// ─── §10 #7 ────────────────────────────────────────────────────────────────
+// ─── #7 ────────────────────────────────────────────────────────────────────
 #[tokio::test]
 async fn case7_file_scheme_rejected() {
     let (_server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -246,7 +246,7 @@ async fn case7_file_scheme_rejected() {
     );
 }
 
-// §10 #9
+// #9
 #[tokio::test]
 async fn case9_timeout_yields_failed_execution() {
     let mut config = FetchToolConfig::default();
@@ -274,7 +274,7 @@ async fn case9_timeout_yields_failed_execution() {
     assert!(msg.contains("timed out"), "got: {msg}");
 }
 
-// §10 #10
+// #10
 #[tokio::test]
 async fn case10_response_truncation() {
     let mut config = FetchToolConfig::default();
@@ -297,7 +297,7 @@ async fn case10_response_truncation() {
     assert_eq!(raw["truncated"], true);
 }
 
-// §10 #11
+// #11
 #[tokio::test]
 async fn case11_redirect_followed() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -325,7 +325,7 @@ async fn case11_redirect_followed() {
     assert!(text.contains("arrived"), "got: {text}");
 }
 
-// §10 #13
+// #13
 #[tokio::test]
 async fn case13_no_follow_returns_3xx() {
     let mut config = FetchToolConfig::default();
@@ -347,7 +347,7 @@ async fn case13_no_follow_returns_3xx() {
     assert_eq!(raw["redirects"], 0);
 }
 
-// §10 #14
+// #14
 #[tokio::test]
 async fn case14_html_to_markdown_disabled_returns_raw_html() {
     let mut config = FetchToolConfig::default();
@@ -372,7 +372,7 @@ async fn case14_html_to_markdown_disabled_returns_raw_html() {
     assert!(text.contains("html_to_markdown disabled"), "got: {text}");
 }
 
-// ─── §10 #16 ───────────────────────────────────────────────────────────────
+// ─── #16 ───────────────────────────────────────────────────────────────────
 #[tokio::test]
 async fn case16_cancel_yields_failed_canceled() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -403,7 +403,7 @@ async fn case16_cancel_yields_failed_canceled() {
     );
 }
 
-// §10 #18
+// #18
 #[tokio::test]
 async fn case18_clamp_timeout_records_clamped_from() {
     let mut config = FetchToolConfig::default();
@@ -429,7 +429,7 @@ async fn case18_clamp_timeout_records_clamped_from() {
     assert_eq!(raw["timeout_clamped_from"], 999);
 }
 
-// §10 #19
+// #19
 #[tokio::test]
 async fn case19_binary_content_type_rejected() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;

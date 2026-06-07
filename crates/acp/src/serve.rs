@@ -41,7 +41,7 @@ enum FsMode {
     /// Client declares both `read_text_file` and `write_text_file`: full delegation.
     Delegated,
     /// If either capability is missing or the `fs` field is not declared, the entire
-    /// group falls back to local (no mixing; see §1.2 decision table).
+    /// group falls back to local (no mixing).
     Local,
 }
 
@@ -56,14 +56,12 @@ fn decide_fs_mode(client_caps: &ClientCapabilities) -> FsMode {
 /// Result of terminal capability negotiation at the connection level.
 ///
 /// Written by the `initialize` handler after reading [`ClientCapabilities::terminal`];
-/// used by `session/new` / `session/load` to select [`AcpShellBackend`] /
-/// See ACP shell design.
+/// used by `session/new` / `session/load` to select [`AcpShellBackend`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellMode {
     /// Client declares full `terminal/*` support: fully delegated.
     Delegated,
-    /// Field is false or missing: entire group falls back to local (no mixing; see §1.2
-    /// decision table).
+    /// Field is false or missing: entire group falls back to local (no mixing).
     Local,
 }
 
@@ -120,7 +118,7 @@ pub enum AcpError {
     #[error("turn task dropped before completion")]
     TurnDropped,
 
-    /// Client requested `authenticate`, but v0 does not support it.
+    /// Client requested `authenticate`, but it is not currently supported.
     #[error("authentication not supported")]
     AuthNotSupported,
 }
@@ -599,7 +597,7 @@ impl ServeState {
             agent_client_protocol::schema::AuthenticateResponse,
         >,
     ) -> Result<(), agent_client_protocol::Error> {
-        // v0 does not enable auth; any auth request from a client is rejected as
+        // Auth is not currently enabled; any auth request from a client is rejected as
         // unimplemented.
         responder.respond_with_error(AcpError::AuthNotSupported.into_wire_error())
     }
@@ -631,7 +629,7 @@ impl ServeState {
                 let config_options = session_config_options(session.as_ref()).await;
                 // Spawn a persistent event pump that forwards all events for the lifetime
                 // of this session (including driver-initiated turn continuations) as
-                // `session/update`. §5.3.
+                // `session/update`.
                 spawn_session_pump(session.clone(), session.id().clone(), cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
@@ -973,7 +971,7 @@ where
 /// driver-initiated autonomous turn continuations. This function only returns the turn
 /// result for this single prompt as a JSON-RPC response.
 ///
-/// **Queuing (§5.2)**: When a `TurnInProgress` is encountered (the driver's autonomous
+/// **Queuing**: When a `TurnInProgress` is encountered (the driver's autonomous
 /// continuation turn is running, or a concurrent prompt is in progress), instead of
 /// immediately returning an error, briefly back off and retry, allowing this prompt to
 /// queue until a slot becomes available — `session/prompt` is expected to be processed
@@ -1022,8 +1020,8 @@ async fn run_prompt_turn(
 /// Lifecycle: the event stream from `session.subscribe()` ends when the session is
 /// dropped (the `EventEmitter` is destroyed), at which point `events.next()` returns
 /// `None` and the pump exits naturally. The pump holds an `Arc<dyn Session>`, the same
-/// strong reference used by `AgentCore`'s sessions table — v0 sessions live for the
-/// process lifetime, and so does the pump.
+/// strong reference used by `AgentCore`'s sessions table — sessions currently live for
+/// the process lifetime, and so does the pump.
 fn spawn_session_pump(session: Arc<dyn Session>, session_id: SessionId, cx: ConnectionTo<Client>) {
     let mut events = session.subscribe();
     let cx_for_pump = cx.clone();

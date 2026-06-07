@@ -87,12 +87,12 @@ pub struct SkillSpec {
 /// Keeps `deny_unknown_fields` (consistent with [`crate::profiles`]) to catch
 /// misspellings of required fields (typos like `naem` / `desciption` are not silently
 /// ignored). The `always` / `triggers` fields from the Agent Skills open standard are now
-/// consumed (auto-activation, see ), while `allowed_tools` remains an explicit
-/// placeholder (for v1 tool gating).
+/// consumed (auto-activation), while `allowed_tools` remains an explicit
+/// placeholder reserved for tool gating.
 ///
 /// Trade-off of explicit listing (vs. deny vs. fully open): deny would break the selling
 /// point that "users can drop in an existing Anthropic / Codex-format skill and it just
-/// works" (§2.1); fully open loses typo protection. Explicitly listing the documented
+/// works"; fully open loses typo protection. Explicitly listing the documented
 /// fields balances both — consumed fields go from "ignored" to "consumed", with backward
 /// compatibility for user files.
 #[derive(Debug, Deserialize)]
@@ -107,20 +107,19 @@ struct SkillManifestToml {
     /// path.
     description: String,
     /// `true` means this skill's body is directly appended to the system prompt at
-    /// session start (always-on, see §5.1).
+    /// session start (always-on).
     #[serde(default)]
     always: Option<bool>,
-    /// Automatic activation trigger conditions (by file glob or prompt keyword; see
-    /// §4.3).
+    /// Automatic activation trigger conditions (by file glob or prompt keyword).
     #[serde(default)]
     triggers: Option<SkillTriggersToml>,
-    /// Placeholder: v1 uses this for ACP client tool gating (inspired by Anthropic's
-    /// `allowed-tools`, so the hyphenated form is also accepted). v0 parses it but does
-    /// not consume it.
+    /// Placeholder for ACP client tool gating (inspired by Anthropic's
+    /// `allowed-tools`, so the hyphenated form is also accepted). Currently parsed but
+    /// not consumed; reserved for tool gating.
     #[serde(default, alias = "allowed-tools")]
     #[allow(
         dead_code,
-        reason = "open-standard placeholder field; v0 parses but does not consume it"
+        reason = "open-standard placeholder field; currently parsed but not consumed"
     )]
     allowed_tools: Option<Vec<String>>,
 }

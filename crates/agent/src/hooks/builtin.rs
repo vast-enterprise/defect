@@ -19,7 +19,7 @@ use crate::tool::SkillEntry;
 /// }` to
 /// [`Self::lookup_step`]. Unknown names fail fast at config-load time, so users don't
 /// discover
-/// typos mid-turn (see hooks.md §4.1).
+/// typos mid-turn.
 ///
 /// The factory signature is `Fn() -> Arc<dyn HookHandler>`: handlers have no per-config
 /// parameters, and multiple `[[hooks.*]]` entries referencing the same builtin share a
@@ -33,7 +33,7 @@ pub struct BuiltinRegistry {
 }
 
 impl BuiltinRegistry {
-    /// Default v0 registry: `tracing-audit` + `redact-secrets`.
+    /// Default registry: `tracing-audit` + `redact-secrets`.
     pub fn defaults() -> Self {
         let mut reg = Self {
             step_factories: BTreeMap::new(),
@@ -189,7 +189,7 @@ fn key_is_secret(key: &str) -> bool {
 /// to the system prompt suffix, so the model is aware of which skills it can load on
 /// demand via the `skill` tool.
 ///
-/// This is the L1 injection point for progressive disclosure (§6.1). Note that the
+/// This is the L1 injection point for progressive disclosure. Note that the
 /// `skill` tool's own description already embeds the same catalog (see
 /// [`crate::tool::SkillTool`]), so this hook is an **optional enhancement**: when
 /// installed, it also places the manifest in the system prompt (more robust for clients
@@ -226,8 +226,7 @@ fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String
         out.push_str(&format!("- **{name}**: {}\n", entry.description));
     }
     // Always-on skills: inline the body of any skill marked `always: true` so the model
-    // has those instructions from the start, without needing to call the `skill` tool
-    // (design §5.1).
+    // has those instructions from the start, without needing to call the `skill` tool.
     for (name, entry) in skills {
         if entry.always {
             out.push_str(&format!("\n## Skill: {name}\n\n{}\n", entry.body));

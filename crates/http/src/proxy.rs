@@ -20,7 +20,7 @@
 //! [GNU style](https://about.gitlab.com/blog/we-need-to-talk-no-proxy/):
 //! comma-separated, domain suffixes (`api.openai.com` matches `*.openai.com`), `*` means
 //! block all,
-//! IP CIDR and port v0 are not supported.
+//! IP CIDR and ports are not currently supported.
 //!
 //! [`build_http_stack`]: super::build_http_stack
 
@@ -219,7 +219,7 @@ fn no_proxy_disables_all(patterns: &[String]) -> bool {
 /// - `host` ends with `.<pattern>`
 ///
 /// `*` is already handled by [`no_proxy_disables_all`], so it is not checked here.
-/// Ports (e.g. `example.com:8080`) and IP CIDR v0 are not supported — patterns
+/// Ports (e.g. `example.com:8080`) and IP CIDR are not currently supported — patterns
 /// containing `:` or numeric subnets are compared literally; if they don't match,
 /// the host is not exempted (safe behavior: prefer the proxy over a false match).
 pub(crate) fn matches_no_proxy(host: &str, patterns: &[String]) -> bool {

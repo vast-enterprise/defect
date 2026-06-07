@@ -224,8 +224,8 @@ struct TerminalScript {
     output: String,
     truncated: bool,
     /// Exit status — `None` means the terminal has not exited yet (the output side does
-    /// not report it; however, the blocking behavior of `wait_for_exit` is not covered by
-    /// v0 tests, so if `None` we fall back to `exit_code=0`).
+    /// not report it; however, the blocking behavior of `wait_for_exit` is not currently
+    /// covered by tests, so if `None` we fall back to `exit_code=0`).
     exit: Option<AcpTerminalExitStatus>,
     /// Wait time before `wait_for_exit` (used for the "client returns late" path in case3
     /// / case7).

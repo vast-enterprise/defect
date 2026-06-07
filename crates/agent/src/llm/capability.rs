@@ -58,9 +58,9 @@ pub enum ThinkingEcho {
 /// Tri-state feature support declaration.
 ///
 /// Using a tri-state instead of `bool` allows expressing
-/// [`FeatureSupport::PassthroughAsTool`] — pseudo-support via adaptation. Even though v0
-/// has no implementation that produces this value, defining a tri-state from the start is
-/// simpler than upgrading from `bool` to an enum later.
+/// [`FeatureSupport::PassthroughAsTool`] — pseudo-support via adaptation. Even though
+/// nothing currently produces this value, defining a tri-state from the start is simpler
+/// than upgrading from `bool` to an enum later.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -182,8 +182,8 @@ fn parse_http_uri(raw: &str) -> Result<Uri, HttpClientError> {
 /// - Absolute URI (with scheme + authority) → parse and validate the scheme.
 /// - Protocol-relative (`//host/path`) → reuse the original scheme.
 /// - Absolute path (`/path`) → reuse the original scheme + authority.
-/// - Relative path (`other.html`) → not supported in v0, returns an error (rare in
-///   practice and error-prone).
+/// - Relative path (`other.html`) → not currently supported, returns an error (rare
+///   in practice and error-prone).
 fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, HttpClientError> {
     let trimmed = location.trim();
     if trimmed.is_empty() {
@@ -215,7 +215,7 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, HttpClientError> 
         // Path-absolute
         format!("{base_scheme}://{base_authority}{trimmed}")
     } else {
-        // path-relative: not supported in v0
+        // path-relative: not currently supported
         return Err(HttpClientError::Transport(BoxError::new(
             std::io::Error::other(format!("relative redirect not supported: `{trimmed}`")),
         )));

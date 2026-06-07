@@ -157,8 +157,8 @@ pub enum ToolResultContent {
     Image { mime: String, data: ImageData },
 }
 
-/// Placeholder shape for multimodal image payloads. The exact shape will be finalized
-/// after v0. *(P2)*
+/// Placeholder shape for multimodal image payloads. The exact shape is not yet
+/// finalized.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

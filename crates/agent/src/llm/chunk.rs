@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// A single event produced by a provider's streaming generation.
 ///
-/// Semantic constraints (see §1.2 of the spec):
+/// Semantic constraints:
 /// - The first event of a stream is always [`ProviderChunk::MessageStart`]
 /// - [`ProviderChunk::Stop`] is the last semantic event; only [`ProviderChunk::Usage`]
 ///   may appear after it

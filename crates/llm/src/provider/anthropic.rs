@@ -341,9 +341,8 @@ impl WithRequestIdOpt for ProviderError {
 /// Maps [`CallError<HttpStackError>`] to [`ProviderError`].
 ///
 /// Key branch: [`HttpStackError::Timeout`] is mapped to
-/// [`ProviderErrorKind::Timeout`] and the `phase` is forwarded to the turn-loop §7 for
-/// retry
-/// decision — this was previously missing; see HTTP retry semantics.
+/// [`ProviderErrorKind::Timeout`] and the `phase` is forwarded to the turn loop for
+/// retry decision — this was previously missing; see HTTP retry semantics.
 fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {

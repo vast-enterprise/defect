@@ -148,7 +148,7 @@ impl TurnRunner<'_> {
                 }
                 PolicyDecision::Ask(ask) => {
                     if ask.options.is_empty() {
-                        // Empty options are equivalent to Deny (see sandbox-policy.md §2)
+                        // Empty options are equivalent to Deny.
                         self.emit_tool_failed(&id, &tu.name, "denied by policy".to_string())
                             .await;
                         approved.push(Approved::Denied {

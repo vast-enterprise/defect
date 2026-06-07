@@ -10,7 +10,7 @@
 //!
 //! ## No nested Prompt handlers
 //!
-//! Design doc §4.3.1, rule 3: internal LLM calls must not emit hook events, to avoid
+//! Internal LLM calls must not emit hook events, to avoid
 //! infinite recursion. This is guaranteed by the caller (the hook engine) — events
 //! entered via `fire` will not trigger hooks again due to LLM calls made inside the
 //! handler (there is no back-channel between the hook engine and the LLM provider;
@@ -19,7 +19,7 @@
 //!
 //! ## Cold-start degradation
 //!
-//! If the LLM call on `SessionStart` fails, degrade per §3.5's table — `SessionStart`
+//! If the LLM call on `SessionStart` fails, degrade per the degradation table — `SessionStart`
 //! must not block; errors are downgraded to warnings and the pipeline continues. This
 //! invariant is enforced by [`super::DefaultHookEngine`]; the handler only needs to
 //! propagate the error faithfully.

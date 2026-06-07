@@ -4,7 +4,7 @@
 //! happens during CLI assembly; this is also where we fail-fast with "unknown builtin
 //! name".
 //!
-//! All three handler variants are wired up in v0:
+//! All three handler variants are wired up:
 //! - `Builtin { name }` → looks up [`BuiltinRegistry`] by name; unknown name triggers
 //!   [`HookEngineBuildError::UnknownBuiltin`] fail-fast
 //! - `Command(_)` → [`CommandHandler::new`] (either direct argv spawn or explicit shell)

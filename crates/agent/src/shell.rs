@@ -1,7 +1,7 @@
 //! Shell execution backend abstraction.
 //!
 //! [`ShellBackend`] is the trait boundary between the `bash` tool and the underlying
-//! process management. Two v0 implementations:
+//! process management. Two implementations:
 //! - `defect_tools::shell::LocalShellBackend`: spawns child processes directly
 //! - `defect_acp::shell::AcpShellBackend`: delegates to the client via ACP `terminal/*`
 //!   reverse requests
@@ -75,7 +75,7 @@ pub struct TerminalExitStatus {
 
 /// Shell backend trait.
 ///
-/// v0 semantics: each command gets an independent terminal — `create` → run →
+/// Current semantics: each command gets an independent terminal — `create` → run →
 /// `wait_for_exit` for the exit status → `output` for the full output → `release` to free
 /// resources. Persistent terminals reused across turns are not exposed; interactive
 /// terminal tooling is left for future evolution.
@@ -86,7 +86,7 @@ pub struct TerminalExitStatus {
 pub trait ShellBackend: Send + Sync {
     /// Creates a terminal and starts the command.
     ///
-    /// `command` is a full shell command line (v0 runs it via `sh -c` on the backend).
+    /// `command` is a full shell command line (currently run via `sh -c` on the backend).
     /// `cwd` must be an absolute path already validated to be inside the workspace — the
     /// agent tool layer enforces this boundary; the backend does not perform business
     /// validation.

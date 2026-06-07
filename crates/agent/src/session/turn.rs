@@ -147,7 +147,7 @@ pub struct TurnConfig {
     /// derived.
     pub microcompact_ratio: Option<f64>,
     pub max_llm_retries: u32,
-    /// `0` = unlimited. v0 default is unlimited.
+    /// `0` = unlimited. The default is unlimited.
     pub max_concurrent_tools: usize,
     /// Hard upper limit on forced continuations from the `before turn-end` hook —
     /// prevents infinite loops from repeated hook `Continue` calls. Default: 3.
@@ -291,7 +291,7 @@ pub struct TurnRunner<'a> {
     /// The ingestion source for this turn's input — determines the `source` field of the
     /// `before_ingest` step envelope.
     /// User turns use `User`; background continuation turns started by the session driver
-    /// use `Background` (§5.1).
+    /// use `Background`.
     pub ingest_source: crate::hooks::step::IngestSource,
     /// Request stability diagnostics: compares snapshots of two consecutive requests
     /// actually sent to the provider, helping locate sources of high volatility in low
@@ -347,8 +347,8 @@ impl<'a> TurnRunner<'a> {
 
         // After-turn-enter hook: the turn scope has been entered. Allows injecting system
         // context or a Break to reject the turn.
-        // Note: currently the hook point is placed after prompt ingestion (design §6
-        // marks this as "deferred adjustment: move hook point earlier").
+        // Note: currently the hook point is placed after prompt ingestion (moving the hook
+        // point earlier is a deferred adjustment).
         {
             let mut step = crate::hooks::step::AfterTurnEnter {
                 is_subagent: false,
@@ -495,8 +495,8 @@ impl<'a> TurnRunner<'a> {
                 return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
             }
 
-            // Before the Permission hook (v0 only observes/stubs; policy still delegates
-            // to the authority, see hooks.md §7.3).
+            // Before the Permission hook (currently only observes/stubs; policy still
+            // delegates to the authority).
             for tu in &outcome.tool_uses {
                 let mut bp = crate::hooks::step::BeforePermission {
                     tool: tu.name.clone(),
@@ -513,7 +513,7 @@ impl<'a> TurnRunner<'a> {
                 }
             };
 
-            // After permission hook (v0 only observes/stubs).
+            // After permission hook (currently only observes/stubs).
             for a in &approved {
                 let (tool, granted) = match a {
                     Approved::Run { .. } => (approved_tool_name(a), true),
@@ -601,8 +601,8 @@ impl<'a> TurnRunner<'a> {
     /// compaction" semantics).
     async fn manage_context(&self) -> Result<(), TurnError> {
         let thresholds = self.compact_thresholds();
-        // All three thresholds absent → no proactive compaction this turn (preserves v0
-        // semantics).
+        // All three thresholds absent → no proactive compaction this turn (preserves the
+        // existing semantics).
         if thresholds.is_empty() {
             return Ok(());
         }

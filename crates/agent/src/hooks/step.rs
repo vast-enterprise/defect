@@ -83,8 +83,7 @@ pub enum HookControl {
     /// End the current turn with a final stop reason. Usable from any step.
     Break { reason: AcpStopReason },
     /// Does not end the turn; instead, loops back to the top of the cycle for another
-    /// round. Only meaningful in [`BeforeTurnEnd`] (and must be injected beforehand; see
-    /// design §4).
+    /// round. Only meaningful in [`BeforeTurnEnd`] (and must be injected beforehand).
     Continue,
     /// Skip the actual call for this step. Only meaningful for `before Compact` (veto
     /// compaction).
@@ -694,18 +693,18 @@ impl HookStep for BeforeGenerate {
 }
 
 // ---------------------------------------------------------------------------
-// Permission step: before (delegate; v0 only stubs) / after (observe)
+// Permission step: before (delegate; currently only stubs) / after (observe)
 // ---------------------------------------------------------------------------
 
-/// `before Permission`: invoked before requesting user authorization. v0 only stubs
-/// observe — the `resolved` fallback is not yet wired (policy remains the authority for
-/// allow/deny; see hooks.md §7.3). Stub is in place for future use.
+/// `before Permission`: invoked before requesting user authorization. Currently only
+/// stubs observe — the `resolved` fallback is not yet wired (policy remains the authority
+/// for allow/deny). Stub is in place for future use.
 #[derive(Debug, Clone)]
 pub struct BeforePermission {
     pub tool: String,
     /// The current policy decision (`"allow"`, `"deny"`, or `"ask"`).
     pub decision: String,
-    /// Resolved result; not consumed in v0.
+    /// Resolved result; not currently consumed.
     pub resolved: Option<bool>,
 }
 
@@ -719,7 +718,7 @@ impl HookStep for BeforePermission {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        // v0: only accepts `control` (typically `break`); `resolved` is kept as a
+        // Currently only accepts `control` (typically `break`); `resolved` is kept as a
         // placeholder but not consumed here.
         if let Some(r) = verdict.get("resolved").and_then(Value::as_bool) {
             self.resolved = Some(r);
@@ -793,7 +792,7 @@ pub struct ToolBatchEntry {
 }
 
 /// `after ToolBatch`: a full batch of parallel tools has finished. Can inject / `Break`
-/// (graceful, see proposal §7).
+/// (graceful).
 #[derive(Debug, Clone)]
 pub struct AfterToolBatch {
     pub results: Vec<ToolBatchEntry>,

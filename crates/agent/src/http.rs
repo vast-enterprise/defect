@@ -21,7 +21,7 @@ use crate::error::BoxError;
 
 /// An HTTP fetch request.
 ///
-/// v0 is `GET`-only — the `fetch` tool's schema also exposes only read semantics, not
+/// Currently `GET`-only — the `fetch` tool's schema also exposes only read semantics, not
 /// method / header / body / auth.
 #[derive(Debug, Clone)]
 pub struct HttpRequest {

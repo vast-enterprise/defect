@@ -291,7 +291,7 @@ pub struct HookMatcher {
     pub safety: Vec<defect_agent::tool::SafetyClass>,
 }
 
-/// Handler spec — three variants for v0.
+/// Handler spec — three variants.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookHandlerSpec {
@@ -412,7 +412,7 @@ impl CapabilitiesConfig {
 
 /// Overrides for global capabilities under a single provider.
 ///
-/// A `None` field means "follow the global setting". See §5 / §13.2.
+/// A `None` field means "follow the global setting".
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProviderCapabilityOverrides {

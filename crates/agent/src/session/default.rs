@@ -1,4 +1,4 @@
-//! Default v0 implementation of [`Session`] / [`AgentCore`].
+//! Default implementation of [`Session`] / [`AgentCore`].
 //!
 //! Assembly structure:
 //!
@@ -654,8 +654,7 @@ pub struct DefaultSession {
     /// Session-level background task table (landing point for `run_in_background`). Holds
     /// the task's `JoinHandle` to keep it alive past the originating turn; its internal
     /// cancel token is independent of the turn's child token. `run_turn` clones it
-    /// through `TurnRunner` → `ToolContext` for injection into tools. See the
-    /// task-arrange design for background task semantics.
+    /// through `TurnRunner` → `ToolContext` for injection into tools.
     background: crate::session::BackgroundTasks,
     /// Shared state for the `--goal` goal-driven loop. When `Some`, this session runs in
     /// goal mode; the top-level turn injects it into tools via
@@ -765,7 +764,7 @@ impl DefaultSession {
 
             // Prepend completed background-task results as prefix blocks for the current
             // prompt.
-            // Background task reflow — see task-arrange §3.1 / §5.1.
+            // Background task reflow.
             let prompt = {
                 let outcomes = self.background.drain_completed();
                 if outcomes.is_empty() {

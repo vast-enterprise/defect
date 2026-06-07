@@ -50,21 +50,21 @@ pub type HttpStack =
 
 /// HTTP stack configuration.
 ///
-/// `Default::default()` provides v0 recommended values: `total_timeout = 600s`,
+/// `Default::default()` provides recommended values: `total_timeout = 600s`,
 /// `transport_retries = 2`, `initial_backoff = 200ms`, `user_agent = None`
 /// (compile-time default), `proxy = ProxyConfig::FromEnv`.
 #[derive(Debug, Clone)]
 pub struct HttpStackConfig {
     /// Total timeout for a single request. `None` means no limit. For SSE streaming
     /// responses, the timer starts after the first byte arrives and continues until the
-    /// stream ends — the v0 default of 600s covers the maximum reasonable duration for
+    /// stream ends — the default of 600s covers the maximum reasonable duration for
     /// Anthropic extended thinking.
     pub total_timeout: Option<Duration>,
 
     /// Maximum number of transport error retries (excluding the initial attempt). `0`
     /// disables the retry layer. Only retries transport-level jitter (DNS / TCP / TLS /
     /// hyper IO); any HTTP status code is treated as "success" and passed through —
-    /// business-level retries are handled in turn-loop §7.
+    /// business-level retries are handled in the turn loop.
     pub transport_retries: u8,
 
     /// Initial backoff for retries. Each retry multiplies by 2, adds ±25% jitter, and
@@ -123,8 +123,8 @@ pub enum HttpStackError {
     #[error("HTTP transport error: {0}")]
     Transport(#[source] BoxError),
 
-    /// Request timed out. `phase` indicates which stage timed out — v0 only supports
-    /// `Total`.
+    /// Request timed out. `phase` indicates which stage timed out — currently only
+    /// supports `Total`.
     /// Staged timeouts for HTTP requests.
     #[error("HTTP request timed out (phase = {phase:?})")]
     Timeout { phase: TimeoutPhase },

@@ -39,7 +39,7 @@ impl TurnRunner<'_> {
     /// Keep-alive is bounded by the **hard limit** `max_stop_hook_continues` — once
     /// reached, the stop is forced to prevent infinite loops. The keep-alive feedback is
     /// injected into history as a **user message** (same pipeline as user prompts; see
-    /// design §4: final alternation fallback).
+    /// the final alternation fallback below).
     pub(super) async fn decide_turn_end(&self, state: &mut TurnState) -> bool {
         // Hard limit reached: stop asking the hook and force-stop.
         if !state.may_stop_hook_continue() {
@@ -60,7 +60,7 @@ impl TurnRunner<'_> {
                 // Inject the feedback as a user message into the history. If the feedback
                 // is empty, inject a fallback prompt to prevent the LLM from immediately
                 // saying "I'm done" on the next turn, which would cause a no-op loop
-                // (design §3 invariant).
+                // (invariant: the next turn must always have something to act on).
                 let blocks = if step.feedback.is_empty() {
                     vec![ContentBlock::from(
                         "Continue working — the stop condition is not yet satisfied.",
@@ -80,7 +80,7 @@ impl TurnRunner<'_> {
     /// Inject a set of content blocks into the history as a user message (used for
     /// keepalive feedback).
     ///
-    /// Fallback role alternation (design §4): if the history already ends with a user
+    /// Fallback role alternation: if the history already ends with a user
     /// role, merge into the same message rather than appending an adjacent user, to
     /// prevent two wire codecs from encountering consecutive identical roles. Blocks that
     /// cannot be decoded are skipped (best effort, does not kill the turn).
@@ -106,9 +106,8 @@ impl TurnRunner<'_> {
     /// - `patch = UserPrompt { prepend, append }` → rewrites the prompt order to
     ///   `[prepend, original, append]`; the rewritten form is used when appending to
     ///   history
-    /// - `append` → not yet spliced into the system prompt (v0 has no landing point;
-    ///   pending `system_prompt`
-    ///   filled in dynamically after assembly)
+    /// - `append` → not yet spliced into the system prompt (currently has no landing
+    ///   point; pending `system_prompt` filled in dynamically after assembly)
     pub(super) async fn fire_user_prompt_submit(
         &self,
         prompt: Vec<ContentBlock>,
@@ -116,7 +115,7 @@ impl TurnRunner<'_> {
         // Step model: `before Ingest` (before input ingestion). The hook can rewrite the
         // input or `Break` to reject the turn.
         // The source is carried by the turn — user turn = User, background continuation
-        // turn = Background (§5.1).
+        // turn = Background.
         let mut step = crate::hooks::step::BeforeIngest {
             source: self.ingest_source.clone(),
             input: prompt,

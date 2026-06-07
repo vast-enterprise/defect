@@ -27,7 +27,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
 const TITLE_TRUNC: usize = 80;
 
-/// Built-in bash tool for v0. No internal state — a singleton `Arc::new(BashTool::new())`
+/// Built-in bash tool. No internal state — a singleton `Arc::new(BashTool::new())`
 /// suffices.
 pub struct BashTool {
     schema: ToolSchema,
@@ -120,7 +120,7 @@ impl Tool for BashTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // Always destructive — v0 does not parse the command text.
+        // Always destructive — does not parse the command text.
         SafetyClass::Destructive
     }
 

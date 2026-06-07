@@ -106,7 +106,7 @@ struct ReadFileOutput {
     /// during chunked reads.
     start_line: u32,
     /// `true` if the backend truncated by `limit`; exact detection requires a second
-    /// read, so v0 uses a heuristic (lines returned == limit implies possible
+    /// read, so this uses a heuristic (lines returned == limit implies possible
     /// truncation).
     truncated: bool,
 }

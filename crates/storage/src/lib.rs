@@ -1,6 +1,6 @@
 //! Session persistence.
 //!
-//! v0 starts by writing session recovery logs as JSONL on disk, supporting append and
+//! Currently writes session recovery logs as JSONL on disk, supporting append and
 //! replay; later evolves on demand to snapshot + sqlite or other indexed storage.
 
 #![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
@@ -308,8 +308,8 @@ impl SessionStore {
     ///
     /// If a `snapshot.json` exists, reads only the tail after the snapshot; otherwise
     /// reads from 0.
-    /// If a crash leaves a partial line at the end of the file, v0 returns an error
-    /// directly; this may later evolve to automatic truncation.
+    /// If a crash leaves a partial line at the end of the file, currently returns
+    /// an error directly; this may later evolve to automatic truncation.
     ///
     /// # Errors
     ///
@@ -400,7 +400,7 @@ impl SessionStore {
     /// Overwrite the journal prefix already covered by the latest snapshot.
     ///
     /// This method must not be called concurrently with event writes for the same
-    /// session; in v0 the caller must explicitly trigger compaction when the session is
+    /// session; the caller must explicitly trigger compaction when the session is
     /// idle.
     ///
     /// # Errors
@@ -464,7 +464,7 @@ pub struct SessionMeta {
 }
 
 impl SessionMeta {
-    /// Constructs v0 metadata.
+    /// Constructs metadata.
     #[must_use]
     pub fn new(session_id: SessionId, cwd: PathBuf, mcp_servers: Vec<McpServer>) -> Self {
         Self {

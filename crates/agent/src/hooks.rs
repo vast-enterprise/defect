@@ -18,8 +18,8 @@
 //! preserving "no hook configured = main loop behavior unchanged".
 //!
 //! [`DefaultHookEngine`]: holds the handler table via [`arc_swap::ArcSwap`], dispatches
-//! serially according to the pipeline semantics of §3.4; matcher, timeout, and panic
-//! capture are handled per the degradation table in hooks.md §3.5.
+//! serially according to the pipeline semantics; matcher, timeout, and panic
+//! capture are handled per the degradation table.
 
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -41,7 +41,7 @@ pub mod command;
 pub mod prompt;
 pub mod step;
 
-/// Default per-handler timeout for `DefaultHookEngine` (hooks.md §8).
+/// Default per-handler timeout for `DefaultHookEngine`.
 const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Matching conditions for a single hook.
@@ -276,14 +276,13 @@ impl HandlerTable {
     }
 }
 
-/// Default hook engine: serial dispatch following the pipeline semantics of hooks.md
-/// §3.4.
+/// Default hook engine: serial dispatch following the pipeline semantics.
 ///
 /// - Uses [`ArcSwap`] to hold a [`HandlerTable`]; [`Self::reload`] enables full hot-swap
 /// - `fire` internally filters by matcher → serial await, each handler sees the event
 ///   after
 ///   all prior patches have been applied
-/// - Timeout, panic, or error in a single handler is downgraded per §3.5 table
+/// - Timeout, panic, or error in a single handler is downgraded per the degradation table
 pub struct DefaultHookEngine {
     table: ArcSwap<HandlerTable>,
 }

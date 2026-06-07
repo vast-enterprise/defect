@@ -634,7 +634,7 @@ fn handle_event(
                     _ => warn!(index = e.index, "input_json_delta for non-tool_use block"),
                 },
                 wire::ContentBlockDelta::CitationsDelta(_) => {
-                    // Citations are not projected into v0 `ProviderChunk`; ignore them.
+                    // Citations are not projected into `ProviderChunk`; ignore them.
                 }
             }
         }
@@ -694,7 +694,7 @@ fn stop_reason_from_wire(r: wire::StopReason) -> StopReason {
         wire::StopReason::ToolUse => StopReason::ToolUse,
         wire::StopReason::Refusal => StopReason::Refusal,
         wire::StopReason::PauseTurn => {
-            // `pause_turn` is a server-tool yield signal. The v0 main loop has no
+            // `pause_turn` is a server-tool yield signal. The main loop has no
             // corresponding semantics, so it is treated as `EndTurn` with a warning; a
             // dedicated variant should be added later.
             warn!("anthropic stop_reason=pause_turn folded to EndTurn");

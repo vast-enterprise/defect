@@ -1,4 +1,4 @@
-//! v0 built-in placeholder LLM provider: echoes the user's most recent message back
+//! Built-in placeholder LLM provider: echoes the user's most recent message back
 //! verbatim.
 //!
 //! Only used to let the stdio ACP link function without external LLM credentials; the

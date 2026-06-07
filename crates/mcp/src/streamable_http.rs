@@ -6,7 +6,7 @@
 //! (proxy / NO_PROXY / default UA / system root certs) used by LLM/fetch, provided
 //! by [`defect_http::build_proxy_connector`].
 //!
-//! Implements only the subset required by v0:
+//! Implements only the required subset:
 //! - JSON-RPC POST with Accepted / JSON / SSE responses;
 //! - GET SSE stream;
 //! - DELETE session;
@@ -14,7 +14,7 @@
 //! - WWW-Authenticate 401 / 403 parsed into [`AuthRequiredError`] /
 //!   [`InsufficientScopeError`].
 //!
-//! Not implemented: OAuth flow (rmcp `auth` feature) — that is not enabled in v0.
+//! Not implemented: OAuth flow (rmcp `auth` feature) — that is not currently enabled.
 
 use std::collections::HashMap;
 use std::sync::Arc;

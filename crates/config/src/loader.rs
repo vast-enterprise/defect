@@ -476,7 +476,7 @@ fn build_effective_config(
 /// Validate the three-tier compaction watermark ratios: each ratio must be in `(0, 1]`,
 /// and `micro ≤ soft < hard` (only enforced between tiers that are actually set). Any
 /// inversion or out-of-bounds value is a hard [`ConfigError::Invalid`] fail — no silent
-/// correction, to avoid "running with awkward watermarks". See turn-loop.md §4.
+/// correction, to avoid "running with awkward watermarks".
 fn validate_compact_ratios(path: &Path, turn: &TurnConfig) -> Result<(), ConfigError> {
     let invalid = |message: String| ConfigError::Invalid {
         path: path.to_path_buf(),

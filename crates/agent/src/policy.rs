@@ -134,7 +134,7 @@ pub trait SandboxPolicy: Send + Sync {
 
 // Built-in policies
 
-/// Allows everything. Equivalent to the early v0 stub; intended for testing / dev mode.
+/// Allows everything. Intended for testing / dev mode.
 pub struct OpenPolicy;
 
 impl SandboxPolicy for OpenPolicy {
@@ -230,8 +230,7 @@ impl SandboxPolicy for AskWritesPolicy {
 ///
 /// This is a separate gate from "tool allowlist trimming": the allowlist determines which
 /// tools the subagent **sees**, while this policy determines how much access is granted
-/// **at runtime** on those tools. See the `project-subagent-design` design document for
-/// details.
+/// **at runtime** on those tools.
 pub struct NonInteractivePolicy {
     inner: Arc<dyn SandboxPolicy>,
 }
@@ -361,8 +360,8 @@ const REJECT_ONCE_ID: &str = "reject_once";
 
 /// The default set of three `Ask` options: Allow once / Allow always / Reject once.
 ///
-/// `RejectAlways` is not included in v0 — v0 has no need for persistent rejection; if the
-/// user rejects once, the prompt will be shown again on the next invocation.
+/// `RejectAlways` is not currently included — there is no need for persistent rejection;
+/// if the user rejects once, the prompt will be shown again on the next invocation.
 fn default_ask_options(tool_name: &str) -> Ask {
     let options = vec![
         AskOption {

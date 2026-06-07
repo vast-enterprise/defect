@@ -59,14 +59,14 @@ impl ShellBackend for AcpShellBackend {
         Box::pin(async move {
             // Consistent with `fs`: the agent enforces a second boundary — the bash tool
             // layer already validates `workdir`, and this additional check makes the
-            // backend's safety guarantees symmetric (see docs §5 "double fence").
+            // backend's safety guarantees symmetric (a "double fence").
             // Note: `fs`'s `resolve_workspace_path` is designed for a "target file +
             // parent directory" model (splitting out `file_name`), so it cannot be
             // directly applied to a directory `cwd`.
             let abs_cwd = resolve_workspace_dir(&self.workspace_root, &cwd)?;
 
-            // v0: all shell commands go through `sh -c <command>`, matching
-            // `LocalShellBackend` (see docs §2.1 "command + args separation").
+            // All shell commands currently go through `sh -c <command>`, matching
+            // `LocalShellBackend` (the "command + args separation" model).
             let req = CreateTerminalRequest::new(self.session_id.clone(), "/bin/sh")
                 .args(vec!["-c".into(), command])
                 .cwd(abs_cwd);

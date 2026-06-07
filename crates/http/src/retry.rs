@@ -2,26 +2,21 @@
 //!
 //! **Strict scope**: only retries [`HttpStackError::Transport`] — DNS / connect / TLS /
 //! hyper IO layer errors. Any HTTP status (200 / 4xx / 5xx) is passed through unchanged.
-//! Retry logic for HTTP requests.
 //!
 //! Implementation notes:
 //! - The request body is buffered into [`bytes::Bytes`] first (LLM requests are small
-//!   JSON);
-//!   on retry the same bytes are used to reconstruct [`toac::body::Body`], avoiding the
-//!   stream-already-consumed problem.
+//!   JSON); on retry the same bytes are used to reconstruct [`toac::body::Body`],
+//!   avoiding the stream-already-consumed problem.
 //! - Backoff: `initial_backoff * 2^attempt ± 25% jitter`, capped at 30s.
 //! - As soon as the inner future polls to a non-transport error (or success), the result
-//!   is
-//!   propagated upward immediately; timeouts / configuration errors are not swallowed.
+//!   is propagated upward immediately; timeouts / configuration errors are not swallowed.
 //!
-//! v0 does not retry mid-stream errors for **already-started streaming responses** — the
-//! hyper-util `Client`'s `Future` returns `Err` for the entire future when the error
-//! occurs
-//! before the status line, so this layer's semantics of "retry only when the future
-//! returns
-//! `Err`" naturally applies only before the status line; errors after the status line
-//! appear
-//! in the response body stream and never reach this layer's future.
+//! Currently does not retry mid-stream errors for **already-started streaming
+//! responses** — the hyper-util `Client`'s `Future` returns `Err` for the entire future
+//! when the error occurs before the status line, so this layer's semantics of "retry
+//! only when the future returns `Err`" naturally applies only before the status line;
+//! errors after the status line appear in the response body stream and never reach this
+//! layer's future.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -267,7 +262,11 @@ mod tests {
             .expect("build req");
         let err = svc.oneshot(req).await.expect_err("must error");
         assert!(matches!(err, HttpStackError::Timeout { .. }));
-        assert_eq!(attempts.load(Ordering::SeqCst), 1, "Timeout should not be retried");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "Timeout should not be retried"
+        );
     }
 
     #[tokio::test]

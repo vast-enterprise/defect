@@ -105,7 +105,7 @@ impl Tool for WriteFileTool {
             if !path.is_empty() {
                 fields.locations = Some(vec![ToolCallLocation::new(PathBuf::from(path))]);
 
-                // v1: Lightly read the old content during the `describe` phase so the
+                // Lightly read the old content during the `describe` phase so the
                 // authorization UI can render an exact old↔new diff. On failure, fall
                 // back to a "fresh" diff (old=None) — `describe` should not block
                 // ToolCall delivery due to IO jitter. NotFound is equivalent to a "create

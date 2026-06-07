@@ -16,7 +16,8 @@
 //!
 //! Following the existing pattern in [`crate::session::DefaultSession`] (where
 //! `background`, `compaction_slot`, etc. are all purpose-specific named structs, not a
-//! catch-all `HashMap<String, Value>`). v0 has only two fields, but it's a struct —
+//! catch-all `HashMap<String, Value>`). It currently has only two fields, but it's a
+//! struct —
 //! future additions like `summary`, `reached_at`, sub-goal lists, etc. can be added as
 //! fields. Since `ToolContext` and builtins hold an `Arc<GoalState>`, adding or removing
 //! fields does not break the interface.

@@ -168,7 +168,7 @@ async fn run_edit(
     // "pre-write" fingerprint to detect concurrent external modifications during the
     // read→write window.
     //
-    // On failure (rare, e.g. `NotPermitted`), drop this guard and proceed normally — v1
+    // On failure (rare, e.g. `NotPermitted`), drop this guard and proceed normally —
     // conflict detection is best-effort and should not block the main flow.
     let baseline_fp = fs.fingerprint(path.clone()).await.ok();
 
@@ -202,7 +202,7 @@ async fn run_edit(
             Ok(current) if current != baseline => {
                 return ToolEvent::Failed(map_fs_err(FsError::Conflict(path)));
             }
-            // Don't block if the current fingerprint is unavailable — v1 conflict
+            // Don't block if the current fingerprint is unavailable — conflict
             // detection is best-effort.
             _ => {}
         }

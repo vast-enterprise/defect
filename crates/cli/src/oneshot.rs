@@ -269,8 +269,7 @@ impl EventSink {
 
     /// Plain text: **all agent content** (body / thinking / tools) goes to
     /// stdout as a single stream in event order —— framework logs (tracing) go
-    /// to stderr, the two never interfere (see the module header §output
-    /// contract).
+    /// to stderr, the two never interfere.
     ///
     /// Boundary newlines: assistant body often has no trailing newline, while
     /// what immediately follows may be a thinking / tool line or the next

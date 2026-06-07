@@ -174,7 +174,7 @@ async fn run_fetch(
     };
 
     // Pre-validate the URL scheme so that non-http/https URLs fail with `InvalidArgs`
-    // (§10 #7) rather than `Execution`.
+    // rather than `Execution`.
     if let Err(reason) = validate_scheme(&parsed.url) {
         return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

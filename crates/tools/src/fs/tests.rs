@@ -389,8 +389,9 @@ async fn case12_write_path_escape() {
 
 #[tokio::test]
 async fn case13_write_no_partial_file_on_success() {
-    // Degenerate version of §6.2: the observable outcome of tmp + rename is that after
-    // writing, **only the target file** exists, with no leftover `.defect-*.tmp` files.
+    // Degenerate version of the atomic-write case: the observable outcome of tmp +
+    // rename is that after writing, **only the target file** exists, with no leftover
+    // `.defect-*.tmp` files.
     // The original matrix's panic injection requires hooking IO; here we use "no tmp on
     // normal path" + "no tmp when parent is missing (case11)" as a regression baseline.
     let h = Harness::new();
@@ -536,7 +537,7 @@ async fn case19_edit_empty_old_string() {
     assert!(err_str.contains("must not be empty"), "err: {err_str}");
 }
 
-// ---------- v1 conflict detection ----------
+// ---------- conflict detection ----------
 
 /// Injects an external modification between the baseline fingerprint and the "re-fetch
 /// before write" fingerprint, so that `edit_file`'s conflict detection sees different
@@ -631,7 +632,7 @@ async fn case23_edit_detects_external_modification_between_read_and_write() {
     );
 }
 
-// ---------- v1 describe-phase precise diff ----------
+// ---------- describe-phase precise diff ----------
 
 #[tokio::test]
 async fn case27_write_describe_attaches_old_text_when_file_exists() {
@@ -677,7 +678,7 @@ async fn case28_write_describe_old_text_none_for_new_file() {
     assert!(diff.old_text.is_none(), "no old_text for new file");
 }
 
-// v1 chunked read
+// chunked read
 
 #[tokio::test]
 async fn case25_read_window_on_oversized_file() {

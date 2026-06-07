@@ -666,8 +666,8 @@ impl TaskHandle {
 /// The wording is structured as a "deferred tool result return", clearly marking the
 /// source (task id + label) and success/failure, to prevent the model from
 /// misinterpreting it as user speech.
-/// Phase 2 will replace this with the proper ingest path using `IngestSource::Background`
-/// (§5.1), at which point this function will be superseded by the corresponding payload.
+/// Phase 2 will replace this with the proper ingest path using `IngestSource::Background`,
+/// at which point this function will be superseded by the corresponding payload.
 #[must_use]
 pub fn format_background_outcome(outcome: &BackgroundOutcome) -> String {
     let status = if outcome.result.is_error() {

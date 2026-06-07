@@ -142,9 +142,9 @@ struct ProfileToolsToml {
     allow: Option<Vec<String>>,
 }
 
-/// Subset of sampling overrides – only expose the scalars needed by v0; when mapping to
-/// [`SamplingParams`], merge on top of `default()` and leave other fields (`thinking` /
-/// `stop_sequences`) at their defaults.
+/// Subset of sampling overrides – only expose the scalars currently needed; when
+/// mapping to [`SamplingParams`], merge on top of `default()` and leave other fields
+/// (`thinking` / `stop_sequences`) at their defaults.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProfileSamplingToml {

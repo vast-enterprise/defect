@@ -492,13 +492,11 @@ impl WithRequestIdOpt for ProviderError {
 /// Maps [`CallError<HttpStackError>`] to [`ProviderError`].
 ///
 /// Key branches: [`HttpStackError::Timeout`] is mapped to
-/// [`ProviderErrorKind::Timeout`] and the phase is forwarded to the turn-loop §7 for
-/// retry
-/// decision — this was previously missing; see HTTP retry semantics.
+/// [`ProviderErrorKind::Timeout`] and the phase is forwarded to the turn loop for
+/// retry decision — this was previously missing; see HTTP retry semantics.
 /// [`HttpStackError::ProxyConnect`] / [`HttpStackError::Config`] are both treated as
-/// transport errors (the structured reason is written into `Display`, so the turn-loop
-/// receives
-/// a transport-flavor backoff retry).
+/// transport errors (the structured reason is written into `Display`, so the turn loop
+/// receives a transport-flavor backoff retry).
 pub(crate) fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {
@@ -522,7 +520,7 @@ pub(crate) fn call_error_to_provider(err: CallError<HttpStackError>) -> Provider
 /// Maps the [`defect_http::TimeoutPhase`] carried by [`HttpStackError`] to the
 /// agent-layer [`TimeoutPhase`]. Both enums have the same variants (`Connect /
 /// ReadHeaders / ReadBody / Idle / Total`) but live in different crates, preventing the
-/// layer implementation from coupling to the LLM error model. v0 only ever produces
+/// layer implementation from coupling to the LLM error model. Currently only produces
 /// `Total`; the remaining arms are placeholders for future per-phase timeouts.
 fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
     match phase {
@@ -532,8 +530,8 @@ fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
         defect_http::TimeoutPhase::Idle => TimeoutPhase::Idle,
         defect_http::TimeoutPhase::Total => TimeoutPhase::Total,
         // Upstream `#[non_exhaustive]`: fall back to `Total` when new phases are added in
-        // the future — no stack overflow, no information loss (turn-loop §7 uses the same
-        // backoff path for all phases).
+        // the future — no stack overflow, no information loss (the turn loop uses the
+        // same backoff path for all phases).
         _ => TimeoutPhase::Total,
     }
 }
@@ -649,7 +647,7 @@ fn extract_model(msg: &str) -> Option<String> {
 
 // Hardcoded model table
 
-/// v0 hardcoded model table.
+/// Hardcoded model table.
 ///
 /// The `/v1/models` schema varies significantly across compatible providers (OpenAI only
 /// sends `id` / `created` / `owned_by`, DeepSeek omits `context_window`, Together has

@@ -5,7 +5,7 @@
 //!
 //! - [`CommandSpec`]: handler configuration — either direct argv spawn or explicit shell.
 //! - [`CommandHandler`]: implements [`StepHandler`]; spawn / kill_on_drop / timeout
-//!   follow the semantics of §4.2.3.
+//!   follow the documented semantics.
 //!
 //! No shell dependency: direct argv spawn is the default; only the explicit `shell` field
 //! uses a shell.
@@ -109,7 +109,7 @@ impl CommandHandler {
 
     /// The timeout configured on this handler. The CLI assembly forwards it into
     /// [`StepHandlerEntry::with_timeout`](super::StepHandlerEntry::with_timeout); the
-    /// engine's default fallback is described in §8.
+    /// engine applies its own default fallback when this is `None`.
     #[must_use]
     pub fn timeout(&self) -> Option<Duration> {
         self.spec.timeout()

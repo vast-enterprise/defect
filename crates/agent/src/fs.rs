@@ -1,7 +1,7 @@
 //! Filesystem backend abstraction.
 //!
 //! [`FsBackend`] is the trait boundary between the fs tool family (`read_file` /
-//! `write_file` / `edit_file`) and the underlying I/O. Two v0 implementations:
+//! `write_file` / `edit_file`) and the underlying I/O. Two implementations:
 //! - `defect_tools::fs::LocalFsBackend`: writes directly to disk
 //! - `defect_acp::fs::AcpFsBackend`: delegates to the client via ACP `fs/read_text_file`
 //!   / `fs/write_text_file` reverse requests
@@ -83,11 +83,11 @@ impl FsBackend for NoopFsBackend {
 
 /// Fs backend trait.
 ///
-/// Two verbs cover all low-level operations of the v0 fs tool family:
+/// Two verbs cover all low-level operations of the fs tool family:
 /// - `edit_file` is composed at the tool layer (first [`read_text`] then
 ///   [`write_text`](FsBackend::write_text));
 ///   the backend is unaware of patch semantics
-/// - Delete / move / mkdir are not part of the v0 fs tool family (ACP has no
+/// - Delete / move / mkdir are not part of the fs tool family (ACP has no
 ///   corresponding inverse methods);
 ///   the LLM uses `bash`
 ///
@@ -165,7 +165,7 @@ pub enum FsError {
 
     /// Operation not permitted: path out of bounds, binary file, client deny,
     /// insufficient permissions, etc.
-    /// v0 uses a string placeholder; upgrade to an enum in a later iteration.
+    /// Currently uses a string placeholder; may become an enum in a later iteration.
     #[error("operation not permitted: {0}")]
     NotPermitted(String),
 

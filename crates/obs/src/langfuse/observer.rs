@@ -60,7 +60,7 @@ impl SessionObserver for LangfuseObserver {
 
             while let Some(event) = events.next().await {
                 // Use the receive time as an approximation of the event time (AgentEvent
-                // has no timestamp; see design doc §3.4).
+                // has no timestamp).
                 let now = chrono::Utc::now().to_rfc3339();
                 for ev in projector.project(event, &now, &mut new_id) {
                     ingest.enqueue(ev);
