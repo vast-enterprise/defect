@@ -31,8 +31,12 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             build_args: "--no-default-features --features provider-anthropic,provider-openai,provider-deepseek,yaml,repl,oneshot"
+          # GitHub 正在退役 Intel(x86_64)macOS runner，macos-13 配额紧张常领不到。
+          # 改在 Apple Silicon runner 上交叉编译 x86_64——苹果工具链原生支持跨架构，
+          # toolchain step 的 `targets:` 会装好对应 std。bedrock 的 aws-lc-sys 暂保留
+          # 全功能；若交叉编译该 C/汇编依赖失败，再像 musl 档那样去掉 provider-bedrock。
           - target: x86_64-apple-darwin
-            os: macos-13       # Intel runner
+            os: macos-latest   # Apple Silicon runner, cross-compiles x86_64
           - target: aarch64-apple-darwin
             os: macos-latest   # Apple Silicon runner
           - target: x86_64-pc-windows-msvc
