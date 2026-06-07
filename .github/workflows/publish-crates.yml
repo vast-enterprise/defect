@@ -53,15 +53,52 @@ jobs:
             defect-acp
             defect-cli
           )
+          # 发布版本（与 workspace.package.version 对齐）。jq 是 GitHub runner 标配。
+          VERSION="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="defect-cli") | .version')"
+          echo "::notice::target version = $VERSION"
+
+          # sparse index 路径规则：name≥4 字符 → {前两}/{次两}/{name}。
+          # 返回 0 表示该 crate@VERSION 已在 crates.io 上存在。
+          already_published() {
+            local name="$1"
+            local path="${name:0:2}/${name:2:2}/${name}"
+            curl -fsSL "https://index.crates.io/${path}" 2>/dev/null \
+              | grep -q "\"vers\":\"${VERSION}\""
+          }
+
           FLAGS="--locked"
           if [ "$DRY_RUN" = "true" ]; then
             FLAGS="$FLAGS --dry-run"
             echo "::notice::DRY RUN —— 仅 package 校验，不会真正发布"
           fi
-          for c in "${CRATES[@]}"; do
+
+          # crates.io 限流（来自其公开配置）：
+          #   - 新 crate（首次发布某个名字）：burst 5，之后每 10 分钟补 1 个；
+          #   - 已存在 crate 发新版本：burst 30，每分钟补 1 个（宽松得多）。
+          # 首发本批 11 个全是“新 crate”，burst 5 之后必须每个间隔 >10 分钟，否则撞 429。
+          # 取 11 分钟保守间隔。后续版本升级不是新 crate、不受此约束，但留间隔仍利于索引传播。
+          SLEEP_BETWEEN=660
+
+          published_this_run=0
+          for i in "${!CRATES[@]}"; do
+            c="${CRATES[$i]}"
+            # 幂等：已发布的版本跳过，让失败后的 rerun 不会在已发的包上撞 “crate already exists”。
+            # dry-run 不跳过——dry-run 的意义就是校验每个包都能 package。
+            if [ "$DRY_RUN" != "true" ] && already_published "$c"; then
+              echo "::notice::skip $c@$VERSION (already on crates.io)"
+              continue
+            fi
+
+            # 在真发布且本 run 已经发过包的前提下，发下一个包前先等足限流间隔。
+            # 把 sleep 放在“发布之前”而非之后，可天然避免最后一个包发完仍空等。
+            if [ "$DRY_RUN" != "true" ] && [ "$published_this_run" -gt 0 ]; then
+              echo "sleeping ${SLEEP_BETWEEN}s before publishing $c to respect crates.io rate limits..."
+              sleep "$SLEEP_BETWEEN"
+            fi
+
             echo "::group::publish $c"
             cargo publish -p "$c" $FLAGS
             echo "::endgroup::"
-            # 真发布时给 crates.io 索引留出传播时间，否则后一个 crate 可能解析不到刚发的依赖。
-            if [ "$DRY_RUN" != "true" ]; then sleep 30; fi
+            published_this_run=$((published_this_run + 1))
           done
