@@ -53,6 +53,11 @@ use tokio::sync::mpsc;
 
 use crate::session_open::open_session;
 
+/// The user input prompt. Shared by the live input line and history replay so that a
+/// replayed user message looks identical to one freshly typed (the two used to diverge:
+/// live input showed `› …` while replay showed `user> …`).
+const USER_PROMPT: &str = "› ";
+
 /// Run an interactive REPL until stdin EOF (Ctrl-D) or until `:q` / `:quit` / `:exit` is
 /// read.
 ///
@@ -110,7 +115,7 @@ pub async fn run(
     let (key_tx, mut key_rx) = mpsc::channel::<KeyMsg>(64);
     let _input = InputReader::spawn(key_tx);
 
-    let mut editor = LineEditor::new("› ".cyan().bold().to_string());
+    let mut editor = LineEditor::new(USER_PROMPT.cyan().bold().to_string());
     editor.redraw(&mut out).await?;
 
     // Prompts entered while a turn is in progress are queued here — the same session
@@ -764,29 +769,33 @@ async fn write(out: &mut Stdout, s: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// On resume, naively replay a historical message: for each user/assistant text, thought,
-/// tool call, or result, print a one-line summary with a prefix. Display only; does not
-/// affect session state. Newlines are handled by the terminal's cooked mode (raw mode is
-/// not yet active).
+/// On resume, replay a historical message using the **same visual language as live
+/// rendering** (see [`LineEditor::render_event`] / [`LineEditor::echo_submitted`]): a user
+/// message gets the `› ` prompt, assistant text is printed bare, thoughts are dimmed
+/// italic, tool calls show `⚙ name`, and tool results show `  ↳ status`. Keeping the two
+/// paths identical avoids the jarring style break a resumed session used to show. Display
+/// only; does not affect session state. Newlines rely on the terminal's cooked mode (raw
+/// mode is not yet active).
 async fn render_history_message(out: &mut Stdout, message: &Message) -> anyhow::Result<()> {
-    let prefix = match message.role {
-        Role::User => "user> ".cyan().bold().to_string(),
-        Role::Assistant => "asst> ".green().bold().to_string(),
-    };
     for content in message.content.iter() {
-        match content {
-            MessageContent::Text { text } => {
-                write(out, &format!("{prefix}{text}\n")).await?;
+        match (message.role, content) {
+            // User text mirrors the live input line: `› <text>`.
+            (Role::User, MessageContent::Text { text }) => {
+                write(out, &format!("{}{text}\n", USER_PROMPT.cyan().bold())).await?;
             }
-            MessageContent::Thinking { text, .. } => {
-                write(out, &format!("{prefix}{}\n", text.dimmed().italic())).await?;
+            // Assistant text is streamed bare during a live turn — replay it the same way.
+            (Role::Assistant, MessageContent::Text { text }) => {
+                write(out, &format!("{text}\n")).await?;
             }
-            MessageContent::ToolUse { name, .. } => {
-                write(out, &format!("  {} {}\n", "⚙".yellow(), name.yellow())).await?;
+            (_, MessageContent::Thinking { text, .. }) => {
+                write(out, &format!("{}\n", text.dimmed().italic())).await?;
             }
-            MessageContent::ToolResult { is_error, .. } => {
-                let label = if *is_error { "error" } else { "ok" };
-                write(out, &format!("  {} {label}\n", "↳".dimmed())).await?;
+            (_, MessageContent::ToolUse { name, .. }) => {
+                write(out, &format!("{} {}\n", "⚙".yellow(), name.yellow())).await?;
+            }
+            (_, MessageContent::ToolResult { is_error, .. }) => {
+                let label = if *is_error { "Failed" } else { "Completed" };
+                write(out, &format!("{} {label}\n", "  ↳".dimmed())).await?;
             }
             _ => {}
         }
