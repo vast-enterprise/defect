@@ -8,12 +8,13 @@
 use std::sync::{Arc, RwLock};
 
 use agent_client_protocol::schema::{
-    AgentCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    AgentCapabilities, AuthenticateRequest, AvailableCommand, AvailableCommandsUpdate,
+    CancelNotification, ClientCapabilities, ContentBlock, ContentChunk, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
+    NewSessionResponse, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOption, SessionConfigValueId, SessionId, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse,
+    SessionConfigSelectOption, SessionConfigValueId, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use defect_agent::event::{AgentEvent, PermissionResolution};
@@ -630,7 +631,8 @@ impl ServeState {
                 // Spawn a persistent event pump that forwards all events for the lifetime
                 // of this session (including driver-initiated turn continuations) as
                 // `session/update`.
-                spawn_session_pump(session.clone(), session.id().clone(), cx);
+                spawn_session_pump(session.clone(), session.id().clone(), cx.clone());
+                announce_commands(session.id(), &cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
                     cwd = %cwd_for_log.display(),
@@ -683,7 +685,8 @@ impl ServeState {
                         tracing::warn!(?err, "failed to replay resumed session transcript");
                     }
                 }
-                spawn_session_pump(session.clone(), session.id().clone(), cx);
+                spawn_session_pump(session.clone(), session.id().clone(), cx.clone());
+                announce_commands(session.id(), &cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
                     cwd = %cwd_for_log.display(),
@@ -731,7 +734,8 @@ impl ServeState {
                 }
                 // Start a persistent event pump (same as session/new) — after replay, it
                 // takes over new events.
-                spawn_session_pump(session.clone(), session_id.clone(), cx);
+                spawn_session_pump(session.clone(), session_id.clone(), cx.clone());
+                announce_commands(&session_id, &cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
                     cwd = %cwd_for_log.display(),
@@ -831,6 +835,19 @@ impl ServeState {
                 .into_wire_error(),
             );
         };
+        // Slash command interception: a leading `/compact` / `/context` is run
+        // out-of-band (no LLM turn) and replied to as an agent message. Anything else is
+        // a normal prompt.
+        if let Some((name, _args)) = parse_slash_command(&req.prompt)
+            && matches!(name.as_str(), CMD_COMPACT | CMD_CONTEXT)
+        {
+            let cx_for_cmd = cx.clone();
+            return cx.spawn(async move {
+                let stop = run_slash_command(&session, &session_id, &name, &cx_for_cmd).await;
+                responder.respond(PromptResponse::new(stop))
+            });
+        }
+
         // Spawn the turn execution into a background task so the handler returns
         // immediately and the dispatch loop is not blocked; this allows subsequent
         // cancel/resolve messages to be processed while the turn runs. Event projection
@@ -1097,6 +1114,137 @@ fn spawn_permission_request(
         session.resolve_permission(tool_call_id, outcome);
         Ok(())
     });
+}
+
+// ===== Slash commands =====
+//
+// ACP models slash commands as agent-declared `AvailableCommand`s: the agent broadcasts
+// the list via `session/update`, and when the user types `/<name> …` the client sends it
+// back as an ordinary text prompt. We therefore (1) announce the command list right after
+// a session is created/loaded, and (2) intercept a leading `/name` in `on_prompt`,
+// running it out-of-band instead of feeding it to the LLM.
+
+const CMD_COMPACT: &str = "compact";
+const CMD_CONTEXT: &str = "context";
+
+/// Build the `session/update` that advertises our slash commands to the client.
+fn available_commands_notification(session_id: &SessionId) -> SessionNotification {
+    let commands = vec![
+        AvailableCommand::new(
+            CMD_COMPACT,
+            "Compact the conversation now: summarize older turns to free up context.",
+        ),
+        AvailableCommand::new(
+            CMD_CONTEXT,
+            "Show current context usage (tokens used vs. the model's context window).",
+        ),
+    ];
+    SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(commands)),
+    )
+}
+
+/// Announce the available slash commands for a freshly created / loaded / resumed session.
+/// Best-effort: a failed send is logged but does not abort session setup.
+fn announce_commands(session_id: &SessionId, cx: &ConnectionTo<Client>) {
+    if let Err(err) = cx.send_notification(available_commands_notification(session_id)) {
+        tracing::warn!(?err, "failed to announce available commands");
+    }
+}
+
+/// If the prompt is a slash command we recognize, returns `(name, args)` with the leading
+/// `/` stripped; otherwise `None` (the prompt is a normal message). Only the first text
+/// block is inspected, and only when it starts with `/` after trimming leading whitespace.
+fn parse_slash_command(prompt: &[ContentBlock]) -> Option<(String, String)> {
+    let ContentBlock::Text(first) = prompt.first()? else {
+        return None;
+    };
+    let trimmed = first.text.trim_start();
+    let rest = trimmed.strip_prefix('/')?;
+    // Split the command name from its argument text (everything after the first run of
+    // whitespace). `/compact` → ("compact", ""); `/context  ` → ("context", "").
+    let (name, args) = match rest.split_once(char::is_whitespace) {
+        Some((name, args)) => (name, args.trim()),
+        None => (rest, ""),
+    };
+    Some((name.to_string(), args.to_string()))
+}
+
+/// Send a one-line agent message back to the client as the command's visible result.
+/// Slash commands have no dedicated response shape in ACP, so we surface the outcome the
+/// same way the agent would speak — every client can already render it.
+fn send_command_reply(session_id: &SessionId, text: String, cx: &ConnectionTo<Client>) {
+    let notif = SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            text,
+        )))),
+    );
+    if let Err(err) = cx.send_notification(notif) {
+        tracing::warn!(?err, "failed to send slash command reply");
+    }
+}
+
+/// Format a token count compactly: `1234` → `1.2k`, `999` → `999`.
+fn fmt_tokens(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Run a recognized slash command out-of-band and reply to the client. Returns the
+/// `PromptResponse` stop reason to complete the original `session/prompt` (always
+/// `EndTurn` — the command does not start an LLM turn).
+async fn run_slash_command(
+    session: &Arc<dyn Session>,
+    session_id: &SessionId,
+    name: &str,
+    cx: &ConnectionTo<Client>,
+) -> StopReason {
+    match name {
+        CMD_CONTEXT => {
+            let status = session.context_status();
+            let reply = match (status.used_tokens, status.context_window) {
+                (Some(used), Some(window)) => {
+                    let pct = status.ratio.map_or(0.0, |r| r * 100.0);
+                    format!(
+                        "Context: {} / {} tokens ({:.0}%) used.",
+                        fmt_tokens(used),
+                        fmt_tokens(window),
+                        pct
+                    )
+                }
+                (Some(used), None) => format!(
+                    "Context: {} tokens used (model context window unknown).",
+                    fmt_tokens(used)
+                ),
+                (None, _) => "Context: no usage recorded yet.".to_string(),
+            };
+            send_command_reply(session_id, reply, cx);
+        }
+        CMD_COMPACT => {
+            let reply = match session.compact_now().await {
+                Ok(Some(report)) => format!(
+                    "Compacted context: {} → {} tokens.",
+                    fmt_tokens(report.tokens_before),
+                    fmt_tokens(report.tokens_after)
+                ),
+                Ok(None) => "Nothing to compact yet — the conversation is too short to summarize."
+                    .to_string(),
+                Err(TurnError::TurnInProgress) => {
+                    "Cannot compact while a turn is running. Cancel it or wait, then try again."
+                        .to_string()
+                }
+                Err(err) => format!("Compaction failed: {err}"),
+            };
+            send_command_reply(session_id, reply, cx);
+        }
+        _ => unreachable!("run_slash_command called with an unrecognized command"),
+    }
+    StopReason::EndTurn
 }
 
 #[cfg(test)]

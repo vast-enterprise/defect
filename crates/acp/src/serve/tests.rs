@@ -85,3 +85,47 @@ fn decide_fs_mode_default_caps_is_local() {
     let caps = ClientCapabilities::new();
     assert_eq!(decide_fs_mode(&caps), FsMode::Local);
 }
+
+fn text_prompt(s: &str) -> Vec<ContentBlock> {
+    vec![ContentBlock::Text(TextContent::new(s.to_string()))]
+}
+
+#[test]
+fn parse_slash_command_recognizes_bare_command() {
+    let (name, args) = parse_slash_command(&text_prompt("/compact")).expect("command");
+    assert_eq!(name, "compact");
+    assert_eq!(args, "");
+}
+
+#[test]
+fn parse_slash_command_splits_args_and_trims() {
+    let (name, args) =
+        parse_slash_command(&text_prompt("/context   extra stuff ")).expect("command");
+    assert_eq!(name, "context");
+    assert_eq!(args, "extra stuff");
+}
+
+#[test]
+fn parse_slash_command_tolerates_leading_whitespace() {
+    let (name, _) = parse_slash_command(&text_prompt("   /compact")).expect("command");
+    assert_eq!(name, "compact");
+}
+
+#[test]
+fn parse_slash_command_ignores_plain_text() {
+    assert!(parse_slash_command(&text_prompt("hello there")).is_none());
+    // A slash mid-sentence is not a command — only a leading slash counts.
+    assert!(parse_slash_command(&text_prompt("what about a/b testing")).is_none());
+}
+
+#[test]
+fn parse_slash_command_ignores_empty_prompt() {
+    assert!(parse_slash_command(&[]).is_none());
+}
+
+#[test]
+fn fmt_tokens_humanizes_thousands() {
+    assert_eq!(fmt_tokens(999), "999");
+    assert_eq!(fmt_tokens(1000), "1.0k");
+    assert_eq!(fmt_tokens(12_345), "12.3k");
+}
