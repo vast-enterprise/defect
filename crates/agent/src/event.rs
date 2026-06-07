@@ -210,7 +210,7 @@ pub struct LlmRequestSnapshot {
     pub messages: Vec<Message>,
 }
 
-/// The user's response to an [`Ask`].
+/// The user's response to an [`Ask`](crate::policy::Ask).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

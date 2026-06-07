@@ -118,7 +118,7 @@ pub async fn build_provider_entries(
     Ok(entries)
 }
 
-/// Instantiate a provider based on [`ProviderKind`].
+/// Instantiate a provider based on [`ProviderKind`](defect_config::ProviderKind).
 ///
 /// When downstream developers want to swap in their own OpenAI implementation, call this
 /// function independently to construct the default provider, then push a custom entry

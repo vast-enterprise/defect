@@ -9,7 +9,7 @@
 //! Assembly is handled in the `defect-acp` `session/new` handler — it selects the backend
 //! based on the client's [`ClientCapabilities::terminal`] negotiation result and injects
 //! it into [`crate::session::AgentCore::create_session`].
-
+//!
 //! [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
 
 use std::path::PathBuf;
