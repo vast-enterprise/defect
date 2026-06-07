@@ -4,7 +4,7 @@
 //! 抽出，集中到一个 crate。cli 只调一个入口，后续扩 Langfuse / OTLP 不再
 //! 改 cli 装配。
 //!
-//! 设计详见 `docs/internal/observability-langfuse.md`。
+//! Observability crate — tracing, metrics, and Langfuse integration.
 //!
 //! ## 当前能力
 //!

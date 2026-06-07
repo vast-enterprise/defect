@@ -5,7 +5,7 @@
 //! 把 SSE [`Sse`] 流（[`MessageStreamEvent`]）解码为
 //! [`defect_agent::llm::ProviderChunk`] 流。
 //!
-//! 设计映射详见 `docs/outbound/llm-anthropic.md` §6。
+//! Anthropic Messages API protocol mapping.
 //!
 //! [`Sse`]: ::sse_stream::Sse
 //! [`MessageStreamEvent`]: crate::wire::anthropic::components::MessageStreamEvent
@@ -400,7 +400,7 @@ struct DecoderState {
 /// 拉取，drop 该流即等同取消。
 ///
 /// `cancel` 来自 [`defect_agent::llm::LlmProvider::complete`]，触发后流静默
-/// 终结，不 yield `Err(Canceled)`（与 `docs/internal/llm-trait.md` §2.2 一致）。
+/// terminates without yielding `Err(Canceled)`.
 pub fn decode_stream(
     sse: SseEventStream,
     cancel: CancellationToken,

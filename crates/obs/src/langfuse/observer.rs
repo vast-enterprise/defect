@@ -8,7 +8,7 @@
 //! 与 storage 的关键区别：**可丢弃降级**。storage 慢消费会 backpressure 主循环
 //! （“不丢”语义），langfuse 不行——所以消费循环里只做 `enqueue`（非阻塞）+
 //! 轻量翻译，真正的网络 IO 全在 [`LangfuseIngest`] 的后台任务里，且满了丢弃。
-//! 任何 langfuse 故障都不得影响 agent。详见 `docs/internal/observability-langfuse.md`。
+//! Any Langfuse failure must NOT affect the agent.
 
 use std::sync::Arc;
 

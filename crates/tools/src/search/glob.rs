@@ -1,7 +1,7 @@
 //! 把 glob 字符串编译成 [`globset::GlobSet`]。
 //!
 //! [`globset::Glob::new`] 不展开大括号 `{a,b}`——P1 自己拆。详见
-//! `docs/internal/tools-search.md` §6.4。
+//! Glob pattern matching for file name search.
 
 use globset::{Error, Glob, GlobSetBuilder};
 

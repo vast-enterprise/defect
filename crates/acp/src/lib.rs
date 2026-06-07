@@ -5,7 +5,7 @@
 
 #![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 //!
-//! 设计详见 `docs/inbound/acp-bridge.md`。
+//! ACP (Agent Client Protocol) bridge — translates between internal events and ACP wire messages.
 
 mod echo_provider;
 pub mod fs;

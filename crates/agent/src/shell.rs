@@ -10,7 +10,7 @@
 //! [`ClientCapabilities::terminal`] 协商结果选择后端，注入给
 //! [`crate::session::AgentCore::create_session`]。
 //!
-//! 设计详见 `docs/inbound/acp-shell.md`。
+
 //!
 //! [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
 

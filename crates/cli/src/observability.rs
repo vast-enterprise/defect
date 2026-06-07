@@ -3,7 +3,7 @@
 //! 翻译 + 校验放 CLI 装配期：`defect-obs` 不依赖 `defect-config`（保持单向依赖），
 //! 而“enabled 但缺 key”这类策略校验天然属于装配层。
 //!
-//! 设计详见 `docs/internal/observability-langfuse.md` §6。
+//! Observability setup — tracing and Langfuse integration.
 
 use std::time::Duration;
 

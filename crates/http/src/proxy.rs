@@ -1,6 +1,6 @@
 //! HTTP/HTTPS 代理 connector 装配。
 //!
-//! 设计详见 `docs/outbound/http.md` §3.5。
+//! HTTP proxy implementation.
 //!
 //! 形态：连接层装一份 [`hyper_http_proxy::ProxyConnector<HttpConnector>`]，
 //! 外面再用 [`hyper_rustls::HttpsConnector`] 包出 TLS。`ProxyConnector`

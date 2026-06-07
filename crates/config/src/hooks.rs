@@ -1,6 +1,6 @@
 //! `[hooks]` 段解析。
 //!
-//! 详见 `docs/internal/hooks.md` §5、`docs/internal/hook-step-context.md`。
+//! Hook configuration types.
 //!
 //! ## 形态
 //!

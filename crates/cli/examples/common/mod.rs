@@ -4,9 +4,9 @@
 //! 与 [`crates/llm/examples/common/mod.rs`] 区别：本模块面向 ACP 形态——
 //! - subscriber 一律 `with_writer(std::io::stderr)`（stdout 给 wire 用）
 //! - 默认 EnvFilter 静默 toac 的 `INFO request` 事件（含 authorization
-//!   header 明文，详见 `docs/outbound/tracing.md` §5.2）
+//!   header in plain text (see tracing design)
 //!
-//! 见 `docs/outbound/tracing.md` §3。
+//! See tracing design.
 
 use std::io::IsTerminal;
 use std::path::Path;

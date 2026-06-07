@@ -1,5 +1,5 @@
 //! Command hook handler — 把 step 信封 JSON 喂给一个外部子进程，按
-//! `docs/internal/hooks.md` §4.2 的 IO 协议把 stdout 当 verdict JSON 透传。
+//! The IO protocol passes stdout through as verdict JSON.
 //!
 //! ## 形态
 //!
@@ -32,7 +32,7 @@ use super::{HookCtx, HookError, StepHandler};
 
 /// Command handler 的配置。
 ///
-/// 详见 `docs/internal/hooks.md` §4.2。
+/// See module-level docs.
 ///
 /// 设计上等价于 `defect_config::HookCommandSpec`，但放在 agent crate
 /// 这一层，CLI 装配期把 config 形态翻译过来——agent crate 不依赖 config。
@@ -88,7 +88,7 @@ impl CommandSpec {
 
 /// `Command` handler 实现。
 ///
-/// 见 `docs/internal/hooks.md` §4.2：
+/// IO protocol:
 /// - stdin = step 信封的 JSON 序列化，单行
 /// - stdout = verdict JSON 对象（空 = 不干预），原样透传给引擎
 /// - stderr 透传 tracing

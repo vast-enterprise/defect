@@ -2,7 +2,7 @@
 //!
 //! 对接 `https://api.anthropic.com/v1/messages`，bearer token + SSE。
 //!
-//! 设计与字段对应详见 `docs/outbound/llm-anthropic.md`。
+//! Anthropic provider implementation — field mapping and request building.
 
 use std::env;
 use std::fmt;
@@ -341,7 +341,7 @@ impl WithRequestIdOpt for ProviderError {
 ///
 /// 关键分支：[`HttpStackError::Timeout`] 单独翻成
 /// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
-/// 决策——这条之前缺失，详见 `docs/outbound/http.md` §4。
+/// Decision — this was previously missing; see HTTP retry semantics.
 fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {
@@ -377,7 +377,7 @@ fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
 
 /// 把 wire `ErrorResponse` + HTTP status 翻成 [`ProviderError`]。
 ///
-/// 映射表见 `docs/outbound/llm-anthropic.md` §7。
+/// Mapping table — see Anthropic provider design.
 fn error_response(status: u16, e: &wire::ErrorResponse) -> ProviderError {
     let message = e.error.message.clone();
     let upstream_type = e.error.r#type.as_str();

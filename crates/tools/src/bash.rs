@@ -1,6 +1,6 @@
 //! `bash` 内置工具：跑一条非交互 shell 命令、合并 stdout/stderr、单帧返回。
 //!
-//! 设计与取舍详见 `docs/internal/tools-bash.md`。
+//! Bash tool — runs a shell command, streams stdout/stderr, supports timeout and cancellation.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -118,7 +118,7 @@ impl Tool for BashTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // 一律 Destructive——v0 不解析命令文本。详见 docs/internal/tools-bash.md §2。
+        // Always Destructive — v0 does not parse command text.
         SafetyClass::Destructive
     }
 

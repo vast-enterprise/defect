@@ -3,7 +3,7 @@
 //! 进程内 Rust handler——零外部依赖，CLI 装配时按 [`BuiltinRegistry`] 按名查表
 //! 实例化，挂进 `DefaultHookEngine` 的 [`super::HandlerTable`]。
 //!
-//! 详见 `docs/internal/hooks.md` §4.1 / §10。
+//! Builtin handlers — in-process Rust handlers with zero external dependencies.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -178,7 +178,7 @@ fn key_is_secret(key: &str) -> bool {
 /// `SessionStart` 上把可用 skill 的 L1 清单（`name + description`）拼进 system
 /// prompt suffix——让模型一开机就知道有哪些 skill 可按需用 `skill` 工具加载。
 ///
-/// 这是 progressive disclosure 的 L1 注入点（设计见 `docs/internal/skills.md`
+/// This is the L1 injection point for progressive disclosure
 /// §6.1）。注意 `skill` 工具自身的 description 已经内嵌同一份 catalog（见
 /// [`crate::tool::SkillTool`]），所以本 hook 是**可选增强**：装配方挂上它能让
 /// 清单同时出现在 system prompt 里（对不把 tool description 计入注意力预算的
@@ -245,7 +245,7 @@ impl StepHandler for SkillManifestHook {
 /// 前插一条 **L1 提示**（"检测到 skill X 相关，需要时用 `skill` 工具加载"），
 /// 而非整段 body（progressive disclosure：把"是否真加载"留给模型）。
 ///
-/// 命中条件（任一即命中，设计见 `docs/internal/skills.md` §4.3）：
+/// Trigger conditions (any one triggers):
 /// - **keyword**：skill 的 `triggers.keywords` 任一是 prompt 文本的大小写不敏感
 ///   子串；
 /// - **glob**：从 prompt 文本里抽出的"路径样 token"任一被 `triggers.globs`

@@ -70,7 +70,7 @@ impl TurnRunner<'_> {
 
             // ② PreToolUse hook（Sync 拦截）
             // 在 policy 之前——hook 可改写 args / 直接 block 让 policy 都不用算。
-            // 详见 `docs/internal/hooks.md` §7.1 / §7.3。
+            // Let hooks process the tool result before it lands in history.
             let safety_hint_pre = tool.safety_hint(&args);
             match self
                 .fire_pre_tool_use(&id, &tu.name, &args, safety_hint_pre)
@@ -360,7 +360,7 @@ impl TurnRunner<'_> {
 
         // ③/④ PostToolUse / PostToolUseFailure hook（Sync 拦截）
         // 在 tool_result 落 history 之前给 hook 追加注释的机会。详见
-        // `docs/internal/hooks.md` §3.2 / §7.1。
+        // Give hooks a chance to append annotations before tool_result lands in history.
         for result in results.iter_mut() {
             self.fire_post_tool_hook(result).await;
         }

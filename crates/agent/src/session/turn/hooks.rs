@@ -26,7 +26,7 @@ pub(super) enum PreToolHookFlow {
 }
 
 impl TurnRunner<'_> {
-    /// `before turn-end` 判定点（`docs/internal/hook-step-context.md` §5.7）。
+    /// `before turn-end` decision point.
     ///
     /// turn **自愿停止**（LLM 说 EndTurn / 没要工具）前调用。让 hook 决定：放停，还是续命
     /// （注入反馈、不结束、回循环顶再转一轮）。
@@ -96,7 +96,7 @@ impl TurnRunner<'_> {
     /// - `patch = UserPrompt { prepend, append }` → 改写 prompt 顺序为
     ///   `[prepend, original, append]`，落 history 时按改写后形态
     /// - `append` → 暂未拼到 system prompt（v0 无落点；待 system_prompt
-    ///   动态拼接落地后填上，详见 `docs/internal/hooks.md` §3.2）
+    ///   filled in dynamically after assembly
     pub(super) async fn fire_user_prompt_submit(
         &self,
         prompt: Vec<ContentBlock>,

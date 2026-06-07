@@ -5,7 +5,7 @@
 //! 把 SSE [`Sse`] 流（[`CreateChatCompletionStreamResponse`]）解码为
 //! [`defect_agent::llm::ProviderChunk`] 流。
 //!
-//! 设计映射详见 `docs/outbound/llm-openai.md` §6。
+//! OpenAI Chat Completions API protocol mapping.
 //!
 //! [`Sse`]: ::sse_stream::Sse
 //! [`CreateChatCompletionStreamResponse`]:
@@ -38,28 +38,28 @@ const PROMPT_CACHE_KEY_PRIME: u64 = 0x0000_0001_0000_01b3;
 
 type UsageParser = fn(Option<&serde_json::Value>, &wire::CompletionUsage) -> Usage;
 
-/// 把 [`CompletionRequest`] 编为 wire 请求体。
+/// Encodes a [`CompletionRequest`] into a wire request body.
 ///
-/// 关键映射决策（详见 `docs/outbound/llm-openai.md` §6.1）：
+/// Key mapping decisions:
 ///
-/// - 强制 `stream = true` + `stream_options.include_usage = true`：
-///   协议层只跑 SSE 分支，且**必须**让上游发末尾 usage chunk，否则
-///   token 计费拿不到。
-/// - `system` 提升为 `messages[0]` 的 system message —— OpenAI 没有
-///   顶层 system 字段（与 Anthropic 不同）。
-/// - 单条 [`Message`] 在 OpenAI 形态下可能拆成多条 wire message：
-///   user 消息里若混了 [`MessageContent::ToolResult`]，需要拆出独立的
-///   tool message（OpenAI 用 `role: tool` + `tool_call_id` 表达工具结果，
-///   不能跟 user 文本混在同一条 message）。
-/// - assistant 消息的 [`MessageContent::ToolUse`] 投到 `tool_calls`
-///   字段，而不是 content blocks。`args` 经 `serde_json::to_string` 转字符串
-///   （OpenAI 协议规定 `function.arguments` 为 stringified JSON）。
-/// - `top_k` 在 OpenAI 协议里不存在；这里直接丢弃，由 provider 层负责
-///   warn（`docs/internal/llm-trait.md` §6 能力矩阵）。
-/// - `max_tokens`：OpenAI 官方方言把 `max_tokens` 标 deprecated，新字段是
-///   `max_completion_tokens`。DeepSeek 兼容方言仍使用 `max_tokens`，以贴近
-///   其 OpenAI-compatible 端点与 opencode 的请求形态。两者都**不**像
-///   Anthropic 那样兜底默认值 —— 不传时由模型决定。
+/// - Forces `stream = true` + `stream_options.include_usage = true`:
+///   the protocol layer only runs the SSE branch, and **must** let the upstream
+///   send a trailing usage chunk, otherwise token billing is unavailable.
+/// - Promotes `system` to `messages[0]` as a system message — OpenAI has no
+///   top-level `system` field (unlike Anthropic).
+/// - A single [`Message`] may be split into multiple wire messages in OpenAI
+///   format: if a user message mixes [`MessageContent::ToolResult`], it needs
+///   a separate tool message (OpenAI uses `role: tool` + `tool_call_id` for
+///   tool results, which cannot be mixed with user text in the same message).
+/// - [`MessageContent::ToolUse`] in assistant messages maps to the `tool_calls`
+///   field rather than content blocks. `args` is serialized via `serde_json::to_string`
+///   (the OpenAI protocol requires `function.arguments` to be stringified JSON).
+/// - `top_k` is absent in the OpenAI protocol; the provider layer handles this.
+/// - `max_tokens`: the OpenAI dialect deprecates `max_tokens` in favor of
+///   `max_completion_tokens`. The DeepSeek-compatible dialect still uses
+///   `max_tokens` to align with its OpenAI-compatible endpoint and opencode
+///   request format. Neither sets a default like Anthropic — the model decides
+///   when not specified.
 pub fn encode_request(req: &CompletionRequest) -> wire::CreateChatCompletionRequest {
     encode_request_with_echo(req, ThinkingEcho::Forbidden)
 }
@@ -69,7 +69,7 @@ pub fn encode_request(req: &CompletionRequest) -> wire::CreateChatCompletionRequ
 /// `echo_mode` 由 provider 层从 [`defect_agent::llm::Capabilities`] 读取
 /// 并传入：`Required` 时 assistant message 上的
 /// [`MessageContent::Thinking`] 文本会被写到 wire 的非标
-/// `reasoning_content` 字段（详见 `docs/internal/thinking-roundtrip.md` §4.2）；
+/// `reasoning_content` field;
 /// `Forbidden`（含未配置）一律不写。
 pub fn encode_request_with_echo(
     req: &CompletionRequest,
@@ -627,7 +627,7 @@ struct ToolCallState {
 /// SSE 流 → ProviderChunk 流。返回值实现 [`Stream`]，drop 即取消。
 ///
 /// `cancel` 触发后流静默终结，与
-/// `docs/internal/llm-trait.md` §2.2 一致。
+/// consistent with the LLM trait contract.
 pub fn decode_stream(
     sse: SseEventStream,
     cancel: CancellationToken,

@@ -3,7 +3,7 @@
 //! 起 stdio JSON-RPC 服务，注册 ACP v1 的 client→agent 方法处理器，
 //! 把 [`AgentCore`] / [`Session`] 暴露在线上。
 //!
-//! 设计详见 `docs/inbound/acp-bridge.md`。
+//! ACP server — serves the agent over stdin/stdout or Unix socket.
 
 use std::sync::{Arc, RwLock};
 
@@ -35,7 +35,7 @@ use crate::shell::AcpShellBackend;
 ///
 /// 在 `initialize` handler 里读 [`ClientCapabilities::fs`] 后写入，
 /// `session/new` handler 据此选 [`AcpFsBackend`] / [`LocalFsBackend`]。
-/// 设计详见 `docs/inbound/acp-fs.md` §1。
+/// See ACP filesystem design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FsMode {
     /// 客户端同时声明 `read_text_file` 与 `write_text_file`：完全委托。
@@ -56,7 +56,7 @@ fn decide_fs_mode(client_caps: &ClientCapabilities) -> FsMode {
 ///
 /// `initialize` handler 读 [`ClientCapabilities::terminal`] 后写入，
 /// `session/new` / `session/load` 据此选 [`AcpShellBackend`] /
-/// [`LocalShellBackend`]。设计详见 `docs/inbound/acp-shell.md` §1。
+/// See ACP shell design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellMode {
     /// 客户端声明完整 `terminal/*` 支持：完全委托。
@@ -792,7 +792,7 @@ impl ServeState {
         // 让 dispatch loop 不被阻塞——这样后续 cancel / resolve
         // 等消息能在 turn 跑的同时被处理。事件投射不在这里做：由 session 级
         // 持久 event pump（session/new · load 时起）统一转发，含 driver 自发的
-        // 自主续转 turn。详见 docs/proposals/task-arrange.md §5.3。
+        // Autonomously continue to next turn.
         cx.spawn(async move { run_prompt_turn(session, req.prompt, responder).await })
     }
 
@@ -960,7 +960,7 @@ async fn run_prompt_turn(
 /// 跨所有 turn 存活（含 driver 自发的自主续转 turn）。session/new · load 时 spawn。
 ///
 /// 这是阶段二补齐的关键一环：原先事件只在一次 `session/prompt` 期间被订阅转发，自主续转
-/// turn 的事件无人接收。详见 docs/proposals/task-arrange.md §5.3。
+/// No consumer for turn events — in background mode, events are dropped.
 ///
 /// 生命周期：`session.subscribe()` 的事件流在 session drop（EventEmitter 析构）时结束，
 /// `events.next()` 返回 `None`，pump 自然退出。pump 持 `Arc<dyn Session>`，与 AgentCore

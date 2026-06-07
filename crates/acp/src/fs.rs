@@ -4,7 +4,7 @@
 //! client 处理（zed / vscode 这类有 workspace UI 的客户端在这条委托链上
 //! 让 unsaved buffer 与 agent 改动对齐）。
 //!
-//! 设计详见 `docs/inbound/acp-fs.md`。
+//! ACP filesystem backend — delegates fs operations to the client via ACP.
 
 use std::path::PathBuf;
 
@@ -20,7 +20,7 @@ use futures::future::BoxFuture;
 /// 持有 ACP 反向通道 [`ConnectionTo<Client>`] + session id + workspace root：
 /// - `cx`：把请求送给客户端的句柄；本身是 `Arc<...>` newtype，clone 廉价
 /// - `session_id`：每条反向请求都要带，客户端用它在多 session 场景里路由
-/// - `workspace_root`：agent 自己守工作区边界（`docs/inbound/acp-fs.md` §4）
+/// - `workspace_root`：agent 自己守工作区边界（agent guards the workspace boundary independently）。
 pub struct AcpFsBackend {
     cx: ConnectionTo<Client>,
     session_id: SessionId,

@@ -1,6 +1,4 @@
-//! provider 入参。
-//!
-//! 设计详见 `docs/internal/llm-trait.md` 第 3 节。
+//! Provider request parameters.
 
 use std::sync::Arc;
 
@@ -24,7 +22,7 @@ pub struct CompletionRequest {
     /// 本轮允许 provider 自行使用的 hosted capability 集合。
     ///
     /// session 启动期一次性裁决（详见
-    /// `docs/internal/capabilities.md` §5 / §9），
+    ///
     /// 每轮 turn 装配请求时直接复用 session 上的标记。
     /// provider adapter 据此决定是否在 wire 上声明 hosted tool。
     #[serde(default)]
@@ -86,15 +84,13 @@ pub enum MessageContent {
         mime: String,
         data: ImageData,
     },
-    /// provider-hosted 能力产生的活动（hosted web_search / hosted code execution
-    /// 等）。agent 不解释 `payload`：在重发同 provider 时透传，切 provider
-    /// 时由 codec 决定如何降级。
+    /// Provider-hosted capability activity (e.g. hosted web_search, hosted code execution).
+    /// The agent does not interpret `payload`: it passes it through when retrying the same
+    /// provider, or the codec decides how to degrade when switching providers.
     ///
-    /// `payload` 用 `#[serde(skip)]`：跨进程持久化时丢弃，session resume
-    /// 后若模型再次触发同样的 hosted 调用，会重新发起新的 hosted call，
-    /// 不依赖旧 payload。
-    ///
-    /// 设计详见 `docs/internal/capabilities.md` §7.3。
+    /// `payload` uses `#[serde(skip)]`: it is dropped when persisting across processes;
+    /// on session resume, if the model re-triggers the same hosted call, a new hosted
+    /// call is made without relying on the old payload.
     ProviderActivity {
         provider_id: String,
         kind: ProviderActivityKind,

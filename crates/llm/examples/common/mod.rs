@@ -5,7 +5,7 @@
 //! - tracing 默认 INFO，能用 `RUST_LOG=defect_llm=debug` 拨亮
 //! - 每个 scenario 走完打一行 `=== PASS / FAIL ===` 摘要，便于肉眼扫
 //!
-//! 见 `docs/outbound/llm-anthropic.md` §10 / `docs/outbound/llm-openai.md` §9
+//! See LLM provider integration tests
 //! 末尾的"真端点 smoke"清单。
 
 use std::pin::Pin;
@@ -39,7 +39,7 @@ pub const EXIT_FAIL: i32 = 1;
 /// 装好 tracing：默认 `info,toac=warn`，环境变量 `RUST_LOG` 整体覆盖。
 ///
 /// `toac=warn` 默认 silence——toac wire crate 的 INFO request 事件含
-/// authorization header 明文（详见 `docs/outbound/tracing.md` §5.2）。
+
 /// 调试 wire 时显式 `RUST_LOG=...,toac=debug`。
 ///
 /// # Panics

@@ -1,6 +1,6 @@
 //! `edit_file` 工具：精确字符串替换。
 //!
-//! 设计详见 `docs/internal/tools-fs.md` §5。
+//! Edit tool — applies a patch to an existing file.
 
 use std::io;
 use std::path::PathBuf;

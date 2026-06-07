@@ -3,7 +3,7 @@
 //! `Session::resolve_permission` 把 ACP 反向 request `session/request_permission`
 //! 的客户端响应送回主循环；主循环用 [`PermissionGate::wait`] 等待。
 //!
-//! 设计详见 `docs/internal/session.md` §3.4 与 `docs/internal/turn-loop.md` §3.3 / §5。
+//! Permission management — see session and turn-loop designs.
 
 use agent_client_protocol_schema::ToolCallId;
 use dashmap::DashMap;
@@ -30,7 +30,7 @@ impl PermissionGate {
     /// 注册一个等待，并 await 直到 [`Self::resolve`] 被调用或 cancel 触发。
     ///
     /// cancel 触发时返回 [`PermissionResolution::Cancelled`]——主循环按
-    /// "用户取消"处理（`docs/internal/turn-loop.md` §5）。
+    /// "User cancelled" handling.
     ///
     /// 如果同一 `id` 已经有等待者，旧 sender 被丢弃（旧 wait 会收到
     /// [`PermissionResolution::Cancelled`]，避免悬挂）。这条路径理论上

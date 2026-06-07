@@ -703,7 +703,7 @@ enabled_servers = ["missing"]
 #[test]
 fn custom_provider_name_accepted_but_unknown_field_rejected() {
     // flatten 让 `[providers.<任意名>]` 开放，但内层 ProviderSection 的
-    // deny_unknown_fields 仍然校验字段名。详见 docs/internal/config.md §11.1。
+    // deny_unknown_fields still validates field names.
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");

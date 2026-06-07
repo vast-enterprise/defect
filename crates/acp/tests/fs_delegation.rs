@@ -1,4 +1,4 @@
-//! ACP 文件系统委托 e2e。覆盖 `docs/inbound/acp-fs.md` §5 的 #1–#8。
+//! ACP filesystem delegation e2e tests.
 //!
 //! 形态：在进程内用 `Channel::duplex` 把 ACP server / client 对接，
 //! server 跑 `defect_acp::serve_on`（注入 `ScriptedProvider` + 三个 fs 工具
@@ -9,7 +9,6 @@
 //! - 第 1 轮：emit tool_use（指定工具名 + args JSON），Stop=ToolUse
 //! - 第 2 轮：emit "done" 文本，Stop=EndTurn
 //!
-//! 见 `docs/inbound/acp-fs.md` §5 的 8 条用例。
 
 use std::path::PathBuf;
 use std::pin::Pin;

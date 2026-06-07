@@ -1,4 +1,4 @@
-//! fs 工具家族单元测试。覆盖 `docs/internal/tools-fs.md` §9 的 #1–#20。
+//! Filesystem tool family unit tests.
 //!
 //! #21（ACP fake client 反向请求）在 `crates/acp/tests/fs_delegation.rs` 跑；
 //! #22（真 LLM 让 deepseek 写文件）在 `crates/llm/examples/` 的冒烟里跑。

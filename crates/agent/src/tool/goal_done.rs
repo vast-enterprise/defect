@@ -5,7 +5,7 @@
 //! 自愿停止时，`goal-gate` hook（[`crate::hooks::builtin::GoalGate`]）在
 //! `before_turn_end` 读到 reached → 放行结束循环；未 reached → 续命注入"继续工作"。
 //!
-//! 设计要点（见 `docs/proposals` goal-loop）：调用本工具那轮**带 tool_use**，turn
+//! Design note: the turn that calls this tool **does carry tool_use**, the turn
 //! 不会立即停（turn loop 见 `session/turn.rs`）——模型通常在调完 goal_done、确认无
 //! 更多事可做后，下一轮自然停止，那时 goal-gate 才放行。
 //!

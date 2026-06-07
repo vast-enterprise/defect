@@ -8,7 +8,7 @@
 //! 共享的部分仍然在 [`super::proxy::build_proxy_connector`]——TLS / 代理 /
 //! 连接池语义两条路径完全一致。
 //!
-//! 设计参考 `docs/internal/tools-fetch.md` §6.
+//! HTTP fetch implementation.
 
 use std::sync::Arc;
 

@@ -2,7 +2,7 @@
 //!
 //! 与历史上 `bash` 工具内联的 `tokio::process::Command` 流程同源，但把
 //! 进程管理 / 缓冲读 / 退出同步搬到 backend 层，让 `BashTool` 只通过
-//! [`ShellBackend`] trait 与之打交道。设计详见 `docs/inbound/acp-shell.md` §4。
+//! [`ShellBackend`] trait — local shell execution backend.
 //!
 //! 内部数据结构：
 //!

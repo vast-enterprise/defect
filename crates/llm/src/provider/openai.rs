@@ -3,7 +3,7 @@
 //! 通过 `base_url` 参数对接 OpenAI 官方与所有遵循 Chat Completions
 //! 协议的兼容服务（DeepSeek、Qwen、本地 vllm 等）。bearer token + SSE。
 //!
-//! 设计与字段对应详见 `docs/outbound/llm-openai.md`。
+//! OpenAI provider implementation — field mapping and request building.
 
 use std::collections::HashMap;
 use std::env;
@@ -312,7 +312,7 @@ impl OpenAiProvider {
 
     /// 解析当前请求的 thinking 回放策略：先看 per-model override，再 fallback
     /// 到 provider-level capability。详见
-    /// `docs/internal/thinking-roundtrip.md` §4.2。
+    /// See thinking round-trip design.
     fn thinking_echo_for_model(&self, model_id: &str) -> ThinkingEcho {
         self.model_info(model_id)
             .and_then(|m| m.capabilities_overrides.thinking_echo)
@@ -487,7 +487,7 @@ impl WithRequestIdOpt for ProviderError {
 ///
 /// 关键分支：[`HttpStackError::Timeout`] 单独翻成
 /// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
-/// 决策——这条之前缺失，详见 `docs/outbound/http.md` §4。
+/// Decision — this was previously missing; see HTTP retry semantics.
 /// [`HttpStackError::ProxyConnect`] / [`HttpStackError::Config`] 都按
 /// transport 错处理（结构化原因写进 `Display`，turn-loop 拿到的就是
 /// transport-flavor 的 backoff 重试）。
@@ -530,7 +530,7 @@ fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
 
 /// 把 wire `OpenAiErrorResponse` + HTTP status 翻成 [`ProviderError`]。
 ///
-/// 映射表见 `docs/outbound/llm-openai.md` §6。
+/// Mapping table — see OpenAI provider design.
 fn error_response(
     status: u16,
     e: &wire::OpenAiErrorResponse,

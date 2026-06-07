@@ -1,9 +1,8 @@
-//! Anthropic provider 端到端集测：以 wiremock 充当 Anthropic API，
-//! 让 `AnthropicProvider` 作为真实后端跑完整 agent turn。
+//! Anthropic provider end-to-end integration tests: uses wiremock as Anthropic API,
+//! running `AnthropicProvider` as a real backend through a full agent turn.
 //!
-//! 不打真 API：所有路由都拦在 mock server 上，覆盖
-//! `docs/outbound/llm-anthropic.md` §10 列出的 round-trip / auth /
-//! cancel 三条用例 + 单 tool_use 完整闭环 + list_models。
+//! No real API calls — all routes are intercepted by the mock server, covering
+//! round-trip, auth, cancel scenarios plus single tool_use full loop and list_models.
 
 use std::sync::Arc;
 use std::time::Duration;

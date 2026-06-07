@@ -1,6 +1,6 @@
 //! `write_file` 工具：全量覆盖写 UTF-8 文本文件。
 //!
-//! 设计详见 `docs/internal/tools-fs.md` §4。
+//! Write tool — writes content to a file.
 
 use std::path::PathBuf;
 use std::pin::Pin;

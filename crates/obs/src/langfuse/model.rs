@@ -7,7 +7,7 @@
 //! - `body.id` 才是 trace / observation 的真实 id（同 id 不同 envelope id = 更新）。
 //! - 字段命名全 camelCase（`#[serde(rename_all = "camelCase")]`）。
 //!
-//! 数据模型见 `docs/internal/observability-langfuse.md` §3 与
+//! Data model mirrors
 //! <https://langfuse.com/docs/observability/data-model>。
 //!
 //! 我们只覆盖接入需要的事件类型与字段；Langfuse 的完整 schema 比这宽，

@@ -1,6 +1,6 @@
 //! Turn 主循环。
 //!
-//! 设计详见 `docs/internal/turn-loop.md`。本文件按 §3 的状态机落地。
+//! Turn main loop — the "heart" of the agent. This file implements the state machine.
 //!
 //! 关键依赖：
 //! - [`History`]：消息历史的读写
@@ -60,7 +60,7 @@ use tools::{Approved, DecisionFlow, approved_tool_name, tool_results_message};
 
 pub(crate) use request_audit::RequestAuditTracker;
 
-/// LLM 调用次数上限策略。详见 `docs/internal/turn-loop.md` §6.1。
+/// LLM call cap strategy.
 #[derive(Debug, Clone, Copy)]
 pub enum TurnRequestLimit {
     /// 不设上限。
@@ -95,7 +95,7 @@ impl TurnRequestLimit {
     }
 }
 
-/// turn 配置。详见 `docs/internal/turn-loop.md` §9。
+/// Turn configuration.
 #[derive(Debug, Clone)]
 pub struct TurnConfig {
     /// 选中的 provider vendor（选择键的 provider 半边）。与 [`Self::model`] 一起
@@ -137,7 +137,7 @@ pub struct TurnConfig {
     /// `0` = 不限。v0 默认不限。
     pub max_concurrent_tools: usize,
     /// `before turn-end` hook 强制续命的硬上限——防止 hook 一直 `Continue` 把 turn
-    /// 拖成死循环。见 `docs/internal/hook-step-context.md` §5.7。默认 3。
+    /// Prevents infinite loops from repeated hook continues. Default: 3.
     pub max_hook_continues: u32,
     /// 本 turn 起还能派发多少层 subagent（纵向递归深度上限）。`spawn_agent` 据它经
     /// [`crate::tool::ToolContext::subagent_depth`] 把"剩余深度"传给工具；子 agent
@@ -231,13 +231,13 @@ pub struct TurnRunner<'a> {
     pub hosted_capabilities: HostedCapabilities,
     /// Hook 引擎。turn 主循环在 4 个时刻 emit Sync 事件
     /// （`UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`）
-    /// 等 hook 跑完再继续。详见 `docs/internal/hooks.md` §7.1。
+    /// Waits for hooks to finish before proceeding.
     pub hooks: &'a dyn HookEngine,
     /// 当前 session id。`HookCtx` 注入用——hook handler 按 session 维度路由 / 审计。
     pub session_id: &'a SessionId,
     /// session 级后台任务句柄。`Some` 时工具的 `run_in_background` 能力开启
     /// （经 [`crate::tool::ToolContext::background`] 注入给工具）；嵌套子 agent
-    /// turn 传 `None`，结构性禁止后台任务自我繁殖。详见 `docs/proposals/task-arrange.md`。
+    /// turn receives `None`, structurally preventing background task self-replication.
     pub background: Option<crate::session::BackgroundTasks>,
     /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下：经
     /// [`crate::tool::ToolContext::goal`] 注入给 `goal_done` 工具，`goal-gate` hook
@@ -269,7 +269,7 @@ impl<'a> TurnRunner<'a> {
     pub async fn run(&self, prompt: Vec<ContentBlock>) -> Result<AcpStopReason, TurnError> {
         // ① UserPromptSubmit hook（Sync 拦截）
         // 在 prompt 落 history 之前给 hook 改写 / 拦截的机会。详见
-        // `docs/internal/hooks.md` §7.1。
+        // Give hooks a chance to rewrite / intercept the prompt before it lands in history.
         let prompt = match self.fire_user_prompt_submit(prompt).await {
             UserPromptHookFlow::Continue(p) => p,
             UserPromptHookFlow::Refused => {
@@ -423,7 +423,7 @@ impl<'a> TurnRunner<'a> {
             }
 
             // 被动停止（Refusal / MaxTokens）：不经 before-turn-end hook（hook 不能续命这些），
-            // 直接退出。见 `docs/internal/hook-step-context.md` §5.7。
+            // Exit directly.
             match outcome.stop {
                 LlmStopReason::EndTurn | LlmStopReason::StopSequence => {
                     // 自愿停止 → before-turn-end 判定点。
@@ -777,14 +777,14 @@ fn ratio_threshold(context_window: u64, ratio: f64) -> Option<u64> {
 
 /// `before turn-end` hook 强制续命次数的**默认**上限。可被
 /// [`TurnConfig::max_hook_continues`] 覆盖（配置项 `[turn].max_hook_continues`）。
-/// 见 `docs/internal/hook-step-context.md` §5.7。
+/// See docs on hook step context exit semantics.
 pub(crate) const DEFAULT_MAX_HOOK_CONTINUES: u32 = 3;
 
 /// subagent 纵向递归深度默认上限。顶层 turn 起算：N 层 ⇒ 顶层可派发 subagent，
 /// 其子可再派发……直到第 N 层（`subagent_max_depth` 减到 0）不再获得 `spawn_agent`。
 /// 默认 4 给"主 agent → 协调子 agent → 工作子 agent"这类编排留足空间，又能防纵向
 /// 失控。横向失控另由 `request_limit` 防住。
-pub(crate) const DEFAULT_SUBAGENT_MAX_DEPTH: u32 = 4;
+pub(crate) const DEFAULT_SUBAGENT_MAX_DEPTH: u32 = 1;
 
 struct TurnState {
     request_count: u32,

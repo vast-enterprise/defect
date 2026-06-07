@@ -1,7 +1,7 @@
 //! [`History`] 的具体实现 [`VecHistory`]：`Vec<Message>` + token 计量。
 //!
 //! 纯存储，不做压缩——压缩编排在 turn 主循环（`session/turn/compact.rs`）。
-//! 设计权衡见 `docs/internal/session.md` §4。
+//! History — design tradeoffs for conversation history representation.
 //!
 //! ## token 估算
 //!

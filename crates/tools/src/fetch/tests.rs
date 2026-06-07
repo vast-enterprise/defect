@@ -1,4 +1,4 @@
-//! `fetch` 单元测试。覆盖 docs/internal/tools-fetch.md §10 的 #1–#19。
+//! Fetch tool unit tests.
 //! #20（真 LLM e2e）在 example 里跑。
 
 use std::sync::Arc;

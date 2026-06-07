@@ -1,7 +1,7 @@
 //! OpenAI provider 端到端集测：以 wiremock 充当 OpenAI Chat Completions
 //! 兼容后端，让 `OpenAiProvider` 跑完整 agent turn。
 //!
-//! 不打真 API。覆盖 `docs/outbound/llm-openai.md` §9：
+//! Integration tests for OpenAI provider:
 //! - list_models round-trip + hardcoded merge
 //! - text-only turn（含 stream + `[DONE]` 终止符）
 //! - tool_calls 完整路径（两轮 LLM 调用闭环）

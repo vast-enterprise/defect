@@ -1,6 +1,6 @@
 //! Prompt hook handler — 把 step 信封喂给一次 LLM 调用。
 //!
-//! 详见 `docs/internal/hooks.md` §4.3。
+
 //!
 //! ## 不在主循环 LLM 调用计数
 //!
@@ -38,7 +38,7 @@ use crate::llm::{
 
 use super::{HookCtx, HookError, StepHandler};
 
-/// 模板渲染策略。详见 `docs/internal/hooks.md` §4.3。
+/// Template rendering strategy.
 ///
 /// `Template` 形态用极简 `{{key}}` 字符串替换——不引入 handlebars/tera
 /// 这类重型依赖。可识别的 key 见 `render_envelope` 的实现：

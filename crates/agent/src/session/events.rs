@@ -1,8 +1,6 @@
-//! 事件发布：mpsc bounded + fan-out。
+//! Event publishing: mpsc bounded + fan-out.
 //!
-//! 设计详见 [`crate::session`] 文档与 `docs/internal/session.md` §5。
-//!
-//! ## 形状
+//! ## Shape
 //!
 //! 主循环只 [`EventEmitter::emit`]；订阅者通过 [`EventEmitter::subscribe`]
 //! 拿一个独立的 mpsc receiver。emit 内部串行 send 到所有 receiver，
@@ -10,9 +8,8 @@
 //!
 //! ## 不用 broadcast 的理由
 //!
-//! [`tokio::sync::broadcast`] 在 receiver 跟不上时标 `Lagged` 并跳过事件，
-//! 直接违反 [`AgentEvent`] "不丢"约束（见
-//! `docs/internal/event-model.md` §5）。
+//! [`tokio::sync::broadcast`] calls `Lagged` and skips events when receivers
+//! fall behind, violating the "no drop" invariant of [`AgentEvent`].
 
 use std::sync::Mutex;
 

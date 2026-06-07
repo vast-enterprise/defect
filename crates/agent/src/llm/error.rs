@@ -1,6 +1,4 @@
-//! provider 错误类型。
-//!
-//! 设计详见 `docs/internal/llm-trait.md` 第 7 节。
+//! Provider error types.
 
 use std::time::Duration;
 

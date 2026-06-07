@@ -1,8 +1,6 @@
-//! Sandbox policy：工具调用的"放行 / 拒绝 / 询问用户"决策。
+//! Sandbox policy: "Allow / Deny / Ask user" decision for tool calls.
 //!
-//! 设计详见 `docs/internal/sandbox-policy.md`。
-//!
-//! ## 与主循环的接口
+//! ## Interface with the main loop
 //!
 //! [`SandboxPolicy::classify`] 是一次纯决策；返回 [`PolicyDecision`]：
 //! - `Allow` / `Deny`：直接进入相应分支
@@ -14,7 +12,7 @@
 //!
 //! 本模块**只做决策**——OS 级隔离（landlock / seatbelt / 子进程权限降级）
 //! 是另一个 trait（未来的 `ToolSandbox`）。本模块的产出是"要不要执行"，
-//! 与"执行时给多大权限"正交，参见 `docs/internal/sandbox-policy.md` §8。
+//! Orthogonal to "how much permission to grant at execution time".
 
 use std::collections::HashSet;
 use std::path::Path;

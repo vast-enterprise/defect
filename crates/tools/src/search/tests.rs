@@ -1,4 +1,4 @@
-//! `SearchTool` 单元测试。覆盖 `docs/internal/tools-search.md` §10 的 #1–#24
+//! SearchTool unit tests.
 //! （#25–#27 在 CLI 装配 / e2e 层覆盖）。
 
 use std::path::PathBuf;

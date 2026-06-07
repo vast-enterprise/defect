@@ -1,6 +1,4 @@
-//! [`LlmProvider`] trait 主签名。
-//!
-//! 设计详见 `docs/internal/llm-trait.md` 第 2 节。
+//! [`LlmProvider`] trait — the main LLM vendor integration signature.
 
 use std::pin::Pin;
 

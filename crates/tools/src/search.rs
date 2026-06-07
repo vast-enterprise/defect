@@ -1,7 +1,7 @@
 //! `search` 内置工具：在 workspace 内 grep 文件内容（content mode）或
 //! 列出匹配 glob 的文件（files mode）。
 //!
-//! 设计与取舍详见 `docs/internal/tools-search.md`。
+//! Search tool — workspace file name (glob) and content (grep) search.
 
 use std::cmp::Reverse;
 use std::path::{Path, PathBuf};

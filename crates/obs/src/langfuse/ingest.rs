@@ -10,7 +10,7 @@
 //! - POST 失败只 `warn!`，**不重试**（避免堆积反压）；
 //! - 207（partial success）读 body 把 errors 记进日志，但不影响后续。
 //!
-//! 设计详见 `docs/internal/observability-langfuse.md` §4。
+//! Langfuse ingestion — batch upload of traces and observations.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

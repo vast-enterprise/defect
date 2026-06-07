@@ -1,12 +1,10 @@
-//! E2E wire-level 测试：`run_in_background` 主动续转穿过 ACP 协议层。
+//! E2E wire-level test: `run_in_background` auto-continue through the ACP protocol layer.
 //!
-//! 这是"用户可达"的终极证明——验证后台任务完成后，session driver 自发起的**自主
-//! 续转 turn** 产生的 `session/update` 通知，经 session 级持久 event pump 一路送达
-//! 客户端，**无需第二次 `session/prompt`**。
+//! Proves that after a background task completes, the session driver autonomously
+//! continues the turn and delivers `session/update` notifications to the client
+//! via the session-level persistent event pump — no second `session/prompt` needed.
 //!
-//! 设计见 `docs/proposals/task-arrange.md` §3.2 / §5.3。
-//!
-//! 编排：
+//! Setup:
 //! - 自定义工具 `bg_tool`：调 `ctx.background.spawn` 起一个立即完成的后台任务，**立刻**返回。
 //! - 脚本化 provider：turn 1 调 `bg_tool` 后 EndTurn；其后每轮发一段可识别文本 + EndTurn。
 //! - 客户端只发**一次** prompt，然后被动收通知——断言能收到含后台答案标记的 AgentMessageChunk。

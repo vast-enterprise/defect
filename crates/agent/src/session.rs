@@ -1,8 +1,6 @@
-//! Session：单个对话会话的状态容器与生命周期接口。
+//! Session — state container and lifecycle interface for a single conversation.
 //!
-//! 设计详见 `docs/internal/session.md`。
-//!
-//! ## 抽象层次
+//! ## Abstraction layers
 //!
 //! - [`AgentCore`]：进程级"agent 实例"，持有内置工具集与全局配置；
 //!   是 `defect-cli` 装配出来后注入给 `defect-acp::serve` 的根对象
@@ -78,7 +76,7 @@ pub trait AgentCore: Send + Sync {
     ///
     /// `id` 由调用方（`defect-acp` 的 `session/new` handler）生成并传入——
     /// fs 后端在 [`AgentCore::create_session`] 之外构造时已经需要 SessionId
-    /// 了（见 `docs/inbound/acp-fs.md` §3.2）。具体实现把它当作外部权威 id
+    /// (see the ACP filesystem delegation contract). Concrete implementations treat it as the authoritative external id
     /// 用，重复时返回 [`AgentError::DuplicateSessionId`]。
     ///
     /// `mcp_servers` 是 `session/new` 请求里携带的 per-session MCP server
@@ -269,7 +267,7 @@ pub trait Session: Send + Sync {
 
     /// 订阅事件流。三个独立消费者（acp / storage / tracing）各自调一次，
     /// 互不影响——内部用 mpsc 配 fan-out 保证慢消费者只 backpressure
-    /// 自己、不丢事件。具体技术细节见 `docs/internal/session.md` §5。
+    /// without dropping events.
     fn subscribe(&self) -> EventStream;
 
     /// 当前历史的只读快照，用于 session/load 后向客户端 replay transcript。
@@ -415,7 +413,7 @@ pub enum AgentError {
 
 /// session 启动期一次性裁决失败。
 ///
-/// 设计详见 `docs/internal/capabilities.md` §5。
+/// See capabilities design.
 /// 当 `capabilities.<name>.mode = "delegate"` 但当前 provider 的
 /// [`crate::llm::LlmProvider::hosted_capabilities`] 不支持该 capability
 /// 时，拒绝启动 session。

@@ -51,7 +51,7 @@ fn turn_in_progress_uses_invalid_request_code() {
 
 use agent_client_protocol::schema::FileSystemCapabilities;
 
-/// `docs/inbound/acp-fs.md` §1.2 的决策表回归——
+/// Regression test for ACP filesystem delegation decisions —
 /// 任一 fs 能力位 false → 整组退回本地，不混用。
 #[test]
 fn decide_fs_mode_full_caps_is_delegated() {

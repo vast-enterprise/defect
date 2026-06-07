@@ -3,7 +3,7 @@
 //! Skill 是用户为 agent 配置的可复用提示片段——一段 markdown body，加上同目录
 //! 下可选的 `scripts/` / `refs/` 资源文件。模型在需要时通过 `skill` 工具按名
 //! 拉取 body 进上下文（progressive disclosure 的 L2）。设计见
-//! `docs/internal/skills.md`。
+//! Skill configuration types.
 //!
 //! ## 文件形态（对齐 Anthropic / Codex 的 Agent Skills open standard）
 //!
@@ -77,7 +77,7 @@ pub struct SkillSpec {
 /// 保留 `deny_unknown_fields`（与 [`crate::profiles`] 一致）抓必填项拼写错
 /// （`naem` / `desciption` 这类 typo 不会被静默放过）；Agent Skills
 /// open-standard 的 `always` / `triggers` 已**接入消费**（自动激活，见
-/// `docs/internal/skills.md` §4.3 / §5.1），`allowed_tools` 仍**显式占位**
+/// ), `allowed_tools` is still an explicit placeholder
 /// （v1 做 tool gating）。
 ///
 /// 显式列出（而非 deny / 而非完全放开）的取舍：deny 会把"用户已写好的

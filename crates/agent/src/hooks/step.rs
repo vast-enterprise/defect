@@ -1,6 +1,6 @@
 //! Hook step-context：typestate + 信封。
 //!
-//! 设计详见 `docs/internal/hook-step-context.md`。
+
 //!
 //! ## 一句话
 //!
@@ -463,7 +463,7 @@ pub enum IngestSource {
     /// 续命轮：before turn-end 注入的反馈。
     Continuation,
     /// 后台任务回流：`run_in_background` 子任务完成后由 session driver 起的自主续转 turn，
-    /// 其输入是延迟的工具结果而非用户发言。详见 `docs/proposals/task-arrange.md` §5.1。
+    /// Its input is a deferred tool result rather than a user utterance.
     Background,
 }
 

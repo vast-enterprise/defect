@@ -1,8 +1,6 @@
-//! agent 主循环对外发布的事件流。
+//! The event stream published by the agent main loop to external consumers.
 //!
-//! 设计详见 `docs/internal/event-model.md`。
-//!
-//! ## 形式上的解耦
+//! ## Decoupling-by-shape
 //!
 //! 主循环只产生 [`AgentEvent`]——内部 enum，三个独立消费者各取所需：
 //!

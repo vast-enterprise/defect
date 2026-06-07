@@ -1,6 +1,4 @@
-//! provider 与模型元信息。
-//!
-//! 设计详见 `docs/internal/llm-trait.md` 第 3 节。
+//! Provider and model metadata.
 
 use serde::{Deserialize, Serialize};
 

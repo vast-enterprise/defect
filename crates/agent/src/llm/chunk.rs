@@ -1,6 +1,4 @@
-//! 流式输出的统一形状。
-//!
-//! 设计与 wire 映射详见 `docs/internal/llm-trait.md` 第 1、4 节。
+//! Unified shape for streaming output chunks.
 
 use serde::{Deserialize, Serialize};
 

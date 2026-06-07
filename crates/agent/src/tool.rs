@@ -1,10 +1,9 @@
-//! 工具抽象。
+//! Tool abstraction.
 //!
-//! 内置工具（`defect-tools`）与 MCP 适配器（`defect-mcp`）都通过实现
-//! [`Tool`] trait 接入 agent 主循环。设计详见
-//! `docs/internal/tool-trait.md`。
+//! Both builtin tools (`defect-tools`) and MCP adapters (`defect-mcp`) integrate
+//! into the agent main loop by implementing the [`Tool`] trait.
 //!
-//! ## ACP 对位
+//! ## ACP alignment
 //!
 //! [`Tool::describe`] 与 [`ToolEvent::Progress`] / [`ToolEvent::Completed`]
 //! 直接复用 ACP 的 [`ToolCallUpdateFields`]，避免重复造一份字段。
@@ -41,10 +40,10 @@ pub use goal_done::{GOAL_DONE_TOOL_NAME, GoalDoneTool};
 pub use skill::{SkillEntry, SkillTool, SkillTriggers};
 pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
 
-/// 工具的"对外名片"：只描述参数形状，不带任何执行能力。
+/// Tool's "public face": describes the parameter shape without any execution capability.
 ///
-/// [`crate::llm::CompletionRequest::tools`] 接受 `Vec<ToolSchema>`，
-/// provider 不持有 `dyn Tool`，只把 schema 序列化进 wire JSON。
+/// [`crate::llm::CompletionRequest::tools`] accepts `Vec<ToolSchema>`.
+/// Providers don't hold `dyn Tool`; they serialize schemas into wire JSON.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSchema {
     pub name: String,

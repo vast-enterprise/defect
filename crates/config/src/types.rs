@@ -125,7 +125,7 @@ pub enum ConfigWarning {
     },
     /// 配置文件里出现了某段，但在当前 mode 下不会生效。
     ///
-    /// 详见 `docs/internal/capabilities.md` §3 的语义对照表。
+    /// See capabilities semantic mapping.
     /// 典型场景：写了某段配置但相应能力被关闭（例如旧版 `capabilities.search`
     /// 段落已被废弃为 `[capabilities.web_search]`，旧键不再生效）。
     InactiveSection {
@@ -135,7 +135,7 @@ pub enum ConfigWarning {
     },
     /// 撞名的 MCP 工具在 session 启动期被重命名为 `mcp.<server>.<name>`。
     ///
-    /// 详见 `docs/internal/capabilities.md` §6.2。所有 MCP 工具一律
+    /// See capabilities for MCP tool classification. All MCP tools are
     /// 重命名（无视 capability mode 与 tool enabled），避免 MCP 旁路占名。
     McpToolRenamed {
         server: String,
@@ -203,7 +203,7 @@ pub struct EffectiveConfig {
     pub base_prompt: BasePromptConfigFile,
     pub prompt: PromptConfigFile,
     /// 全局 capability 来源选择。`providers.<p>.capabilities` 覆写在
-    /// session 启动期叠加。详见 `docs/internal/capabilities.md` §3 / §5。
+    /// Overlaid during session startup.
     pub capabilities: CapabilitiesConfig,
     pub providers: ProviderConfigs,
     pub tools: ToolsConfig,
@@ -211,7 +211,7 @@ pub struct EffectiveConfig {
     pub tracing: TracingConfig,
     pub mcp: McpConfig,
     pub http: HttpClientConfig,
-    /// 解析后的 hook 配置。详见 `docs/internal/hooks.md`。
+    /// Resolved hook configuration.
     pub hooks: HooksConfig,
 }
 
@@ -223,7 +223,7 @@ pub struct EffectiveConfig {
 ///
 /// 桶的键是挂载点的 `event_name`（snake_case，如 `before_turn_end`）——与
 /// `defect_agent::hooks::step::ALL_EVENT_NAMES` 同一套名字。用 map 而非固定字段：新增挂载点时
-/// 配置层零改动。详见 `docs/internal/hooks.md`。
+/// No changes needed at the config layer.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HooksConfig {
     /// `event_name` → 该事件下声明的条目（按声明顺序）。
@@ -267,7 +267,7 @@ pub struct HookEntry {
 }
 
 /// 事件 matcher。空字段 = 匹配该事件下所有触发；详见
-/// `docs/internal/hooks.md` §5.3。
+/// See hooks trust model.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct HookMatcher {
     /// 工具名精确匹配（仅 `*ToolUse*` 事件）。
@@ -284,9 +284,9 @@ pub struct HookMatcher {
 pub enum HookHandlerSpec {
     /// 进程内 Rust handler，按名字引用 `crate::hooks::builtin::registry()`。
     Builtin { name: String },
-    /// 外部命令。详见 `docs/internal/hooks.md` §4.2。
+    /// External command (see hooks command handler).
     Command(HookCommandSpec),
-    /// 调用 LLM。详见 `docs/internal/hooks.md` §4.3。
+    /// Calls an LLM (see hooks prompt handler).
     Prompt(HookPromptSpec),
 }
 
@@ -466,7 +466,7 @@ pub struct ToolsConfig {
     pub fetch: FetchToolConfig,
     /// `[tools.search]` 段。本地 `search` tool（grep/glob）的参数。
     /// 与 `[capabilities.web_search]` 相互独立，由 `enabled` 单独决定是否注册。
-    /// 详见 `docs/internal/tools-search.md`。
+    /// See search tool config.
     pub search: SearchToolConfig,
     /// `[tools.background]` 段。后台 subagent 进度视图配置（进度环容量 / 单 block
     /// 正文字符上限）——主 agent 用 `inspect_background_task` 看到的"最近几个 block"。
@@ -474,7 +474,7 @@ pub struct ToolsConfig {
     pub background: BackgroundProgressConfig,
 }
 
-/// 本地 `fetch` 工具的配置。详见 `docs/internal/tools-fetch.md` §7。
+/// Configuration for the local fetch tool.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchToolConfig {
@@ -540,7 +540,7 @@ impl Default for FsToolConfig {
     }
 }
 
-/// 本地 `search` 工具的配置。详见 `docs/internal/tools-search.md` §7。
+/// Configuration for the local search tool.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchToolConfig {
@@ -772,7 +772,7 @@ pub struct OtlpTracingConfig {
     pub endpoint: Option<String>,
 }
 
-/// Langfuse 上报配置。详见 `docs/internal/observability-langfuse.md` §6。
+/// Langfuse upload configuration.
 ///
 /// 默认关闭；`enabled = true` 但缺 key 时由装配层告警并禁用（不静默成功）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

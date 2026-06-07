@@ -2,7 +2,7 @@
 //!
 //! Skill 是用户配置的可复用提示片段——一段 markdown body 加上同目录下可选的
 //! `scripts/` / `refs/` 资源。模型按 progressive disclosure 分三层看到 skill
-//! 内容（设计见 `docs/internal/skills.md`）：
+//! Contents:
 //!
 //! - **L1 清单**：所有 skill 的 `name + description`。本工具把它编进自己的
 //!   `description`（与 `spawn_agent` 把 profile catalog 编进 description 同款），

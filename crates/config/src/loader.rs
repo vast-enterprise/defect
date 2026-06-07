@@ -666,7 +666,7 @@ fn load_optional_layer_opt(
     })?;
     // 未知 key 校验在此逐层单独跑：`deny_unknown_fields` 由 serde 在 decode 时
     // 报错，错误能带上该层文件路径（合并后再 decode 只能报 `<merged>`）。详见
-    // `docs/internal/config.md` §11.1。
+    // Config merge behavior.
     reject_unknown_keys(&path, &value)?;
     let warnings = Vec::new();
     Ok(Some((

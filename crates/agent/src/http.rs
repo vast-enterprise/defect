@@ -1,13 +1,12 @@
-//! HTTP fetch backend抽象。
+//! HTTP fetch backend abstraction.
 //!
-//! [`HttpClient`] 是 `fetch` 工具与底层 HTTP 栈之间的 trait 边界。具体
-//! 实现来自 [`defect-http`]——session 装配时由 CLI 把 `Arc<dyn HttpClient>`
-//! 注入给 [`crate::session::AgentCore`]，再透过 [`crate::tool::ToolContext`]
-//! 传给工具。
+//! [`HttpClient`] is the trait boundary between the `fetch` tool and the
+//! underlying HTTP stack. The concrete implementation comes from [`defect-http`];
+//! during session assembly the CLI injects `Arc<dyn HttpClient>` into
+//! [`crate::session::AgentCore`], propagated through [`crate::tool::ToolContext`]
+//! to tools.
 //!
-//! 设计详见 `docs/internal/tools-fetch.md` §6.1。
-//!
-//! 与 [`crate::fs::FsBackend`] / [`crate::shell::ShellBackend`] 不同——HTTP
+//! Unlike [`crate::fs::FsBackend`] / [`crate::shell::ShellBackend`] — HTTP
 //! 没有 per-client capability 协商，所以 [`HttpClient`] 是进程级共享而非
 //! per-session 装配；只是借同一份 `Arc<dyn …>` 注入模式，避免引入新的
 //! 注入路径。

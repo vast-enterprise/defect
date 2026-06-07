@@ -1,7 +1,7 @@
 //! `fetch` 内置工具：拉一个 URL、按格式（markdown / html / text）渲染、
 //! 按超时与大小上限保护。
 //!
-//! 设计与取舍详见 `docs/internal/tools-fetch.md`。
+//! Fetch tool — reads a URL, renders content (markdown / html / text), enforces timeout and size limits.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -132,8 +132,7 @@ impl Tool for FetchTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // P2 只支持 GET，URL 可控、本地无副作用 → ReadOnly。
-        // 详见 docs/internal/tools-fetch.md §4。
+        // P2 only supports GET; URL is controllable, no local side effects → ReadOnly.
         SafetyClass::ReadOnly
     }
 

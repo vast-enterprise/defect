@@ -1,6 +1,6 @@
 //! `read_file` 工具：读 UTF-8 文本文件。
 //!
-//! 设计详见 `docs/internal/tools-fs.md` §3。
+//! Read tool — reads a file with optional offset/limit window.
 
 use std::path::PathBuf;
 use std::pin::Pin;

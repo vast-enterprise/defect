@@ -1,6 +1,6 @@
 //! 把 `defect-config` 的 hook 配置翻译成 agent 的 [`DefaultHookEngine`]。
 //!
-//! 详见 `docs/internal/hooks.md` §5.3 / §10——agent crate 不依赖 config，
+//! Hook assembly — the agent crate does not depend on the config crate,
 //! 翻译动作放 CLI 装配期；这里也是 fail-fast 报"未知 builtin 名"的位置。
 //!
 //! 三种 handler 形态在 v0 全部接通：

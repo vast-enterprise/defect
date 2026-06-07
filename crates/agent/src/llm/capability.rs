@@ -1,6 +1,4 @@
-//! provider 与模型的能力矩阵。
-//!
-//! 设计详见 `docs/internal/llm-trait.md` 第 5 节。
+//! Provider and model capability matrix.
 
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +81,7 @@ pub enum FeatureSupport {
 /// search 能力来源。注意：本地 grep/glob 工具（`search` tool）不属于
 /// capability 层，由 `[tools.search]` 单独管理。
 ///
-/// 设计详见 `docs/internal/capabilities.md` §4。
+/// Native metadata returned by the model after a completions call.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostedCapabilities {

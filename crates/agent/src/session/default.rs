@@ -65,8 +65,7 @@ use crate::shell::ShellBackend;
 pub struct DefaultAgentCore {
     /// 装配期落地的 provider 目录。session 持有同一份 `Arc`，按当前选中
     /// 的 model id 解析对应的真实 [`LlmProvider`]——本类不再"持有单一
-    /// provider"。详见 `docs/internal/llm-trait.md` §2 与
-    /// `docs/internal/session.md`。
+    /// provider".
     registry: Arc<ProviderRegistry>,
     process_tools: Arc<dyn ToolRegistry>,
     /// 默认策略——**仅在未装配模式目录（`modes` 为 `None`）时**作为 session
@@ -85,7 +84,7 @@ pub struct DefaultAgentCore {
     /// [`NoopHttpClient`]。
     http: Arc<dyn HttpClient>,
     /// hook 引擎。本 core 的所有 session 共享——hook 配置走全局 + per-session
-    /// matcher（`docs/internal/hooks.md` §5）。CLI 入口装配；不显式注入时走
+    /// matcher. Assembled at CLI entry; without explicit injection, uses
     /// [`NoopHookEngine`]，等价"未配置 hook = 主循环不变"。
     hook_engine: Arc<dyn HookEngine>,
     /// 后台任务进度视图配置。所有 session 共享同一份（与进程级工具配置同档）。
@@ -617,7 +616,7 @@ pub struct DefaultSession {
     /// session 级后台任务表（`run_in_background` 落点）。持有任务 `JoinHandle`
     /// 使其活过发起它的 turn；内部 cancel token 独立于 turn 子 token。`run_turn`
     /// 把 clone 经 `TurnRunner` → `ToolContext` 注入给工具。详见
-    /// `docs/proposals/task-arrange.md` §3.1。
+    /// See task-arrange design for background task semantics.
     background: crate::session::BackgroundTasks,
     /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下；顶层 turn
     /// 把它经 [`crate::tool::ToolContext::goal`] 注入工具，`goal-gate` hook 据它续命 /
@@ -628,7 +627,7 @@ pub struct DefaultSession {
     compaction_slot: crate::session::CompactionSlot,
     /// turn slot 释放通知。`TurnGuard::drop` 时 `notify_one`——session driver 在
     /// 撞上 `TurnInProgress` 后等它，待当前 turn 结束再起自主续转 turn（主动续转的
-    /// 活性保证）。详见 `docs/proposals/task-arrange.md` §3.2。
+    /// liveness guarantee).
     turn_freed: Arc<tokio::sync::Notify>,
     /// session 级取消令牌——session 终结时 cancel，driver loop 据此退出。也是
     /// `background` 内任务取消令牌的来源（同一个 token）。
@@ -654,7 +653,7 @@ pub struct DefaultSession {
     /// `load_session` 在 hook 跑完之后填进来；每个 turn 装配 system prompt 时由
     /// [`merge_session_overlay`] 与显式 `config.system_prompt` 合并，经
     /// [`crate::session::prompt::resolve_system_prompt`] 落到 "Session
-    /// Instructions" 段。详见 `docs/internal/hooks.md` §3.2 / §9.1。
+    /// Instructions" section via hooks.
     session_start_append: Vec<agent_client_protocol_schema::ContentBlock>,
     /// 相邻请求稳定性诊断器。每次实际发给 provider 的请求都会产一条
     /// tracing 记录，帮助定位 cache miss 来源。
@@ -713,7 +712,7 @@ impl DefaultSession {
             };
 
             // 把已完成的后台任务结果作为本轮 prompt 的**前缀块**带入。
-            // 详见 docs/proposals/task-arrange.md §3.1 / §5.1。
+            // Background task reflow — see task-arrange §3.1 / §5.1.
             let prompt = {
                 let outcomes = self.background.drain_completed();
                 if outcomes.is_empty() {
@@ -816,7 +815,7 @@ impl DefaultSession {
     /// 外部强引用（`AgentCore.sessions` DashMap）全没了时 upgrade 失败、driver 退出。
     /// `session_cancel` 是显式退出信号（process shutdown / 未来的 session evict）。
     ///
-    /// 形态见 `docs/proposals/task-arrange.md` §3.2。两条等待腿：
+    /// Two waiting paths:
     /// - `background.wait_for_completion()`：有任务完成 → 准备起自主 turn；
     /// - `session_cancel.cancelled()`：session 终结 → 退出 loop。
     ///
@@ -1148,7 +1147,7 @@ fn decorate_with_provider_display(mut model: ModelInfo, provider: &ProviderInfo)
 ///
 /// `defect-acp` 的 `session/new` handler 在调用
 /// [`AgentCore::create_session`] 之前需要 `SessionId`（用于构造
-/// `AcpFsBackend`，详见 `docs/inbound/acp-fs.md` §3.2）；这个函数对外公开，
+/// `AcpFsBackend`); this function is public,
 /// 让 acp / 测试都能拿到一致格式的 id。
 ///
 /// 用全局唯一的 UUID 而非进程内计数 + 时间戳：跨进程重启、并发实例都不撞，

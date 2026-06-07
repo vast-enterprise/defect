@@ -1,8 +1,6 @@
-//! Hook 系统：主循环的扩展点。
+//! Hook system: extension points for the agent main loop.
 //!
-//! 设计详见 `docs/internal/hooks.md`。
-//!
-//! ## 抽象层次
+//! ## Abstraction layers
 //!
 //! - [`HookStep`](step::HookStep)：主循环在各 step 边界调用的拦截点（按事件名分桶）
 //! - [`StepHandler`]：单个执行器（Builtin / Command / Prompt 三种形态在子模块实现）
@@ -45,7 +43,7 @@ const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// 形态与 `defect-config` 的 `HookMatcher` 一致；agent crate 不依赖 config，
 /// 这里独立定义、CLI 装配时把 config 形态翻成 agent 形态（详见
-/// `docs/internal/hooks.md` §5.3）。
+/// See hooks design for trust model.
 ///
 /// 字段全空 = 匹配该事件下所有触发。
 #[non_exhaustive]
@@ -133,7 +131,7 @@ pub enum HookError {
 /// **Step 模型的 handler**（迁移目标）。引擎给它一个挂载点的输入信封（[`step::HookStep::to_envelope`]
 /// 的产物），它产出一个 verdict JSON——引擎再用 [`step::HookStep::apply_verdict`] 把 verdict 应用回
 /// step。两种 hook 都实现它：内部 Rust hook 直接算 verdict；command/prompt hook 把信封喂子进程/LLM、
-/// 把输出解析成 verdict。详见 `docs/internal/hook-step-context.md`。
+/// Parse output into a verdict.
 ///
 /// 返回 `Ok(None)` = 不干预（等价空 verdict）；`Ok(Some(verdict))` = 应用该 verdict；`Err` = 失败，
 /// 由引擎按降级表处理。
@@ -155,7 +153,7 @@ pub trait StepHandler: Send + Sync {
 /// 唯一入口 [`Self::dispatch`]：给定一个挂载点的 [`step::HookStep`]，引擎按 `event_name` 找到匹配
 /// handler，逐个把 step 的信封喂进去、把 verdict 应用回 step（数据轴累积），合并出最终
 /// [`step::HookControl`]（控制轴早退）。step 上的字段改动（注入 / 改 args / 填产出…）就地生效；
-/// 调用方读改动 + 控制指示。详见 `docs/internal/hook-step-context.md`。
+/// Summary: what the caller should read + control indication.
 ///
 /// 默认实现 [`DefaultHookEngine`]；测试 / 默认 session 装配走 [`NoopHookEngine`]。
 pub trait HookEngine: Send + Sync {

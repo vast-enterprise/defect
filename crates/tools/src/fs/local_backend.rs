@@ -1,6 +1,6 @@
 //! [`LocalFsBackend`]：直接打盘的 [`FsBackend`] 实现。
 //!
-//! 落实 `docs/internal/tools-fs.md` §6 的两条"不留坑"细节：
+//! Local filesystem backend — implements two key invariants:
 //! - **行末符规范化**（§6.1）：写文件时如果文件已存在，按文件原有的主流
 //!   行末符（CRLF / LF）规范化新内容，避免混合行末符
 //! - **原子写**（§6.2）：通过临时文件 + `rename` 完成全量覆盖，避免半截

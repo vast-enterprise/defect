@@ -1,6 +1,6 @@
 //! `fetch` 工具的输出渲染。
 //!
-//! 详见 `docs/internal/tools-fetch.md` §6.2 / §6.3。
+//! Content rendering for fetch responses.
 //!
 //! 渲染矩阵：
 //!
@@ -19,8 +19,8 @@ use defect_config::{FetchFormat, FetchToolConfig};
 
 /// HTML→markdown / 原文返回的统一入口。
 ///
-/// 失败时 `Err(reason)`——上层把 reason 包成
-/// `ToolError::Execution`。详见 `docs/internal/tools-fetch.md` §6.2。
+/// Failure: `Err(reason)` — the upper layer wraps the reason as
+/// `ToolError::Execution`.
 pub(super) fn render(
     body: &[u8],
     content_type: Option<&str>,

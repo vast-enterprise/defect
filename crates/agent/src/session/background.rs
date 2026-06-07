@@ -1,44 +1,50 @@
-//! Session 级后台任务表。
+//! Session-level background task table.
 //!
-//! 设计详见 `docs/proposals/task-arrange.md` §3.1。
+//! ## Problem
 //!
-//! ## 解决什么
+//! Tools (primarily `spawn_agent { run_in_background: true }`) want to fire-and-forget
+//! a task without blocking the initiating turn. However, the turn main loop's
+//! `run_tools_concurrently` holds tool tasks in a function-local `JoinSet` — when the
+//! function returns, the `JoinSet` is dropped and tasks are aborted, so no task can
+//! outlive the turn that created it.
 //!
-//! 工具（首要场景 `spawn_agent { run_in_background: true }`）想 fire-and-forget 地跑一个
-//! 任务，让发起它的 turn **不阻塞**。但 turn 主循环的 `run_tools_concurrently` 用一个**函数
-//! 局部** `JoinSet` 持有工具 task——函数返回时 `JoinSet` drop、task 被 abort。所以没有任何
-//! 任务能活过发起它的 turn。
+//! [`BackgroundTasks`] moves task `JoinHandle`s to the **session level** (same lifetime
+//! as `events` / `history`), allowing tasks to outlive their initiating turn. It also
+//! uses a **session-level [`CancellationToken`]** (not a turn child token) to mint
+//! per-task child tokens, making cancellation lifecycle independent of the initiating turn.
 //!
-//! [`BackgroundTasks`] 把任务的 `JoinHandle` 挪到 **session 级**持有（与 `events` / `history`
-//! 同档生命周期），任务因此活过发起它的 turn；并用一个 **session 级 [`CancellationToken`]**
-//! （不是 turn 的子 token）给每个任务 mint 子 token，使后台任务的取消生命周期独立于发起它
-//! 的 turn。
+//! ## Reflow (phase 1: passive)
 //!
-//! ## 回流（阶段一：被动）
+//! When a task completes, it pushes a [`BackgroundOutcome`] into the `completed` queue.
+//! `DefaultSession::run_turn` calls [`drain_completed`](BackgroundTasks::drain_completed)
+//! before each turn, bringing pending results into history as **prefix blocks** of the
+//! current user prompt — the LLM sees the results alongside the next user input.
+//! Phase 2 (active continuation) is handled by the session input loop competing for a
+//! new turn when a background task completes.
 //!
-//! 任务完成后把 [`BackgroundOutcome`] push 进 `completed` 队列。`DefaultSession::run_turn`
-//! 在每次起 turn 之前 [`drain_completed`](BackgroundTasks::drain_completed)，把待回流结果作为
-//! **本轮 user prompt 的前缀块**带入 history——结果搭着用户下一次输入一起被 LLM 看到。
-//! 阶段二（主动续转）改由 session input loop 在后台完成时立即竞争一个新 turn，见
-//! `docs/proposals/task-arrange.md` §3.2。
+//! ## Introspection and single-point cancellation (control plane)
 //!
-//! ## 内省与单点中断（控制面）
+//! Tasks **do not disappear immediately after completion**: each task retains a
+//! [`TaskEntry`] in the `tasks` table, recording status (running / completed / failed /
+//! cancelled) and a **shared handle to the task's history**.
 //!
-//! 任务**完成后不立刻从表里消失**：每个任务在 `tasks` 表里保留一条 [`TaskEntry`]，记录
-//! 状态（运行 / 完成 / 失败 / 取消）与一个**指向该任务 history 的共享句柄**。
+//! The progress "block" granularity is deliberately set to **message blocks submitted to
+//! the LLM** ([`crate::llm::Message`]) — not streaming deltas. Streaming
+//! `AssistantText` / `AssistantThought` chunks produce several words per chunk (mapping
+//! to ACP `AgentMessageChunk`), which are unhelpful for understanding "what is this
+//! subagent doing now". The meaningful granularity is at the turn / tool-call boundary.
+//! The main loop drains the entire batch, coalesces them into a single assistant
+//! `Message`, and appends it to history — that is the moment a "block" is sent to the
+//! AI. Therefore, `spawn_agent` shares the sub-turn history `Arc` into this table
+//! (the sub-turn appends to it), and `peek` snapshots that history directly, taking
+//! the **most recent N message blocks** — a single source of truth (identical to what
+//! is fed to the LLM), no replay/coalesce of streaming deltas needed elsewhere.
 //!
-//! 进度的"block"粒度刻意取**提交给 LLM 的消息块**（[`crate::llm::Message`]）——不是流式
-//! 增量。流式 `AssistantText` / `AssistantThought` 是逐 chunk 几个词一条（对位 ACP
-//! `AgentMessageChunk`），对"这个 subagent 现在大致在干嘛"毫无帮助。真正有意义的是 turn
-//! 主循环把整段 drain 完、coalesce 成一条 assistant `Message` append 进 history 的那一刻
-//! ——那才是"发给 AI 的一个 block"。因此 `spawn_agent` 把子 turn 的 history `Arc` 共享进
-//! 本表（子 turn 自己往里 append），`peek` 直接 snapshot 这份 history、取**最近 N 条
-//! 消息块**——单一真相源（与喂给 LLM 的完全一致），无需在别处重放/coalesce 流式增量。
-//!
-//! 于是主 agent 能用 `inspect_background_task` 查某个后台 subagent 的进度，用
-//! `cancel_background_task` 经 [`cancel_task`](BackgroundTasks::cancel_task) 提前掐掉单个
-//! 任务——不波及其它任务（每个任务一个独立子 token）。完成的任务条目按 FIFO 上限淘汰，
-//! 避免长会话无界增长。
+//! This allows the main agent to inspect a background sub-agent's progress with
+//! `inspect_background_task`, or cancel a single task early via
+//! [`cancel_task`](BackgroundTasks::cancel_task) without affecting other tasks
+//! (each task has its own child token). Completed task entries are evicted by FIFO
+//! upper bound to prevent unbounded growth in long sessions.
 
 use std::collections::BTreeMap;
 use std::future::Future;

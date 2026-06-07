@@ -1,6 +1,6 @@
 //! [`AgentEvent`] → ACP wire 形态的投影。
 //!
-//! 翻译表见 `docs/inbound/acp-bridge.md` §3。把内部事件分流为：
+//! Translation table for ACP events. Splits internal events into:
 //! - [`Projection::Update`]：直接 `cx.send_notification(SessionNotification {..})`
 //! - [`Projection::Permission`]：触发 `session/request_permission` 反向请求
 //! - [`Projection::EndTurn`]：驱动 `PromptResponse::stop_reason`

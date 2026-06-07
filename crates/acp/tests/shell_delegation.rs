@@ -1,4 +1,4 @@
-//! ACP shell（terminal）委托 e2e。覆盖 `docs/inbound/acp-shell.md` §7 的 #1–#7。
+//! ACP shell (terminal) delegation e2e tests.
 //!
 //! 形态：与 `fs_delegation.rs` 同款——`Channel::duplex` 把 ACP server / client
 //! 在进程内对接，server 跑 `defect_acp::serve_on`（注入 `ScriptedProvider` +
@@ -8,7 +8,6 @@
 //! LLM provider 的脚本由测试 case 自行配 `Round`：第 1 轮 emit tool_use
 //! （指定 args JSON），第 2 轮 emit "done" 文本。
 //!
-//! 见 `docs/inbound/acp-shell.md` §7 的 7 条用例。
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -1,7 +1,7 @@
 //! CLI 参数解析。
 //!
 //! 与 `defect-config` 的 `LoadConfigOptions::cli` 对齐——CLI flag 优先级
-//! 见 `docs/internal/config.md` §2 / `defect_config::CliOverrides`。
+//! CLI arguments — see config and CliOverrides.
 
 use clap::{Parser, ValueEnum};
 

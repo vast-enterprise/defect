@@ -1,10 +1,9 @@
-//! [`ToolRegistry`] 的两种实现：静态注册表 + 复合查询。
+//! [`ToolRegistry`] implementations: static registry + composite query.
 //!
-//! 设计详见 `docs/internal/session.md` §6：
-//! - [`StaticToolRegistry`]：进程级（内置工具）或会话级（MCP 工具）
-//!   各自一份，构造后不可变
-//! - [`CompositeRegistry`]：把两份串起来，主循环只看到一个统一接口
-//!   （`get` 时先查会话级、再查进程级；schemas 拼接两份）
+//! - [`StaticToolRegistry`]: process-level (builtin tools) or session-level (MCP tools),
+//!   immutable after construction
+//! - [`CompositeRegistry`]: chains two registries so the main loop sees a unified interface
+//!   (`get` checks session-level first, then process-level; schemas concatenate both)
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

@@ -10,7 +10,7 @@
 //! [`FileSystemCapabilities`] 协商结果选择后端，注入给
 //! [`crate::session::AgentCore::create_session`]。
 //!
-//! 设计详见 `docs/internal/tools-fs.md` §2 与 `docs/inbound/acp-fs.md`。
+
 //!
 //! [`FileSystemCapabilities`]: agent_client_protocol_schema::FileSystemCapabilities
 
@@ -124,7 +124,7 @@ pub trait FsBackend: Send + Sync {
     ///
     /// 后端负责确保父目录存在（`mkdir -p` 语义）。
     ///
-    /// 行末符 / 原子性的责任划分见 `docs/internal/tools-fs.md` §6：
+    /// Line-ending / atomicity responsibilities are split as:
     /// - 本地后端做行末符规范化与 `tmp + rename` 原子写
     /// - 委托后端把决定权交给客户端
     fn write_text(&self, path: PathBuf, content: String) -> BoxFuture<'_, Result<(), FsError>>;

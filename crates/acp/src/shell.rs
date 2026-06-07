@@ -4,7 +4,7 @@
 //! / `terminal/release` / `terminal/kill` 由 agent 发起、client 处理（zed /
 //! vscode 这类有集成终端 UI 的客户端在这条委托链上让命令在客户端 PTY 里跑）。
 //!
-//! 设计详见 `docs/inbound/acp-shell.md`。
+//! ACP shell backend — delegates shell execution to the client via ACP.
 
 use std::path::PathBuf;
 
@@ -24,7 +24,7 @@ use futures::future::BoxFuture;
 /// - `cx`：把请求送给客户端的句柄；本身是 `Arc<...>` newtype，clone 廉价
 /// - `session_id`：每条反向请求都要带，客户端用它在多 session 场景里路由
 /// - `workspace_root`：agent 自己守工作区边界，避免依赖客户端兜底
-///   （`docs/inbound/acp-shell.md` §5）
+///   （agent guards the workspace boundary independently）。
 pub struct AcpShellBackend {
     cx: ConnectionTo<Client>,
     session_id: SessionId,
@@ -138,8 +138,8 @@ impl ShellBackend for AcpShellBackend {
 }
 
 /// ACP schema 的 `TerminalExitStatus`（`exit_code: Option<u32>`）→ agent
-/// 内部的 [`TerminalExitStatus`]（`exit_code: Option<i32>`）。详见
-/// `docs/inbound/acp-shell.md` §3 / §5。exit code 标准值域 0..=255，i32 域
+/// 内部的 [`TerminalExitStatus`]（`exit_code: Option<i32>`）。
+/// exit code 标准值域 0..=255，i32 域
 /// 足够装下；超过 i32::MAX 的退化为 -1。
 fn map_acp_exit_status(s: agent_client_protocol::schema::TerminalExitStatus) -> TerminalExitStatus {
     TerminalExitStatus {

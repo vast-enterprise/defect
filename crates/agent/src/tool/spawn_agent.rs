@@ -348,7 +348,7 @@ impl Tool for SpawnAgentTool {
                     }
                 });
                 // 当场同步返回"已启动 id=X"——满足 tool_use↔tool_result 配对契约
-                // （docs/proposals/task-arrange.md §2.1）。
+                // Subagent profiles are indexed by source name at startup.
                 let msg = format!(
                     "Started background subagent `{}`, task id `{}`. Its result will arrive on a \
                      later turn.",

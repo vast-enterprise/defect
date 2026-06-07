@@ -1,4 +1,4 @@
-//! BashTool 单元测试。覆盖 docs/internal/tools-bash.md §7 的 #1–#9。
+//! BashTool unit tests.
 //! #10（真 LLM e2e）不在这里跑。
 
 use std::sync::Arc;

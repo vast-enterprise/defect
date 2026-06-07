@@ -1,6 +1,6 @@
 //! Langfuse 接入：把 `AgentEvent` 流上报为 Langfuse trace / generation / span。
 //!
-//! 设计详见 `docs/internal/observability-langfuse.md`。
+//! Langfuse integration — LLM tracing and usage analytics.
 //!
 //! 模块划分：
 //! - [`model`]：ingestion API 的 wire 结构体。

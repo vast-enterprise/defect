@@ -1,4 +1,4 @@
-//! LocalShellBackend 单元测试。覆盖 docs/inbound/acp-shell.md §4 的关键
+//! LocalShellBackend unit tests covering key
 //! 行为：create / output / wait_for_exit / release / kill 的语义合同。
 
 use std::time::Duration;
