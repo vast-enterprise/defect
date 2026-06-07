@@ -59,12 +59,14 @@ jobs:
           echo "::notice::target version = $VERSION"
 
           # sparse index 路径规则：name≥4 字符 → {前两}/{次两}/{name}。
-          # 返回 0 表示该 crate@VERSION 已在 crates.io 上存在。
+          index_url() { local n="$1"; echo "https://index.crates.io/${n:0:2}/${n:2:2}/${n}"; }
+          # 该 crate@VERSION 是否已在 crates.io 上。
           already_published() {
-            local name="$1"
-            local path="${name:0:2}/${name:2:2}/${name}"
-            curl -fsSL "https://index.crates.io/${path}" 2>/dev/null \
-              | grep -q "\"vers\":\"${VERSION}\""
+            curl -fsSL "$(index_url "$1")" 2>/dev/null | grep -q "\"vers\":\"${VERSION}\""
+          }
+          # 该 crate 名是否已存在（任意版本）。用来区分“首发新 crate”与“已有 crate 升版本”。
+          crate_name_exists() {
+            curl -fsSL "$(index_url "$1")" >/dev/null 2>&1
           }
 
           FLAGS="--locked"
@@ -73,16 +75,16 @@ jobs:
             echo "::notice::DRY RUN —— 仅 package 校验，不会真正发布"
           fi
 
-          # crates.io 限流（来自其公开配置）：
-          #   - 新 crate（首次发布某个名字）：burst 5，之后每 10 分钟补 1 个；
-          #   - 已存在 crate 发新版本：burst 30，每分钟补 1 个（宽松得多）。
-          # 首发本批 11 个全是“新 crate”，burst 5 之后必须每个间隔 >10 分钟，否则撞 429。
-          # 取 11 分钟保守间隔。后续版本升级不是新 crate、不受此约束，但留间隔仍利于索引传播。
-          SLEEP_BETWEEN=660
+          # crates.io 限流（来自其公开配置）随“是不是新 crate 名”而剧烈不同：
+          #   - 新 crate（首次发布某个名字）：burst 5，之后每 ~10 分钟补 1 个 → 间隔取 11 分钟；
+          #   - 已存在 crate 发新版本：burst 30，每分钟补 1 个 → 间隔 70 秒足矣（兼顾索引传播）。
+          # 因此按“下一个要发的包是不是新 crate”动态决定间隔：首发那一批只能认命慢，
+          # 而日常的版本升级整批 ~1 分钟跑完，不必空等。
+          SLEEP_NEW_CRATE=660
+          SLEEP_NEW_VERSION=70
 
           published_this_run=0
-          for i in "${!CRATES[@]}"; do
-            c="${CRATES[$i]}"
+          for c in "${CRATES[@]}"; do
             # 幂等：已发布的版本跳过，让失败后的 rerun 不会在已发的包上撞 “crate already exists”。
             # dry-run 不跳过——dry-run 的意义就是校验每个包都能 package。
             if [ "$DRY_RUN" != "true" ] && already_published "$c"; then
@@ -90,11 +92,15 @@ jobs:
               continue
             fi
 
-            # 在真发布且本 run 已经发过包的前提下，发下一个包前先等足限流间隔。
-            # 把 sleep 放在“发布之前”而非之后，可天然避免最后一个包发完仍空等。
+            # 发布前按本包是不是“新 crate”选择限流间隔（放在发布前，最后一个包发完不空等）。
             if [ "$DRY_RUN" != "true" ] && [ "$published_this_run" -gt 0 ]; then
-              echo "sleeping ${SLEEP_BETWEEN}s before publishing $c to respect crates.io rate limits..."
-              sleep "$SLEEP_BETWEEN"
+              if crate_name_exists "$c"; then
+                sleep_for="$SLEEP_NEW_VERSION"
+              else
+                sleep_for="$SLEEP_NEW_CRATE"
+              fi
+              echo "sleeping ${sleep_for}s before publishing $c (crates.io rate limit)..."
+              sleep "$sleep_for"
             fi
 
             echo "::group::publish $c"
