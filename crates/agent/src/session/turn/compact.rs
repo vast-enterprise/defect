@@ -166,7 +166,7 @@ pub(super) fn summary_message(summary: &str) -> Message {
 /// write-back primitive as the background path, keeping semantics consistent — here there
 /// is no concurrent tail insertion between snapshot and write-back, so `drop_count` is
 /// equivalent to the entire table prefix.
-pub(super) async fn run_sync(
+pub(crate) async fn run_sync(
     history: &dyn crate::session::History,
     ctx: &CompactionCtx,
     threshold: u64,

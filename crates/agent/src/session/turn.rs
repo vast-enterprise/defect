@@ -59,6 +59,10 @@ use tools::{
 };
 
 pub(crate) use request_audit::RequestAuditTracker;
+// Out-of-band `/compact` slash command reuses the same synchronous compaction primitive
+// as the turn loop's hard-watermark fallback, so the two share boundary selection and
+// summary logic instead of forking a second compaction path.
+pub(crate) use compact::{CompactionCtx, run_sync as run_sync_compaction};
 
 /// Strategy for capping LLM calls.
 #[derive(Debug, Clone, Copy)]

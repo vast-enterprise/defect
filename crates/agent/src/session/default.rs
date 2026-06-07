@@ -41,7 +41,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::error::BoxError;
-use crate::event::PermissionResolution;
+use crate::event::{AgentEvent, PermissionResolution};
 use crate::fs::FsBackend;
 use crate::hooks::{HookCtx, HookEngine, NoopHookEngine};
 use crate::http::{HttpClient, NoopHttpClient};
@@ -56,10 +56,13 @@ use crate::session::events::EventEmitter;
 use crate::session::permissions::PermissionGate;
 use crate::session::prompt::resolve_system_prompt;
 use crate::session::tool_registry::{CompositeRegistry, StaticToolRegistry};
-use crate::session::turn::{RequestAuditTracker, TurnConfig, TurnRunner};
+use crate::session::turn::{
+    CompactionCtx, RequestAuditTracker, TurnConfig, TurnRunner, run_sync_compaction,
+};
 use crate::session::{
-    AgentCore, AgentError, EventStream, History, ModelSelection, Session, SessionCreateInfo,
-    SessionLoader, SessionObserver, SessionToolFactory, ToolRegistry, TurnError, VecHistory,
+    AgentCore, AgentError, CompactionReport, ContextStatus, EventStream, History, ModelSelection,
+    Session, SessionCreateInfo, SessionLoader, SessionObserver, SessionToolFactory, ToolRegistry,
+    TurnError, VecHistory,
 };
 use crate::shell::ShellBackend;
 
@@ -1199,6 +1202,78 @@ impl Session for DefaultSession {
 
     fn resolve_permission(&self, id: ToolCallId, outcome: PermissionResolution) {
         self.permissions.resolve(&id, outcome);
+    }
+
+    fn context_status(&self) -> ContextStatus {
+        let used_tokens = self.history.token_estimate();
+        let context_window = {
+            let model = self
+                .config
+                .read()
+                .expect("DefaultSession config rwlock poisoned")
+                .model
+                .clone();
+            self.current_provider()
+                .model_info(&model)
+                .and_then(|m| m.context_window)
+        };
+        let ratio = match (used_tokens, context_window) {
+            (Some(used), Some(window)) if window > 0 => Some(used as f64 / window as f64),
+            _ => None,
+        };
+        ContextStatus {
+            used_tokens,
+            context_window,
+            ratio,
+        }
+    }
+
+    fn compact_now(&self) -> BoxFuture<'_, Result<Option<CompactionReport>, TurnError>> {
+        Box::pin(async move {
+            // A turn rewrites history concurrently with compaction; refuse rather than
+            // race. The caller should `/cancel` or wait. (Held briefly, never across await.)
+            {
+                let slot = self
+                    .turn_state
+                    .lock()
+                    .expect("DefaultSession turn_state mutex poisoned");
+                if slot.cancel.is_some() {
+                    return Err(TurnError::TurnInProgress);
+                }
+            }
+
+            let (model, sampling) = {
+                let config = self
+                    .config
+                    .read()
+                    .expect("DefaultSession config rwlock poisoned");
+                (config.model.clone(), config.sampling.clone())
+            };
+            let ctx = CompactionCtx {
+                provider: self.current_provider(),
+                model,
+                sampling,
+                tools: self.tools.schemas(),
+                cancel: self.session_cancel.clone(),
+            };
+
+            // Force a compaction regardless of watermark: use the current estimate as the
+            // threshold so boundary selection keeps a sensible tail. If history is empty /
+            // has no estimate, there is nothing to compact.
+            let Some(threshold) = self.history.token_estimate() else {
+                return Ok(None);
+            };
+            let report = run_sync_compaction(self.history.as_ref(), &ctx, threshold).await;
+            if let Some(report) = report {
+                self.events
+                    .emit(AgentEvent::ContextCompressed {
+                        tokens_before: report.tokens_before,
+                        tokens_after: report.tokens_after,
+                    })
+                    .await;
+            }
+            Ok(report)
+        })
     }
 }
 

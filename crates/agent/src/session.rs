@@ -323,6 +323,23 @@ pub trait Session: Send + Sync {
     /// Writes back the client response to the ACP reverse request
     /// `session/request_permission` to the main loop.
     fn resolve_permission(&self, id: ToolCallId, outcome: PermissionResolution);
+
+    /// Current context usage. Read-only and cheap; backs the `/context` slash command.
+    fn context_status(&self) -> ContextStatus;
+
+    /// Synchronously compact the session history now (out-of-band `/compact` command),
+    /// reusing the same boundary selection + summarization as the turn loop's hard
+    /// watermark.
+    ///
+    /// Returns `Ok(Some(report))` when a compaction ran, `Ok(None)` when there was no safe
+    /// boundary to summarize (e.g. a single short turn — nothing to do).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurnError::TurnInProgress`] if a turn is currently running: compaction
+    /// rewrites history and would race the in-flight turn, so the caller must `/cancel` or
+    /// wait first.
+    fn compact_now(&self) -> BoxFuture<'_, Result<Option<CompactionReport>, TurnError>>;
 }
 
 /// Event stream. Type-erased to support trait object return.
@@ -413,6 +430,19 @@ pub trait History: Send + Sync {
 pub struct CompactionReport {
     pub tokens_before: u64,
     pub tokens_after: u64,
+}
+
+/// Snapshot of the session's context usage, returned by [`Session::context_status`].
+/// Powers the `/context` slash command (and any client-side context gauge).
+#[derive(Debug, Clone, Copy)]
+pub struct ContextStatus {
+    /// Estimated tokens currently held in history. `None` when no estimate is available
+    /// yet (e.g. an empty session before the first request).
+    pub used_tokens: Option<u64>,
+    /// The model's context window in tokens, if the provider exposes it.
+    pub context_window: Option<u64>,
+    /// Fraction of the window in use (`used / window`), only when both are known.
+    pub ratio: Option<f64>,
 }
 
 /// Process-level agent error.
