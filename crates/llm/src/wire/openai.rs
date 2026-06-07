@@ -5777,7 +5777,8 @@ pub mod operations {
         pub mod completions {
             pub mod post {
                 #[derive(Debug, Clone, PartialEq)]
-                /** # **Starting a new project?** We recommend trying [Responses](/docs/api-reference/responses)
+                /**
+                # **Starting a new project?** We recommend trying [Responses](/docs/api-reference/responses)
                 to take advantage of the latest OpenAI platform features. Compare
                 [Chat Completions with Responses](/docs/guides/responses-vs-chat-completions?api-mode=responses).
 

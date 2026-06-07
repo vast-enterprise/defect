@@ -136,6 +136,7 @@ fn generate(name: &str, oas_path: &Path, root_path: &str) -> Result<String> {
             .with_context(|| format!("anthropic_strip::patch_generated({name})"))?,
         _ => body,
     };
+    let body = normalize_block_doc_indent(&body);
     let oas_rel = oas_path
         .strip_prefix(workspace_root()?)
         .map(Path::to_path_buf)
@@ -148,6 +149,43 @@ fn generate(name: &str, oas_path: &Path, root_path: &str) -> Result<String> {
     out.push_str("`.\n#![allow(\n    clippy::manual_async_fn,\n    clippy::needless_return,\n    clippy::single_match,\n    clippy::match_single_binding,\n    clippy::too_many_arguments,\n    clippy::large_enum_variant,\n    clippy::enum_variant_names,\n    dead_code,\n    unused_imports,\n    rustdoc::bare_urls,\n    rustdoc::broken_intra_doc_links,\n)]\n\n");
     out.push_str(&body);
     Ok(out)
+}
+
+/// Pull the opening line's text onto its own line in `/** … */` block doc
+/// comments emitted by prettyplease.
+///
+/// prettyplease renders a multi-paragraph `description` as
+/// `                /** First line\n                continuation…`, where the
+/// first line sits flush after `/**` (no indent) but the continuation lines
+/// keep the item's indentation. rustdoc strips the common leading whitespace
+/// of the *whole* block; since the first line has none, nothing is stripped
+/// and the deeply-indented continuations are parsed as indented code blocks —
+/// which rustdoc then tries to compile as Rust doctests and fails on.
+///
+/// Moving the first line's content below `/**` makes every text line share the
+/// same indent, so rustdoc dedents them to column zero and treats the body as
+/// prose. Single-line `/** … */` blocks (no newline) are left untouched.
+fn normalize_block_doc_indent(body: &str) -> String {
+    let mut out = String::with_capacity(body.len() + 64);
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let indent = &line[..line.len() - trimmed.len()];
+        if let Some(rest) = trimmed.strip_prefix("/** ") {
+            // Only block comments that actually span multiple lines are a
+            // problem; a self-contained `/** … */` has its `*/` on this line.
+            let body_text = rest.strip_suffix('\n').unwrap_or(rest);
+            if !body_text.contains("*/") {
+                out.push_str(indent);
+                out.push_str("/**\n");
+                out.push_str(indent);
+                out.push_str(body_text);
+                out.push('\n');
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 fn parse_spec(path: &Path, raw: &str) -> Result<oas3::Spec> {
