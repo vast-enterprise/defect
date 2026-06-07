@@ -441,6 +441,44 @@ pub(super) fn approved_tool_name(a: &Approved) -> String {
     }
 }
 
+/// Body substituted for a tool result that is too large to ever fit in the context
+/// window. The `{tokens}` / `{window}` give the model the concrete reason; the guidance
+/// tells it how to recover (narrow the call) rather than blindly retrying.
+pub(super) fn oversized_rejection_text(tokens: u64, window: u64) -> String {
+    format!(
+        "[tool output rejected: ~{tokens} tokens exceeds the model context window of \
+         {window} tokens, so it cannot be added to the conversation. Re-run the tool with \
+         a narrower request — e.g. a tighter pattern, fewer files, a smaller line range, \
+         or pagination — so the result fits.]"
+    )
+}
+
+/// Reject tool results that, on their own, exceed the model's context window: such a
+/// result can never fit, and appending it would only blow up the very next request (or, at
+/// best, get cleared by microcompact after already having forced an oversized send). We
+/// replace the body with an actionable error and flag `is_error`, while keeping the
+/// `tool_use ↔ tool_result` pairing intact so the wire format stays valid.
+///
+/// `window == None` (model context window unknown) ⇒ no ceiling to enforce, leave results
+/// untouched. Measured by the same ruler as microcompact / compaction triggers.
+pub(super) fn reject_oversized_results(results: &mut [ToolResult], window: Option<u64>) -> usize {
+    let Some(window) = window else {
+        return 0;
+    };
+    let mut rejected = 0;
+    for r in results.iter_mut() {
+        let tokens = super::microcompact::estimate_tool_result_tokens(&r.body);
+        if tokens > window {
+            r.body = ToolResultBody::Text {
+                text: oversized_rejection_text(tokens, window),
+            };
+            r.is_error = true;
+            rejected += 1;
+        }
+    }
+    rejected
+}
+
 pub(super) fn tool_results_message(results: Vec<ToolResult>) -> Message {
     Message {
         role: Role::User,
@@ -665,3 +703,6 @@ async fn drive_tool_stream(
         error: Some(text),
     }
 }
+
+#[cfg(test)]
+mod tests;

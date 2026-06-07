@@ -54,7 +54,9 @@ mod hooks;
 use content::content_block_to_message_content;
 use hooks::UserPromptHookFlow;
 use llm_drive::{assistant_message, real_input_tokens};
-use tools::{Approved, DecisionFlow, approved_tool_name, tool_results_message};
+use tools::{
+    Approved, DecisionFlow, approved_tool_name, reject_oversized_results, tool_results_message,
+};
 
 pub(crate) use request_audit::RequestAuditTracker;
 
@@ -527,7 +529,19 @@ impl<'a> TurnRunner<'a> {
                 state.note_progress();
             }
 
-            let results = self.run_tools_concurrently(approved).await;
+            let mut results = self.run_tools_concurrently(approved).await;
+
+            // Reject any single tool result that exceeds the model's context window: it can
+            // never fit, so appending it as-is would only blow up the next request. Replace
+            // it with an actionable error before it enters history. See
+            // `reject_oversized_results`.
+            let rejected = reject_oversized_results(&mut results, self.context_window());
+            if rejected > 0 {
+                tracing::warn!(
+                    rejected,
+                    "rejected oversized tool result(s) exceeding the context window"
+                );
+            }
 
             // After `ToolBatch` hook: after all parallel tools finish, before the next
             // LLM call. Allows injection or graceful break.
@@ -792,11 +806,16 @@ impl<'a> TurnRunner<'a> {
 
     /// Parse the three-tier compaction thresholds (in tokens) for this turn. Any tier set
     /// to `None` means that tier is not triggered.
-    fn compact_thresholds(&self) -> CompactThresholds {
-        let window = self
-            .provider
+    /// The model's context window in tokens, if the provider exposes it. `None` ⇒ unknown
+    /// (no ceiling can be enforced for compaction or oversized-result rejection).
+    fn context_window(&self) -> Option<u64> {
+        self.provider
             .model_info(&self.config.model)
-            .and_then(|m| m.context_window);
+            .and_then(|m| m.context_window)
+    }
+
+    fn compact_thresholds(&self) -> CompactThresholds {
+        let window = self.context_window();
 
         // For `hard`, an absolute threshold takes precedence; otherwise, use `ratio *
         // window`.

@@ -162,7 +162,11 @@ fn already_cleared(output: &ToolResultBody) -> bool {
 /// Estimates tokens for a single `tool_result` by reusing `estimate_message_tokens` with
 /// a temporary message containing only that result, keeping the same metric as
 /// compression and trigger decisions without introducing a separate standard.
-fn estimate_tool_result_tokens(output: &ToolResultBody) -> u64 {
+///
+/// `pub(super)` so the turn loop's oversized-result rejection (`tools.rs`) measures by the
+/// exact same ruler — microcompact clears old oversized results, rejection blocks new ones
+/// that cannot fit at all; both must agree on what "this many tokens" means.
+pub(super) fn estimate_tool_result_tokens(output: &ToolResultBody) -> u64 {
     let probe = Message {
         role: crate::llm::Role::User,
         content: vec![MessageContent::ToolResult {
