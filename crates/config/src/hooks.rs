@@ -1,23 +1,28 @@
-//! `[hooks]` 段解析。
+//! Parsing of the `[hooks]` section.
 //!
 //! Hook configuration types.
 //!
-//! ## 形态
+//! ## Shape
 //!
-//! `[hooks]` 是一张表，键是挂载点的 `event_name`（snake_case，如 `before_turn_end`），值是该事件下
-//! 的 hook 条目数组。事件名的合法集合是 `defect_agent::hooks::step::ALL_EVENT_NAMES`——拼错/未知的
-//! 事件键 **hard fail**（不静默丢弃）。特殊键 `disable` 不是事件，是禁用指令数组。
+//! `[hooks]` is a table whose keys are mount-point `event_name`s (snake_case, e.g.
+//! `before_turn_end`) and whose values are arrays of hook entries for that event. The set
+//! of valid event names is `defect_agent::hooks::step::ALL_EVENT_NAMES` — misspelled or
+//! unknown event keys **hard fail** (they are not silently dropped). The special key
+//! `disable` is not an event; it is an array of disable directives.
 //!
-//! ## 为什么 hooks 不走 `ConfigToml::try_into`
+//! ## Why hooks do not go through `ConfigToml::try_into`
 //!
-//! 其它段一律先 `merge_toml_values` 把所有 layer 拍平成一份 TOML，再 decode。
-//! 但 hooks 数组的合并语义是 **append + dedupe**（§5.4）——TOML 默认数组覆盖
-//! 会让 project-local 静默移除上游 hook，等同 claude-code 的 issue #106。
-//! 因此 hooks 在 layer 阶段就要按数组 append 合并，且每条 hook 要保留来源
-//! [`ConfigSource`] 供 trust gating 使用。
+//! All other sections first flatten every layer into a single TOML via
+//! `merge_toml_values`, then decode. But the merge semantics for hook arrays are **append
+//! + dedupe** (§5.4) — TOML's default array overwrite would let a project-local layer
+//! silently remove upstream hooks, mirroring claude-code issue #106. Therefore hooks must
+//! be merged by appending arrays at the layer stage, and each hook must retain its source
+//! [`ConfigSource`] for trust gating.
 //!
-//! 此模块的入口是 [`parse_layer_hooks`]：从一个 layer 的原始 [`toml::Value`] 抽出当前层声明的
-//! hooks，附上 source 标签返回。跨层合并（append + dedupe + apply disable）在 [`crate::loader`]。
+//! The entry point of this module is [`parse_layer_hooks`]: it extracts the hooks
+//! declared in a single layer from the raw [`toml::Value`] and returns them tagged with a
+//! source label. Cross-layer merging (append + dedupe + apply disable) happens in
+//! [`crate::loader`].
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -32,12 +37,13 @@ use crate::types::{
     HookPromptRender, HookPromptSpec, HookShellKind, HooksConfig,
 };
 
-/// 每个事件桶 -> 该桶下声明的条目。
+/// Maps each event bucket to the entries declared under it.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LayerHooks {
     pub(crate) entries: HooksConfig,
-    /// 该层声明的 disable 条目。disable 不限定来源层，按 (event, matcher,
-    /// handler) 三元组在合并阶段从累积结果里移除。
+    /// Disable entries declared by this layer. Disables are not restricted to the
+    /// declaring layer; during merging, entries matching the (event, matcher, handler)
+    /// triple are removed from the accumulated result.
     pub(crate) disables: Vec<HookDisable>,
 }
 
@@ -48,10 +54,11 @@ pub(crate) struct HookDisable {
     pub(crate) handler: HookHandlerSpec,
 }
 
-/// 从一层的原始 TOML 抽出该层声明的 hook 条目与 disable 指令。
+/// Extract the hook entries and disable directives declared in a single layer from its
+/// raw TOML.
 ///
-/// 入参 `value` 应当是该层（user / project / project-local / cli）单独的
-/// 顶层 [`TomlValue::Table`]——**不是** layer 间已合并的结果。
+/// The `value` parameter must be the top-level [`TomlValue::Table`] for that layer (user
+/// / project / project-local / cli) — **not** the result of merging layers.
 pub(crate) fn parse_layer_hooks(
     path: PathBuf,
     source: ConfigSource,
@@ -96,7 +103,8 @@ pub(crate) fn parse_layer_hooks(
             continue;
         }
 
-        // 事件键：必须是已知挂载点，否则 hard fail（不静默丢弃拼错的键）。
+        // The event key must be a known hook point; otherwise hard-fail (do not silently
+        // drop misspelled keys).
         if !is_known_event(key) {
             return Err(ConfigError::Invalid {
                 path: path.clone(),
@@ -126,12 +134,15 @@ pub(crate) fn parse_layer_hooks(
     Ok(LayerHooks { entries, disables })
 }
 
-/// 把一个 subagent profile 的 `[hooks]` 表（已被 serde 解析成事件名 → 原始条目
-/// 数组）转成 [`HooksConfig`]，每条带上 profile 所在层的 `source`。
+/// Converts a subagent profile's `[hooks]` table (already parsed by serde into event-name
+/// → raw-entry arrays) into a [`HooksConfig`], attaching the profile's layer `source` to
+/// each entry.
 ///
-/// 与 [`parse_layer_hooks`] 的差别：profile 是**单一闭合真相源**——没有上游可
-/// append / dedupe / disable，故不支持 `disable` 键，也不跨层合并。事件名仍按
-/// `ALL_EVENT_NAMES` 校验，拼错 hard fail（不静默丢弃）。`path` 仅供报错定位。
+/// Unlike [`parse_layer_hooks`], a profile is a **single closed truth source** — there is
+/// no upstream to append to, deduplicate against, or disable. Therefore the `disable` key
+/// is unsupported and no cross-layer merging occurs. Event names are still validated
+/// against `ALL_EVENT_NAMES`; a misspelled name is a hard failure (not silently dropped).
+/// `path` is used only for error reporting.
 pub(crate) fn profile_hooks_from_raw(
     raw: BTreeMap<String, Vec<HookEntryRaw>>,
     source: ConfigSource,
@@ -160,10 +171,12 @@ pub(crate) fn profile_hooks_from_raw(
     Ok(entries)
 }
 
-/// 把多层 [`LayerHooks`] 合并成最终 [`HooksConfig`]：
-/// - 各事件桶按声明顺序 append（user → project → project-local → cli）
-/// - (matcher, handler) 完全相同的连续条目去重——保留首次出现
-/// - 应用所有 [`HookDisable`]：从对应桶里删掉所有 (matcher, handler) 匹配的条目，无论来自哪层
+/// Merge multiple [`LayerHooks`] into a final [`HooksConfig`]:
+/// - Append event buckets in declaration order (user → project → project-local → cli)
+/// - Deduplicate consecutive entries with identical (matcher, handler) pairs, keeping the
+///   first occurrence
+/// - Apply all [`HookDisable`] entries: remove any (matcher, handler) match from the
+///   corresponding bucket, regardless of which layer it came from
 pub(crate) fn merge_layer_hooks(layers: Vec<LayerHooks>) -> HooksConfig {
     let mut merged = HooksConfig::default();
     let mut disables: Vec<HookDisable> = Vec::new();
@@ -209,14 +222,12 @@ fn dedupe_in_place(entries: &mut Vec<HookEntry>) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Raw deserialization shapes
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HookEntryRaw {
-    /// 可选展示名（tracing / 可观测性用）。
+    /// Optional display name (for tracing / observability).
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]

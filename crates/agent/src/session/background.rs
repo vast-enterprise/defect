@@ -11,7 +11,8 @@
 //! [`BackgroundTasks`] moves task `JoinHandle`s to the **session level** (same lifetime
 //! as `events` / `history`), allowing tasks to outlive their initiating turn. It also
 //! uses a **session-level [`CancellationToken`]** (not a turn child token) to mint
-//! per-task child tokens, making cancellation lifecycle independent of the initiating turn.
+//! per-task child tokens, making cancellation lifecycle independent of the initiating
+//! turn.
 //!
 //! ## Reflow (phase 1: passive)
 //!
@@ -57,31 +58,41 @@ use tokio_util::sync::CancellationToken;
 use crate::llm::{Message, MessageContent, Role};
 use crate::session::History;
 
-/// `inspect_background_task` 不带 `recent_blocks` 时默认返回多少条最近消息块。
+/// Default number of recent message blocks returned by `inspect_background_task` when
+/// `recent_blocks` is not specified.
 const DEFAULT_RECENT_BLOCKS: usize = 10;
 
-/// `tasks` 表里保留多少个**已结束**的任务条目。运行中的条目不计入上限——它们必须留着
-/// 才能被 cancel / peek。超过上限时按结束顺序淘汰最旧的那条。
+/// How many **finished** task entries to keep in the `tasks` table. Running entries don't
+/// count toward the cap—they must remain to be cancelable/peekable. When the cap is
+/// exceeded, the oldest finished entry is evicted.
 const FINISHED_TASKS_CAP: usize = 64;
 
-/// 后台任务**进度视图**的配置。
+/// Configuration for the background task **progress view**.
 ///
-/// 目的：给主 agent 一个"这个 subagent 此刻大致在干嘛"的**鸟瞰**，而**不是**把子 turn
-/// 的完整正文灌回主 agent 上下文。所以默认偏保守——assistant/思考的正文默认**不留**
-/// （`block_text_limit = 0`，只报"有一条 assistant 文本 / 思考"这类元信息）；工具调用
-/// 这类本就简短的块原样保留。需要更细时用户再放大 `block_text_limit`。
+/// The goal is to give the main agent a **bird's-eye** view of what a subagent is
+/// currently doing, **not** to flood the main agent's context with the full text of
+/// sub-turns. Therefore the defaults are conservative — assistant/thinking text is
+/// **omitted** by default (`block_text_limit = 0`, reporting only metadata like "there is
+/// an assistant text / thinking"); tool calls, which are naturally short, are kept as-is.
+/// Users can increase `block_text_limit` when more detail is needed.
 ///
-/// 配置真相源在 agent 侧（这里），`defect-config` 的 `ToolsConfig.background` 直接复用本
-/// 结构（与 `TurnConfig` / `SessionCapabilitiesConfig` 同款跨 crate 复用——config 依赖
-/// agent，不能反向）。
+/// The source of truth for configuration lives on the agent side (here).
+/// `defect-config`'s `ToolsConfig.background` reuses this struct directly (same
+/// cross-crate reuse pattern as `TurnConfig` / `SessionCapabilitiesConfig` — config
+/// depends on agent, not the other way around).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackgroundProgressConfig {
-    /// `inspect_background_task` 不带 `recent_blocks` 参数时，默认返回多少条最近消息块。
-    /// `0` 视作 `1`（至少给一条，否则 peek 永远空）。
+    /// How many recent message blocks `inspect_background_task` returns by default when
+    /// called without the `recent_blocks` argument.
+    /// `0` is treated as `1` (at least one block is always returned, otherwise peek would
+    /// always be empty).
     pub default_recent_blocks: usize,
-    /// 单个 block 的**正文**字符上限（按 Unicode 标量计），作用于 assistant 文本 / 思考 /
-    /// 工具结果这类自由正文。超出即在边界截断并加省略标记。`0` = 不留正文（只报块的
-    /// 类型与元信息，如工具名）——默认值，最不污染主 agent 上下文。
+    /// Maximum number of Unicode scalar values for the **body** of a single block,
+    /// applied to free-form text such as assistant messages, thinking blocks, and tool
+    /// results. Text exceeding this limit is truncated at the boundary with an ellipsis
+    /// marker. `0` means no body text is kept (only the block's type and metadata, e.g.
+    /// tool name) — this is the default, and minimizes pollution of the main agent's
+    /// context.
     pub block_text_limit: usize,
 }
 
@@ -89,36 +100,40 @@ impl Default for BackgroundProgressConfig {
     fn default() -> Self {
         Self {
             default_recent_blocks: DEFAULT_RECENT_BLOCKS,
-            // 默认只给摘要 / 元信息，不灌正文——目的是鸟瞰，不是搬运上下文。
+            // By default, only summary/metadata is provided, not the full body — the goal
+            // is an overview, not context transfer.
             block_text_limit: 0,
         }
     }
 }
 
 impl BackgroundProgressConfig {
-    /// 规整 `recent_blocks`：调用方传 `Some(n)` 用 `n`（至少 1），`None` 用配置默认（至少 1）。
+    /// Normalize `recent_blocks`: if the caller passes `Some(n)`, use `n` (at least 1);
+    /// if `None`, use the config default (at least 1).
     fn resolve_recent(&self, requested: Option<usize>) -> usize {
         requested.unwrap_or(self.default_recent_blocks).max(1)
     }
 }
 
-/// 一个后台任务完成后的产物。
+/// The outcome produced after a background task completes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundOutcome {
-    /// 任务 id（`spawn` 返回的同一个），用于回流消息标注与外部诊断。
+    /// The task ID (same as returned by `spawn`), used for backflow message annotation
+    /// and external diagnostics.
     pub task_id: String,
-    /// 任务标签（首要来源：`spawn_agent` 的 profile 名），进回流消息让模型/用户辨识来源。
+    /// Task label (primarily from the `spawn_agent` profile name), included in the return
+    /// message so the model or user can identify the source.
     pub label: String,
-    /// 任务结果。
+    /// The result of the background task.
     pub result: BackgroundResult,
 }
 
-/// 后台任务的最终结果。
+/// The final result of a background task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackgroundResult {
-    /// 正常完成，携带任务的最终文本输出。
+    /// Completed successfully, containing the task's final text output.
     Completed(String),
-    /// 失败（含被取消），携带错误描述。
+    /// Failure (including cancellation), with an error description.
     Failed(String),
 }
 
@@ -134,22 +149,23 @@ impl BackgroundResult {
     }
 }
 
-/// 后台任务的生命周期状态。供 `inspect_background_task` 控制面展示。
+/// Lifecycle status of a background task, exposed via the `inspect_background_task`
+/// control plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
-    /// 仍在运行。
+    /// Still running.
     Running,
-    /// 正常跑完。
+    /// The task completed successfully.
     Completed,
-    /// 失败结束。
+    /// The task failed.
     Failed,
-    /// 被 [`cancel_task`](BackgroundTasks::cancel_task) / [`cancel_all`](BackgroundTasks::cancel_all)
-    /// 取消。
+    /// Canceled by [`cancel_task`](BackgroundTasks::cancel_task) /
+    /// [`cancel_all`](BackgroundTasks::cancel_all).
     Canceled,
 }
 
 impl TaskStatus {
-    /// 稳定的小写字符串名，进控制面工具输出。
+    /// Stable lowercase string name for control-plane tool output.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -165,25 +181,27 @@ impl TaskStatus {
     }
 }
 
-/// 一条进度 block 的角色/类别。直接对位提交给 LLM 的 [`crate::llm::Message`] 内容。
+/// The role/category of a progress block. Directly corresponds to the content of a
+/// [`crate::llm::Message`] submitted to the LLM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {
-    /// 用户/任务输入消息（含回流进来的后台结果、工具结果回灌等）。
+    /// User/task input message (including backflow of background results, tool result
+    /// re-injection, etc.).
     User,
-    /// 助手产出的文本。
+    /// Text produced by the assistant.
     AssistantText,
-    /// 助手的思考链。
+    /// The assistant's chain of thought.
     Thought,
-    /// 助手发起的一次工具调用。
+    /// A tool call initiated by the assistant.
     ToolUse,
-    /// 工具结果（喂回给模型的）。
+    /// Tool result (fed back to the model).
     ToolResult,
-    /// 其它（多模态 / provider 活动等），归一展示。
+    /// Other (multimodal / provider activity, etc.), normalized for display.
     Other,
 }
 
 impl BlockKind {
-    /// 稳定的小写字符串名，进控制面工具输出。
+    /// Stable lowercase string name for control-plane tool output.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -196,8 +214,9 @@ impl BlockKind {
         }
     }
 
-    /// 该类 block 的文本是否为**自由正文**——受 [`BackgroundProgressConfig::block_text_limit`]
-    /// 约束。工具调用名这类本就是一行摘要，不算正文、不受上限约束。
+    /// Whether this kind of block's text is "free-form body" — subject to the limit in
+    /// [`BackgroundProgressConfig::block_text_limit`]. Tool call names are inherently
+    /// one-line summaries, not body text, and are not subject to the limit.
     fn is_free_form_body(&self) -> bool {
         matches!(
             self,
@@ -206,27 +225,30 @@ impl BlockKind {
     }
 }
 
-/// peek 返回的单条进度 block：类别 + 文本摘要（已按配置截断）。
+/// A single progress block returned by `peek`: kind + text summary (truncated per
+/// configuration).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgressBlock {
     pub kind: BlockKind,
     pub text: String,
 }
 
-/// 一个任务在控制面里的快照（`list` / `peek` 返回）。
+/// A snapshot of a task in the control plane (returned by `list` / `peek`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSnapshot {
     pub task_id: String,
     pub label: String,
     pub status: TaskStatus,
-    /// 该任务 history 里现有的消息块总数（`peek` 才填；`list` 为 `0`，因为列举不读 history）。
+    /// Total number of progress blocks currently in this task's history (only populated
+    /// by `peek`; `list` returns `0` because it does not read history).
     pub block_count: usize,
-    /// 最近的若干 block（`list` 不带、为空；`peek` 带最近 N 个）。
+    /// Recent blocks (empty for `list`; contains the latest N blocks for `peek`).
     pub recent: Vec<ProgressBlock>,
 }
 
-/// 把自由正文按字符上限截断（按 Unicode 标量切，不会切坏字符）。`limit == 0` ⇒ 空串
-/// （只留元信息）。截断时附 ` …(+N more chars)` 标记，让查看者知道有省略。
+/// Truncate free-form text to a character limit (splits on Unicode scalar boundaries,
+/// never breaking a character). `limit == 0` returns an empty string (metadata only).
+/// Appends ` …(+N more chars)` to indicate truncation.
 fn truncate_body(text: &str, limit: usize) -> String {
     if limit == 0 {
         return String::new();
@@ -239,7 +261,8 @@ fn truncate_body(text: &str, limit: usize) -> String {
     format!("{kept} …(+{} more chars)", total - limit)
 }
 
-/// 把 [`ToolResultBody`](crate::llm::ToolResultBody) 提一段可读文本出来（仅用于鸟瞰摘要）。
+/// Extract a human-readable text snippet from a
+/// [`ToolResultBody`](crate::llm::ToolResultBody) (for a bird's-eye summary only).
 fn tool_result_text(body: &crate::llm::ToolResultBody) -> String {
     use crate::llm::{ToolResultBody, ToolResultContent};
     match body {
@@ -256,7 +279,8 @@ fn tool_result_text(body: &crate::llm::ToolResultBody) -> String {
     }
 }
 
-/// 把一条 [`MessageContent`] 映射成一条进度 block，正文按 `limit` 截断（仅自由正文）。
+/// Maps a [`MessageContent`] to a progress block, truncating the body to `limit` (free
+/// text only).
 fn block_of_content(content: &MessageContent, role: Role, limit: usize) -> ProgressBlock {
     let (kind, raw): (BlockKind, String) = match content {
         MessageContent::Text { text } => {
@@ -268,7 +292,9 @@ fn block_of_content(content: &MessageContent, role: Role, limit: usize) -> Progr
             (kind, text.clone())
         }
         MessageContent::Thinking { text, .. } => (BlockKind::Thought, text.clone()),
-        // 工具名是一行摘要，不当正文截断；参数不进鸟瞰（要看细节去 langfuse trace）。
+        // The tool name is a one-line summary and should not be truncated as body text;
+        // parameters are excluded from the bird's-eye view (see the langfuse trace for
+        // details).
         MessageContent::ToolUse { name, .. } => (BlockKind::ToolUse, name.clone()),
         MessageContent::ToolResult { output, .. } => {
             (BlockKind::ToolResult, tool_result_text(output))
@@ -286,8 +312,10 @@ fn block_of_content(content: &MessageContent, role: Role, limit: usize) -> Progr
     ProgressBlock { kind, text }
 }
 
-/// 从一份 history snapshot 里取**最近 `n` 条**消息块（把每条 [`Message`] 的各 content 片段
-/// 摊平成独立 block，保持时间顺序），正文按 `limit` 截断。返回 `(总块数, 最近 n 块)`。
+/// Extracts the **most recent `n`** message blocks from a history snapshot (flattens each
+/// [`Message`]'s content fragments into individual blocks while preserving chronological
+/// order), truncating each block's body to `limit`. Returns `(total_blocks,
+/// last_n_blocks)`.
 fn recent_blocks_of(messages: &[Message], n: usize, limit: usize) -> (usize, Vec<ProgressBlock>) {
     let mut all: Vec<ProgressBlock> = Vec::new();
     for m in messages {
@@ -300,36 +328,46 @@ fn recent_blocks_of(messages: &[Message], n: usize, limit: usize) -> (usize, Vec
     (total, all.into_iter().skip(skip).collect())
 }
 
-/// `tasks` 表里的一条任务条目。
+/// An entry in the `tasks` table.
 struct TaskEntry {
     label: String,
     status: TaskStatus,
-    /// 本任务专属取消令牌（session 级 token 的子 token）。`cancel_task` 取它单独 `cancel`。
+    /// Cancellation token specific to this task (child of the session-level token).
+    /// `cancel_task` calls `cancel` on it individually.
     cancel: CancellationToken,
-    /// 指向该任务 history 的共享句柄。`peek` 经它 snapshot 出**提交给 LLM 的消息块**。
-    /// `Some`：发起任务的工具（`spawn_agent`）把子 turn 的 history `Arc` 共享了进来；
-    /// `None`：任务没暴露 history（无进度可查，peek 只回状态）。
+    /// Shared handle to this task's history. `peek` uses it to snapshot the message
+    /// blocks submitted to the LLM.
+    /// `Some`: the tool that spawned the task (`spawn_agent`) shared the child turn's
+    /// history via `Arc`;
+    /// `None`: the task does not expose history (no progress to query; `peek` only
+    /// returns status).
     history: Option<Arc<dyn History>>,
-    /// 运行中的 `JoinHandle`，使任务活过发起它的 turn。结束后置 `None`。
+    /// The `JoinHandle` that keeps the task alive past the turn that spawned it. Set to
+    /// `None` after completion.
     handle: Option<JoinHandle<()>>,
-    /// 结束顺序序号（仅已结束条目有），供 FIFO 淘汰。
+    /// Sequence number for termination order (only present on finished entries), used for
+    /// FIFO eviction.
     finished_seq: Option<u64>,
 }
 
 struct BackgroundInner {
-    /// 单调递增的任务 id 计数器。
+    /// Monotonically increasing task ID counter.
     next_id: u64,
-    /// 单调递增的"结束顺序"计数器，供已结束条目 FIFO 淘汰。
+    /// Monotonically increasing "finish order" counter for FIFO eviction of finished
+    /// entries.
     next_finished_seq: u64,
-    /// 全部任务（运行中 + 近期已结束）。已结束条目超过 [`FINISHED_TASKS_CAP`] 时淘汰最旧。
+    /// All tasks (running + recently finished). When finished entries exceed
+    /// [`FINISHED_TASKS_CAP`], the oldest are evicted.
     tasks: BTreeMap<String, TaskEntry>,
-    /// 已完成、待回流的结果（FIFO）。`drain_completed` 取空。与 `tasks` 表正交：
-    /// 前者驱动被动回流，后者支撑控制面查询/中断。
+    /// Completed results pending drain (FIFO). Emptied by `drain_completed`. Orthogonal
+    /// to the `tasks` table: this drives passive draining, while `tasks` supports
+    /// control-plane queries and interrupts.
     completed: Vec<BackgroundOutcome>,
 }
 
 impl BackgroundInner {
-    /// 把一条任务标记为已结束、记录结束序号，并按上限淘汰最旧的已结束条目。
+    /// Marks a task as finished, records its finish sequence number, and evicts the
+    /// oldest finished entries up to the capacity limit.
     fn finish(&mut self, id: &str, status: TaskStatus) {
         let seq = self.next_finished_seq;
         self.next_finished_seq += 1;
@@ -341,7 +379,8 @@ impl BackgroundInner {
         self.prune_finished();
     }
 
-    /// 已结束条目超过上限时，按结束序号淘汰最旧的几条。运行中条目永不淘汰。
+    /// When finished entries exceed the cap, evict the oldest ones by finish sequence.
+    /// Running entries are never evicted.
     fn prune_finished(&mut self) {
         let mut finished: Vec<(u64, String)> = self
             .tasks
@@ -359,24 +398,28 @@ impl BackgroundInner {
     }
 }
 
-/// Session 级后台任务表。`Clone` 廉价（内部 `Arc`）——`DefaultSession` 持有一份，
-/// 经 `ToolContext` clone 给工具。
+/// Session-level background task table. `Clone` is cheap (inner `Arc`) — `DefaultSession`
+/// holds one copy, cloned to tools via `ToolContext`.
 #[derive(Clone)]
 pub struct BackgroundTasks {
-    /// session 级取消令牌。每个任务从它 `child_token()`，故 `cancel_all` 一次性掐掉全部，
-    /// 且任意单个任务的取消不影响其他任务。
+    /// Session-level cancellation token. Each task derives its token via `child_token()`,
+    /// so `cancel_all` cancels all tasks at once, while cancelling any single task does
+    /// not affect the others.
     cancel: CancellationToken,
-    /// 任务完成通知。每当一个任务结果入队就 `notify_one`——session driver 等在它上面，
-    /// 被唤醒后起一个自主 turn 主动续转（阶段二）。被动回流不依赖它。
+    /// Notifies when a task completes. Each time a task result is enqueued, `notify_one`
+    /// is called — the session driver waits on this and, when woken, starts an autonomous
+    /// turn to continue processing (phase two). Passive backpressure does not rely on it.
     completed_notify: Arc<Notify>,
-    /// 进度视图配置（默认返回块数 / 正文上限）。`peek` 据此渲染。
+    /// Progress view configuration (default block count / body limit). `peek` renders
+    /// based on this.
     progress_config: BackgroundProgressConfig,
     inner: Arc<Mutex<BackgroundInner>>,
 }
 
 impl BackgroundTasks {
-    /// 用一个 session 级取消令牌 + 进度视图配置构造。`session_cancel` 由 session 持有、
-    /// 随 session 终结而取消。
+    /// Constructs a new instance with a session-level cancellation token and a
+    /// progress-view configuration. `session_cancel` is owned by the session and is
+    /// cancelled when the session terminates.
     #[must_use]
     pub fn new(
         session_cancel: CancellationToken,
@@ -395,15 +438,18 @@ impl BackgroundTasks {
         }
     }
 
-    /// 等到"有任务完成入队"事件。session driver 用它驱动主动续转。
+    /// Wait for a "task completion enqueued" event. The session driver uses this to drive
+    /// proactive continuation.
     ///
-    /// 用 `Notify`：driver 先 `notified()` 拿到 future、再检查队列、然后 await——避免漏掉
-    /// 在两次检查之间到达的通知（`Notify` 的 permit 语义保证已发生的 notify 不丢）。
+    /// Uses `Notify`: the driver first calls `notified()` to obtain a future, then checks
+    /// the queue, then awaits — avoiding missed notifications that arrive between checks
+    /// (`Notify`'s permit semantics guarantee that already-fired notifies are not lost).
     pub async fn wait_for_completion(&self) {
         self.completed_notify.notified().await;
     }
 
-    /// 当前是否有已完成、待回流的结果。driver 唤醒后先查它再决定起不起 turn。
+    /// Whether there are completed results waiting to be collected. The driver checks
+    /// this after waking up to decide whether to start a turn.
     #[must_use]
     pub fn has_completed(&self) -> bool {
         !self
@@ -414,16 +460,20 @@ impl BackgroundTasks {
             .is_empty()
     }
 
-    /// Spawn 一个后台任务，**立即**返回它的 id。
+    /// Spawns a background task and returns its ID **immediately**.
     ///
-    /// `make_fut` 收到两个句柄：本任务专属的 [`CancellationToken`]（session 级 token 的
-    /// 子 token，任务体应在其上感知取消）与一个 [`TaskHandle`]（任务体把自己的 history
-    /// `Arc` 经 [`TaskHandle::attach_history`] 共享进表，供控制面 peek **提交给 LLM 的
-    /// 消息块**）。任务完成时结果进 `completed` 队列、并把 `tasks` 表里本条标记为终态
-    /// （保留条目以便事后查询）。
+    /// `make_fut` receives two handles: a [`CancellationToken`] specific to this task (a
+    /// child of the session-level token, which the task body should use to observe
+    /// cancellation) and a [`TaskHandle`] (the task body shares its history `Arc` into
+    /// the table via [`TaskHandle::attach_history`], allowing the control plane to peek
+    /// at the **message chunks submitted to the LLM**). On completion, the result is
+    /// placed in the `completed` queue and the corresponding entry in the `tasks` table
+    /// is marked as terminal (the entry is retained for later inspection).
     ///
-    /// 取这个"收 token / handle 再造 future"的闭包形态，是因为两者都要在 spawn 内部 mint，
-    /// 而 future 需要捕获它们——直接收 future 就拿不到这个生命周期独立于 turn 的 token。
+    /// The closure form that "receives token/handle and then creates the future" is used
+    /// because both must be minted inside `spawn`, and the future needs to capture them —
+    /// accepting a future directly would not allow obtaining a token whose lifetime is
+    /// independent of the turn.
     pub fn spawn<F, Fut>(&self, label: String, make_fut: F) -> String
     where
         F: FnOnce(CancellationToken, TaskHandle) -> Fut,
@@ -438,7 +488,8 @@ impl BackgroundTasks {
             inner: self.inner.clone(),
             task_id: id.clone(),
         };
-        // 任务体感知"是否被取消"，用于完成时区分 Failed / Canceled 状态。
+        // The task body can detect whether it was cancelled, so that completion
+        // distinguishes between `Failed` and `Canceled` states.
         let cancel_for_task = task_cancel.clone();
         let fut = make_fut(task_cancel.clone(), handle);
 
@@ -448,7 +499,8 @@ impl BackgroundTasks {
         let label_for_task = label.clone();
         let join = tokio::spawn(async move {
             let result = fut.await;
-            // 区分"任务报错"与"被显式取消"：后者把状态记成 Canceled，前者记 Failed。
+            // Distinguish between a task error and an explicit cancellation: the latter
+            // records the status as `Canceled`, the former as `Failed`.
             let status = if cancel_for_task.is_cancelled() {
                 TaskStatus::Canceled
             } else if result.is_error() {
@@ -464,10 +516,15 @@ impl BackgroundTasks {
                     result,
                 });
             }
-            // 唤醒等在 wait_for_completion 上的 session driver（主动续转）。
-            // 用 notify_one 而非 notify_waiters：前者在无等待者时**保留一个 permit**，
-            // 下次 notified().await 立即返回——避免"任务在 driver park 之前就完成"导致的
-            // 丢唤醒。单消费者（恰好一个 driver），notify_one 语义正合适。在锁外 notify。
+            // Wakes the session driver waiting on `wait_for_completion` (active
+            // continuation).
+            // Uses `notify_one` instead of `notify_waiters`: the former **retains a
+            // permit** when no waiters exist,
+            // so the next `notified().await` returns immediately — avoiding lost wakeups
+            // when a task completes
+            // before the driver parks. Single consumer (exactly one driver), so
+            // `notify_one` semantics are correct.
+            // Notify outside the lock.
             notify.notify_one();
         });
 
@@ -485,13 +542,14 @@ impl BackgroundTasks {
         id
     }
 
-    /// 取出全部已完成结果（清空队列）。`run_turn` 在起 turn 前调用做被动回流。
+    /// Drain all completed results (clears the queue). Called by `run_turn` before
+    /// starting a turn to passively collect results.
     pub fn drain_completed(&self) -> Vec<BackgroundOutcome> {
         let mut inner = self.inner.lock().expect("BackgroundTasks mutex poisoned");
         std::mem::take(&mut inner.completed)
     }
 
-    /// 当前运行中的任务数。供诊断 / 控制面用。
+    /// Number of currently running tasks. Used for diagnostics / control plane.
     #[must_use]
     pub fn running_count(&self) -> usize {
         self.inner
@@ -503,8 +561,9 @@ impl BackgroundTasks {
             .count()
     }
 
-    /// 列出所有任务（运行中 + 近期已结束）的快照，**不读 history**（`recent` 空、
-    /// `block_count` 为 0）。按 task id 升序。供 `inspect_background_task` 无参列举。
+    /// Returns a snapshot of all tasks (running + recently finished), **without reading
+    /// history** (`recent` is empty, `block_count` is 0). Sorted by task ID in ascending
+    /// order. Used by `inspect_background_task` when called without arguments.
     #[must_use]
     pub fn list(&self) -> Vec<TaskSnapshot> {
         let inner = self.inner.lock().expect("BackgroundTasks mutex poisoned");
@@ -521,11 +580,15 @@ impl BackgroundTasks {
             .collect()
     }
 
-    /// 取单个任务的快照，带最近 `recent_blocks` 条**提交给 LLM 的消息块**（`None` ⇒ 用配置
-    /// 默认）。任务不存在（从未 spawn / 已被淘汰）返回 `None`；任务未暴露 history 则块为空。
+    /// Take a snapshot of a single task, including the most recent `recent_blocks`
+    /// message blocks submitted to the LLM (`None` uses the config default). Returns
+    /// `None` if the task does not exist (never spawned or already evicted); blocks are
+    /// empty if the task does not expose history.
     ///
-    /// 实现：clone 出该任务的 history `Arc`（在锁内）后**释放表锁**，再 snapshot（snapshot
-    /// 走 history 自己的锁）——避免在持表锁期间做可能较重的历史深拷贝、阻塞 spawn/finish。
+    /// Implementation: clone the task's history `Arc` while holding the table lock, then
+    /// release the table lock before snapshotting (snapshotting uses the history's own
+    /// lock). This avoids performing a potentially expensive deep copy of history while
+    /// holding the table lock, which would block spawn/finish.
     #[must_use]
     pub fn peek(&self, id: &str, recent_blocks: Option<usize>) -> Option<TaskSnapshot> {
         let n = self.progress_config.resolve_recent(recent_blocks);
@@ -548,11 +611,14 @@ impl BackgroundTasks {
         })
     }
 
-    /// 提前中断单个任务：取它专属的子 token 单独 `cancel`，不波及其它任务。
+    /// Cancel a single task early: cancels only its dedicated child token, without
+    /// affecting other tasks.
     ///
-    /// 返回 `Some(true)` 表示找到了一个运行中的任务并已请求取消；`Some(false)` 表示任务
-    /// 存在但已是终态（无操作）；`None` 表示无此 id。取消是**协作式**的——任务体须在它的
-    /// cancel token 上感知并退出，状态在任务实际结束时才翻成 `Canceled`。
+    /// Returns `Some(true)` if a running task was found and cancellation was requested;
+    /// `Some(false)` if the task exists but is already in a terminal state (no-op);
+    /// `None` if no such id exists. Cancellation is **cooperative** — the task body must
+    /// observe its cancel token and exit; the status transitions to `Canceled` only when
+    /// the task actually finishes.
     pub fn cancel_task(&self, id: &str) -> Option<bool> {
         let inner = self.inner.lock().expect("BackgroundTasks mutex poisoned");
         let entry = inner.tasks.get(id)?;
@@ -563,14 +629,15 @@ impl BackgroundTasks {
         Some(true)
     }
 
-    /// 取消所有后台任务（session 终结时调用）。幂等。
+    /// Cancels all background tasks (called when the session ends). Idempotent.
     pub fn cancel_all(&self) {
         self.cancel.cancel();
     }
 }
 
-/// 交给后台任务体的句柄：让任务把自己的 history `Arc` 共享进任务表，从而控制面能 peek
-/// 它**提交给 LLM 的消息块**。`Clone` 廉价（内部 `Arc` + 小字符串）。
+/// A handle given to a background task, allowing it to share its history `Arc` into the
+/// task table so the control plane can peek at the message chunks it submits to the LLM.
+/// `Clone` is cheap (inner `Arc` + small string).
 #[derive(Clone)]
 pub struct TaskHandle {
     inner: Arc<Mutex<BackgroundInner>>,
@@ -578,9 +645,12 @@ pub struct TaskHandle {
 }
 
 impl TaskHandle {
-    /// 把本任务的 history 句柄共享进任务表。`spawn_agent` 后台路径在构造子 turn 前调用，
-    /// 传子 turn 的 history `Arc`——之后 `peek` 就能 snapshot 出子 agent 已提交的消息块。
-    /// 任务条目可能已被淘汰（极端情况下任务瞬时结束并被 FIFO 挤掉），那时静默忽略。
+    /// Shares this task's history handle into the task table. Called by the `spawn_agent`
+    /// background path before constructing a child turn, passing the child turn's history
+    /// `Arc` — afterwards `peek` can snapshot the message chunks the child agent has
+    /// committed. The task entry may have already been evicted (in extreme cases the task
+    /// finishes instantly and is dropped by FIFO), in which case the operation is
+    /// silently ignored.
     pub fn attach_history(&self, history: Arc<dyn History>) {
         if let Ok(mut inner) = self.inner.lock()
             && let Some(entry) = inner.tasks.get_mut(&self.task_id)
@@ -590,10 +660,14 @@ impl TaskHandle {
     }
 }
 
-/// 把一个后台任务结果格式化成回流到对话里的文本块内容。
+/// Formats a background task outcome into a text block that is fed back into the
+/// conversation.
 ///
-/// 措辞按"延迟工具结果回流"组织，明确标注来源（task id + label）与成败，避免模型误判为用户发言。
-/// 阶段二会换成 `IngestSource::Background` 的正派 ingest 路径（§5.1），届时此函数被相应载荷取代。
+/// The wording is structured as a "deferred tool result return", clearly marking the
+/// source (task id + label) and success/failure, to prevent the model from
+/// misinterpreting it as user speech.
+/// Phase 2 will replace this with the proper ingest path using `IngestSource::Background`
+/// (§5.1), at which point this function will be superseded by the corresponding payload.
 #[must_use]
 pub fn format_background_outcome(outcome: &BackgroundOutcome) -> String {
     let status = if outcome.result.is_error() {

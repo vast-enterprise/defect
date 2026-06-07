@@ -1,4 +1,4 @@
-//! `write_file` 工具：全量覆盖写 UTF-8 文本文件。
+//! `write_file` tool: overwrites a UTF-8 text file entirely.
 //!
 //! Write tool — writes content to a file.
 
@@ -105,9 +105,11 @@ impl Tool for WriteFileTool {
             if !path.is_empty() {
                 fields.locations = Some(vec![ToolCallLocation::new(PathBuf::from(path))]);
 
-                // v1: 在 describe 阶段轻量读旧内容，给授权 UI 画 old↔new 精确 diff。
-                // 失败时降级为"全新"diff（old=None）——`describe` 不该因 IO 抖动
-                // 阻塞 ToolCall 推送。NotFound 等价于"创建新文件"路径，老内容就是 None。
+                // v1: Lightly read the old content during the `describe` phase so the
+                // authorization UI can render an exact old↔new diff. On failure, fall
+                // back to a "fresh" diff (old=None) — `describe` should not block
+                // ToolCall delivery due to IO jitter. NotFound is equivalent to a "create
+                // new file" path, where old content is None.
                 let old = ctx.fs.read_text(PathBuf::from(path), None, None).await.ok();
 
                 fields.content = Some(vec![ToolCallContent::Diff(
@@ -148,7 +150,8 @@ async fn run_write(
 
     let path = PathBuf::from(&parsed.path);
 
-    // 在写之前记下父目录是否已存在（best-effort，用于告知 LLM）。
+    // Record whether the parent directory already existed before writing (best-effort,
+    // used to inform the LLM).
     let abs_path = if path.is_absolute() {
         path.clone()
     } else {
@@ -156,11 +159,11 @@ async fn run_write(
     };
     let parent_existed = abs_path.parent().is_none_or(|p| p.is_dir());
 
-    // best-effort 读旧内容，画精确 diff 与判断 created
+    // Best-effort read of old content for accurate diff and `created` detection
     let old = match fs.read_text(path.clone(), None, None).await {
         Ok(t) => Some(t),
         Err(FsError::NotFound(_)) => None,
-        Err(_) => None, // 读失败时 created 维持 None；写步骤会再报具体错
+        Err(_) => None, // On read failure, `created` stays `None`; the write step will report the specific error.
     };
 
     let bytes_written = parsed.content.len() as u64;
@@ -187,7 +190,8 @@ async fn run_write(
     let mut fields = ToolCallUpdateFields::default();
     fields.content = Some(vec![
         ToolCallContent::Diff(diff),
-        // turn.rs::extract_text 取第一段 Text 作为 tool_result——给 LLM 喂一个简短摘要。
+        // `turn.rs::extract_text` takes the first `Text` block as the `tool_result` —
+        // feeds a short summary to the LLM.
         ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(format!(
             "Wrote {bytes_written} bytes"
         ))))),

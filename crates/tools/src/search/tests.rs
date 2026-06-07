@@ -1,5 +1,5 @@
 //! SearchTool unit tests.
-//! （#25–#27 在 CLI 装配 / e2e 层覆盖）。
+//! (#25–#27 are covered at the CLI wiring / e2e layer).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -99,7 +99,7 @@ fn extract_raw(fields: &agent_client_protocol_schema::ToolCallUpdateFields) -> s
     fields.raw_output.clone().expect("raw_output")
 }
 
-// -- #1 content basic match
+// Test case 1: basic content matching
 #[tokio::test]
 async fn content_basic_matches() {
     let h = Harness::new();
@@ -129,7 +129,7 @@ async fn content_no_matches() {
     assert_eq!(extract_raw(fields)["matches_total"], 0);
 }
 
-// -- #3 content invalid regex
+// #3: content invalid regex
 #[tokio::test]
 async fn content_invalid_regex() {
     let h = Harness::new();
@@ -141,7 +141,7 @@ async fn content_invalid_regex() {
     assert!(format!("{err}").to_lowercase().contains("regex"));
 }
 
-// -- #4 case insensitive
+// #4 case insensitive
 #[tokio::test]
 async fn content_case_insensitive() {
     let h = Harness::new();
@@ -175,7 +175,7 @@ async fn content_with_context() {
     assert!(text.contains("L4: line4"), "{text}");
 }
 
-// -- #7 content glob restricts files
+// #7 content glob restricts files
 #[tokio::test]
 async fn content_glob_restricts() {
     let h = Harness::new();
@@ -191,7 +191,8 @@ async fn content_glob_restricts() {
 }
 
 // -- #7b content glob with workspace-relative directory prefix
-//    AI 反馈过 `crates/**/*.rs` 完全 miss——回归这条。
+//    AI previously reported that `crates/**/*.rs` was completely missed — regression test
+//    for that.
 #[tokio::test]
 async fn content_glob_with_directory_prefix_matches_relative() {
     let h = Harness::new();
@@ -212,7 +213,7 @@ async fn content_glob_with_directory_prefix_matches_relative() {
     assert_eq!(extract_raw(fields)["matches_total"], 2);
 }
 
-// -- #8 gitignore default-on
+// #8 gitignore default-on
 #[tokio::test]
 async fn content_respects_gitignore() {
     let h = Harness::new();
@@ -249,7 +250,7 @@ async fn content_skips_binary() {
     assert!(!text.contains("bin.dat"), "{text}");
 }
 
-// -- #10 oversized file skipped
+// #10 oversized file skipped
 #[tokio::test]
 async fn content_skips_oversize() {
     let h = Harness::new();
@@ -266,7 +267,7 @@ async fn content_skips_oversize() {
     assert!(!text.contains("big.txt"), "{text}");
 }
 
-// -- #11 head_limit truncation
+// #11 head_limit truncation
 #[tokio::test]
 async fn content_head_limit_truncate() {
     let h = Harness::new();
@@ -299,7 +300,7 @@ async fn content_cancellation() {
     assert!(matches!(err, ToolError::Canceled), "{err:?}");
 }
 
-// -- #15 files mode glob
+// Test for files mode with glob pattern (#15)
 #[tokio::test]
 async fn files_mode_basic() {
     let h = Harness::new();
@@ -315,7 +316,7 @@ async fn files_mode_basic() {
     assert!(!text.contains("c.ts"), "{text}");
 }
 
-// -- #16 files mode brace expansion
+// files mode brace expansion (#16)
 #[tokio::test]
 async fn files_mode_brace_expansion() {
     let h = Harness::new();
@@ -335,7 +336,7 @@ async fn files_mode_brace_expansion() {
     assert!(!text.contains("src/foo.js"), "{text}");
 }
 
-// -- #17 files mode invalid glob
+// #17 files mode invalid glob
 #[tokio::test]
 async fn files_mode_invalid_glob() {
     let h = Harness::new();
@@ -348,7 +349,7 @@ async fn files_mode_invalid_glob() {
     assert!(format!("{err}").to_lowercase().contains("glob"));
 }
 
-// -- #18 files mode no matches
+// -- #18 files mode: no matches
 #[tokio::test]
 async fn files_mode_no_matches() {
     let h = Harness::new();
@@ -404,7 +405,7 @@ async fn path_scopes_to_subdir() {
     assert!(!text.contains("b.md"), "{text}");
 }
 
-// -- #23 head_limit clamped to max
+// #23 head_limit clamped to max
 #[tokio::test]
 async fn head_limit_clamped() {
     let h = Harness::new();
@@ -435,7 +436,7 @@ async fn walker_max_files_truncates() {
     assert_eq!(raw["truncated"], true);
 }
 
-// -- pattern empty rejected
+// Pattern empty rejected
 #[tokio::test]
 async fn pattern_empty_rejected() {
     let h = Harness::new();

@@ -4,11 +4,12 @@ use toml::Value as TomlValue;
 
 use crate::types::{CliOverrides, ConfigError, ConfigLayerEntry, ConfigSource};
 
-/// 解析单个 `KEY=VALUE` 形式的 CLI 覆盖项。
+/// Parse a single CLI override in `KEY=VALUE` form.
 ///
 /// # Errors
 ///
-/// 当输入不包含 `=`，或 override path 为空时返回 [`ConfigError::Invalid`]。
+/// Returns [`ConfigError::Invalid`] if the input does not contain `=`, or if the override
+/// path is empty.
 pub fn parse_cli_override(spec: &str) -> Result<(String, TomlValue), ConfigError> {
     let Some((path, raw_value)) = spec.split_once('=') else {
         return Err(ConfigError::Invalid {

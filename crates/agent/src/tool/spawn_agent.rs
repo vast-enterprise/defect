@@ -1,33 +1,41 @@
-//! `spawn_agent`：把任务委派给一个 subagent。
+//! `spawn_agent`: delegates a task to a subagent.
 //!
-//! subagent 在 **fresh、隔离的上下文**里跑一个嵌套 [`TurnRunner`]，只把最终
-//! 那条 assistant 文本作为工具结果回给父 agent——父看不到子 agent 的中间过程。
-//! 设计见记忆 `project-subagent-design`。
+//! The subagent runs a nested [`TurnRunner`] in a **fresh, isolated context**, and only
+//! the final assistant text is returned as the tool result to the parent agent — the
+//! parent never sees the subagent's intermediate steps. See the design memo
+//! `project-subagent-design`.
 //!
-//! ## 两道闸门
+//! ## Two Gates
 //!
-//! - **闸门 A（看得到哪些工具）**：每个 profile 的 `tool_allow` 白名单从父 agent
-//!   工具集里裁子集。`spawn_agent` **可**进白名单——递归由**深度闸门**控制（见下），
-//!   而非无条件排除。
-//! - **闸门 B（运行时放行到什么程度）**：子 turn 的 policy 是
-//!   [`NonInteractivePolicy`] 包住父 policy——`Ask` 降级为 `Deny`，子 agent
-//!   非交互、永不阻塞在 [`PermissionGate`] 上、授权恒 ≤ 父。
+//! - **Gate A (which tools are visible)**: each profile's `tool_allow` whitelist is a
+//!   subset of the parent agent's tool set. `spawn_agent` **may** be in the whitelist —
+//!   recursion is controlled by the **depth gate** (see below), not unconditionally
+//!   excluded.
+//! - **Gate B (how much is allowed at runtime)**: the child turn's policy is
+//!   [`NonInteractivePolicy`] wrapping the parent policy — `Ask` is downgraded to `Deny`,
+//!   the child agent is non-interactive, never blocks on [`PermissionGate`], and its
+//!   authorization is always ≤ the parent's.
 //!
-//! ## 递归与深度闸门
+//! ## Recursion and the Depth Gate
 //!
-//! subagent 不过是"有亲代的 agent"——父子跑同一套 [`TurnRunner`]。递归层数由
-//! [`crate::tool::ToolContext::subagent_depth`] 控制：顶层 turn 注入配置上限
-//! （`TurnConfig::subagent_max_depth`），每深入一层减一。某层若 `tool_allow` 含
-//! `spawn_agent` 且**子层剩余深度 > 0**，就给子 agent 装一份新构造的 `spawn_agent`
-//! 工具（捕获同一 base 工具集作裁子集来源，使孙能继续）；深度耗尽（0）则不装——
-//! 结构性收口。`depth == 0` 的 turn 工具集不含 `spawn_agent`，调用直接 fail loud。
+//! A subagent is simply "an agent with a parent" — parent and child run the same
+//! [`TurnRunner`]. Recursion depth is controlled by
+//! [`crate::tool::ToolContext::subagent_depth`]: the top-level turn injects a configured
+//! maximum (`TurnConfig::subagent_max_depth`), decremented by one for each level. If a
+//! level's `tool_allow` contains `spawn_agent` **and the remaining child depth > 0**, a
+//! freshly constructed `spawn_agent` tool is installed for the child agent (capturing the
+//! same base tool set as the subset source, so grandchildren can continue); when depth is
+//! exhausted (0), the tool is not installed — a structural cutoff. A turn with `depth ==
+//! 0` has no `spawn_agent` in its tool set; calling it fails loudly.
 //!
-//! ## 继承原则
+//! ## Inheritance Principle
 //!
-//! 继承"够得着世界的能力"（provider registry / fs / shell / http），不继承
-//! "身份与行为"（父的 system prompt / hooks / 任务框架）。子 agent 的 system
-//! prompt = 继承的 base_prompt + profile 自己的 `system.md`，**不**走
-//! [`resolve_system_prompt`](crate::session::resolve_system_prompt)（那会去爬工作区 `AGENTS.md`，那是父的身份）。
+//! Inherit "ability to reach the world" (provider registry / fs / shell / http), but
+//! **not** "identity and behavior" (parent's system prompt / hooks / task framework). The
+//! child agent's system prompt = inherited base_prompt + the profile's own `system.md`,
+//! and does **not** go through
+//! [`resolve_system_prompt`](crate::session::resolve_system_prompt) (which would crawl
+//! the workspace `AGENTS.md` — that is the parent's identity).
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -55,36 +63,45 @@ use crate::tool::{
     ToolStream,
 };
 
-/// `spawn_agent` 工具的名字。用常量供"裁工具集时排除自己"复用，杜绝拼错。
+/// The name of the `spawn_agent` tool. A constant so it can be reused when pruning the
+/// tool set to exclude itself, preventing typos.
 pub(crate) const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
-/// 一个可被 `spawn_agent` 调用的 subagent profile（agent 侧表示）。
+/// A subagent profile that can be invoked by `spawn_agent` (agent-side representation).
 ///
-/// `defect-config` 的 `ProfileSpec` 是配置侧的真相源；CLI 装配时把它投影成
-/// 本结构再交给工具。两边分开是因为 `defect-config` 依赖 `defect-agent`——
-/// agent 不能反向依赖 config，否则成环。
+/// `ProfileSpec` in `defect-config` is the source of truth on the config side; the CLI
+/// projects it into this struct during assembly before handing it to the tool. The two
+/// are kept separate because `defect-config` depends on `defect-agent` — the agent cannot
+/// depend on config in the opposite direction, or a cycle would result.
 #[derive(Clone)]
 pub struct SubagentProfile {
-    /// 选择期描述，进工具 schema 的 catalog，让 LLM 据此挑 profile。
+    /// Selection-time description that goes into the tool schema's catalog, allowing the
+    /// LLM to choose a profile based on it.
     pub description: String,
-    /// 可选 model 覆盖；`None` ⇒ 回落到父会话当前选中的 model（`ctx.current_model`）。
+    /// Optional model override; `None` falls back to the parent session's currently
+    /// selected model (`ctx.current_model`).
     pub model: Option<String>,
-    /// 该 profile 的 system prompt 全文。
+    /// The full system prompt for this profile.
     pub system_prompt: String,
-    /// 工具白名单——子 agent 只看得到这些工具（`spawn_agent` 永远被排除）。
+    /// Tool allowlist — the child agent can only see these tools (`spawn_agent` is always
+    /// excluded).
     pub tool_allow: Vec<String>,
-    /// 可选采样覆盖。
+    /// Optional sampling overrides.
     pub sampling: Option<SamplingParams>,
-    /// 该 profile 自己的 hook 引擎——子 agent 跑 turn 时挂的钩子。
+    /// The hook engine for this profile — hooks that run when a sub-agent executes a
+    /// turn.
     ///
-    /// 与"继承世界、不继承身份"原则一致：hook 属于 profile 的身份，由 profile
-    /// 自己的配置声明（CLI 装配期把 `ProfileSpec.hooks` 编译成引擎注入），**不**
-    /// 从父会话继承。`None` ⇒ 子 agent 无钩子（回落 [`NoopHookEngine`]）——保持
-    /// 与改动前完全一致的行为，故现有不挂钩子的 profile 零影响。
+    /// Consistent with the "inherit world, not identity" principle: hooks belong to the
+    /// profile's identity and are declared by the profile's own configuration (the CLI
+    /// assembles `ProfileSpec.hooks` into an engine at build time). They are **not**
+    /// inherited from the parent session. `None` means the sub-agent has no hooks (falls
+    /// back to [`NoopHookEngine`]), preserving exactly the same behavior as before —
+    /// existing profiles without hooks are unaffected.
     pub hooks: Option<Arc<dyn HookEngine>>,
 }
 
-// `Arc<dyn HookEngine>` 不是 `Debug`，手写 `Debug` 跳过它（只标注是否挂了引擎）。
+// `Arc<dyn HookEngine>` is not `Debug`; manually implement `Debug` to skip it (only
+// indicate whether an engine is attached).
 impl std::fmt::Debug for SubagentProfile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SubagentProfile")
@@ -98,28 +115,30 @@ impl std::fmt::Debug for SubagentProfile {
     }
 }
 
-/// `spawn_agent` 工具。挂在 `StaticToolRegistry` 上、随 `process_tools` 被所属
-/// `AgentCore` 的各 session 共享一份（**不是**进程全局单例——一个进程可装配多个
-/// `AgentCore`，各持自己的一份）。构造期捕获跑嵌套 turn 所需的一切——因为
-/// [`ToolContext`] 只带 cwd/fs/shell/http/cancel/current_model，不带 provider
-/// registry / policy / 工具集。
+/// The `spawn_agent` tool. It is registered on `StaticToolRegistry` and shared across
+/// sessions of the owning `AgentCore` via `process_tools` (it is **not** a process-global
+/// singleton — a single process may host multiple `AgentCore` instances, each with its
+/// own copy). At construction time it captures everything needed to run a nested turn,
+/// because [`ToolContext`] only carries cwd/fs/shell/http/cancel/current_model, not the
+/// provider registry, policy, or tool set.
 pub struct SpawnAgentTool {
     schema: ToolSchema,
     profiles: Arc<BTreeMap<String, SubagentProfile>>,
     registry: Arc<ProviderRegistry>,
-    /// 父 agent 的 policy（本 core 的所有 session 共享同一份）。子 turn 用
-    /// [`NonInteractivePolicy`] 包它。
+    /// The parent agent's policy (shared by all sessions in this core). The child turn
+    /// wraps it with [`NonInteractivePolicy`].
     policy: Arc<dyn SandboxPolicy>,
-    /// 父 agent 工具集——按 profile 白名单裁子集的来源。
+    /// Parent agent tool set — source for subsetting by profile allowlist.
     process_tools: Arc<dyn ToolRegistry>,
-    /// 继承给子 agent 的 base_prompt 文本（"你是个会用工具的 agent"那段底座）。
+    /// The `base_prompt` text inherited by child agents (the "you are an agent that can
+    /// use tools" boilerplate).
     base_prompt: Option<String>,
 }
 
 impl SpawnAgentTool {
-    /// 构造一个 `spawn_agent` 工具。`profiles` 为空时调用方**不应**注册本工具
-    /// （schema 的 `profile` enum 会是空集，永远调用失败）——见
-    /// [`Self::has_profiles`]。
+    /// Constructs a `spawn_agent` tool. When `profiles` is empty, the caller **should
+    /// not** register this tool (the `profile` enum in the schema will be an empty set,
+    /// so calls will always fail) — see [`Self::has_profiles`].
     pub fn new(
         profiles: Arc<BTreeMap<String, SubagentProfile>>,
         registry: Arc<ProviderRegistry>,
@@ -138,15 +157,17 @@ impl SpawnAgentTool {
         }
     }
 
-    /// 是否发现到任何 profile。装配方据此决定是否注册本工具。
+    /// Whether any profiles were discovered. The assembler uses this to decide whether to
+    /// register this tool.
     pub fn has_profiles(profiles: &BTreeMap<String, SubagentProfile>) -> bool {
         !profiles.is_empty()
     }
 }
 
-/// 动态构造 schema：`profile` 是发现到的 profile 名的 enum（硬约束），工具
-/// description 内嵌 `- <name>: <description>` 的 catalog（软引导）。两者缺一
-/// 不可：光 enum 模型不知用途，光 catalog 模型可能填错名。
+/// Dynamically build the schema: `profile` is an enum of discovered profile names (hard
+/// constraint), and the tool description embeds a catalog of `- <name>: <description>`
+/// entries (soft guidance). Both are required: the enum alone gives no usage context,
+/// while the catalog alone risks name typos.
 fn build_schema(profiles: &BTreeMap<String, SubagentProfile>) -> ToolSchema {
     let names: Vec<&str> = profiles.keys().map(String::as_str).collect();
     let catalog = profiles
@@ -207,11 +228,14 @@ fn build_schema(profiles: &BTreeMap<String, SubagentProfile>) -> ToolSchema {
 struct SpawnArgs {
     profile: String,
     task: String,
-    /// 可选 per-call model 覆盖。优先级最高（高于 profile.model 与父 model）。
+    /// Optional per-call model override. Takes highest priority (overrides
+    /// `profile.model` and parent model).
     #[serde(default)]
     model: Option<String>,
-    /// 后台执行开关。`true` 且上下文支持（`ToolContext::background` 为 `Some`）时，
-    /// spawn 后立即返回任务 id，不等子 agent 跑完。默认 `false`（同步阻塞）。
+    /// Whether to run in the background. When `true` and the context supports it
+    /// (`ToolContext::background` is `Some`), spawn returns the task id immediately
+    /// without waiting for the child agent to finish. Defaults to `false` (synchronous
+    /// blocking).
     #[serde(default)]
     run_in_background: bool,
 }
@@ -222,8 +246,9 @@ impl Tool for SpawnAgentTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // 保守标 Mutating：spawn 本身的"危险"由子 agent 的工具集（闸门 A）
-        // 与 NonInteractivePolicy（闸门 B）决定，不在这一层细分。
+        // Conservatively mark as Mutating: the "danger" of spawn itself is determined by
+        // the child agent's tool set (gate A) and `NonInteractivePolicy` (gate B), not
+        // subdivided at this layer.
         SafetyClass::Mutating
     }
 
@@ -242,12 +267,15 @@ impl Tool for SpawnAgentTool {
     }
 
     fn execute(&self, args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream {
-        // 把构造期捕获的依赖与 ctx 里的运行时句柄都搬进 'static future——
-        // 嵌套 TurnRunner 的所有借用都活在这个 async block 内，不外逃。
+        // Move captured dependencies from construction and runtime handles from `ctx`
+        // into a `'static` future — all borrows of the nested `TurnRunner` live inside
+        // this async block and do not escape.
         let profiles = self.profiles.clone();
         let registry = self.registry.clone();
-        // 优先用本 turn 快照的 active policy（ctx 注入）——它反映 session 当前
-        // permission mode；缺省（测试 / 未注入）才回退构造期捕获的 policy。
+        // Prefer the active policy from the current turn's snapshot (injected via `ctx`),
+        // which reflects the session's current permission mode; fall back to the policy
+        // captured at construction time only when none was injected (e.g. in tests or
+        // when omitted).
         let policy = ctx.policy.clone().unwrap_or_else(|| self.policy.clone());
         let process_tools = self.process_tools.clone();
         let base_prompt = self.base_prompt.clone();
@@ -259,17 +287,21 @@ impl Tool for SpawnAgentTool {
         let parent_model = ctx.current_model.to_string();
         let parent_provider = ctx.current_provider.to_string();
         let background = ctx.background.clone();
-        // subagent 事件桥：把子 turn 事件嵌套回父 trace（observability）。
+        // Subagent event bridge: nest child-turn events back into the parent trace
+        // (observability).
         let bridge = ctx.subagent_bridge.clone();
-        // 本 turn 起的剩余 subagent 派发深度。子 turn 得到 `depth-1`；子工具集是否含
-        // spawn_agent 由 `child_depth > 0` 决定（见 run_subagent_core）。
+        // Remaining subagent dispatch depth for this turn. Child turns receive `depth-1`;
+        // whether the child toolset includes `spawn_agent` is determined by `child_depth
+        // > 0` (see `run_subagent_core`).
         let subagent_depth = ctx.subagent_depth;
-        // 同步路径用 turn 子 token（turn 结束即取消）；后台路径不用它，改用
-        // BackgroundTasks 在 spawn 时 mint 的 session 级子 token（见下）。
+        // The synchronous path uses a turn child token (cancelled when the turn ends);
+        // the background path does not use it, instead using a session-level child token
+        // minted by `BackgroundTasks` at spawn time (see below).
         let turn_cancel = ctx.cancel.child_token();
 
-        // 先解析出 run_in_background 与 profile 名，决定走同步还是后台。解析失败
-        // 在两条路径里都按 InvalidArgs 处理。
+        // First parse `run_in_background` and the profile name to decide whether to run
+        // synchronously or in the background. On parse failure, both paths treat it as
+        // `InvalidArgs`.
         let parsed: Result<SpawnArgs, _> = serde_json::from_value(args.clone());
 
         let fut = async move {
@@ -278,10 +310,12 @@ impl Tool for SpawnAgentTool {
                 Err(err) => return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(err))),
             };
 
-            // 深度闸门：本 turn 的剩余派发深度耗尽（0）⇒ 本不该看到 spawn_agent 工具
-            // （run_subagent_core 在 child_depth==0 时不把它放进子工具集）。能走到这里
-            // 说明 ctx 装配异常——fail loud，不静默吞。顶层 turn 注入的是配置上限，正常
-            // 恒 > 0。
+            // Depth guard: the remaining dispatch depth for this turn is exhausted (0),
+            // so the `spawn_agent` tool should never have been visible —
+            // `run_subagent_core` does not include it in the child tool set when
+            // `child_depth == 0`. Reaching this point indicates a malformed `ctx`; fail
+            // loudly, do not silently swallow. The top-level turn injects the configured
+            // maximum, which is always > 0 under normal conditions.
             if subagent_depth == 0 {
                 return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(
                     "subagent recursion depth exhausted: this agent is not allowed to spawn \
@@ -290,11 +324,14 @@ impl Tool for SpawnAgentTool {
                 ))));
             }
 
-            // 后台路径：需要 ctx 支持后台（顶层 turn 才注入），且 run_in_background=true。
+            // Background path: requires `ctx` to support background (only injected at the
+            // top-level turn), and `run_in_background=true`.
             if parsed.run_in_background {
                 let Some(bg) = background else {
-                    // 上下文不支持后台（子 agent 嵌套 / 测试）——fail loud，不静默降级成同步，
-                    // 否则模型以为是后台、实际阻塞，行为与声明不符。
+                    // Background context is unavailable (nested subagent / test) — fail
+                    // loud, do not silently fall back to synchronous execution, otherwise
+                    // the model believes it is running in the background while actually
+                    // blocking, contradicting the declared behavior.
                     return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(
                         "run_in_background is not available in this context (nested subagents \
                          cannot spawn background tasks)"
@@ -315,20 +352,28 @@ impl Tool for SpawnAgentTool {
                     parent_model,
                     parent_provider,
                     subagent_depth,
-                    // 后台路径**也桥接**——与前台同一套 `AgentEvent::Subagent` 机制。
-                    // 发起它的 spawn_agent tool span 会先正常 close（下方"已启动"的
-                    // ToolCallFinished），随后子 turn 事件作为一个**相邻**的 subagent span
-                    // 挂在同一 parent_tool_call_id 锚点下、自行张开到子 turn 真正结束。
-                    // projector 据"tool span 是否还在表里"天然区分前台(嵌套)/后台(相邻)。
-                    // bridge 的 parent_events 是 session 级 EventEmitter，后台任务跑时仍活着。
+                    // The background path also uses the bridge — the same
+                    // `AgentEvent::Subagent` mechanism as the foreground. The
+                    // `spawn_agent` tool span that initiates it closes normally first
+                    // (the `ToolCallFinished` "started" below), then the child turn
+                    // events appear as an **adjacent** subagent span under the same
+                    // `parent_tool_call_id` anchor, remaining open until the child turn
+                    // truly ends. The projector naturally distinguishes foreground
+                    // (nested) from background (adjacent) by checking whether the tool
+                    // span is still in the table. The bridge's `parent_events` is a
+                    // session-level `EventEmitter` that stays alive while the background
+                    // task runs.
                     bridge,
-                    // 后台路径才暴露 history——task_handle 在 spawn 闭包里拿到后注入（见下）。
+                    // Only the background path exposes history — `task_handle` is
+                    // obtained inside the spawn closure and injected later (see below).
                     task_handle: None,
                 };
-                // spawn 给任务 mint 一个 session 级子 token——任务的取消生命周期独立于
-                // 发起它的 turn，turn 结束不会杀掉它。同时拿到 TaskHandle，把子 turn 的
-                // history Arc 共享进任务表，供主 agent 经 inspect_background_task 查看子 agent
-                // **提交给 LLM 的消息块**（非流式增量）。
+                // Spawn mints a session-level child token for the task, so the task's
+                // cancellation lifecycle is independent of the turn that spawned it —
+                // ending the turn does not kill it. Also obtains a `TaskHandle`, shares
+                // the child turn's `history` `Arc` into the task table, and lets the main
+                // agent inspect the child agent's **submitted-to-LLM message blocks**
+                // (not streaming deltas) via `inspect_background_task`.
                 let label_for_log = parsed.profile.clone();
                 let task_id = bg.spawn(label, move |task_cancel, task_handle| async move {
                     let mut deps = deps;
@@ -336,8 +381,9 @@ impl Tool for SpawnAgentTool {
                     match run_subagent_core(parsed, deps, task_cancel).await {
                         Ok(answer) => crate::session::BackgroundResult::Completed(answer),
                         Err(err) => {
-                            // fail loud：后台失败此前只被数据化成 Failed 字符串静默流走，
-                            // 既不上 langfuse 也无日志。这里补一条 warn，带 task / 错误。
+                            // Log loudly: background failures were previously silently
+                            // reduced to a `Failed` string, with no Langfuse event or log
+                            // entry. This adds a `warn` with the task and error details.
                             tracing::warn!(
                                 profile = %label_for_log,
                                 error = %err,
@@ -347,7 +393,8 @@ impl Tool for SpawnAgentTool {
                         }
                     }
                 });
-                // 当场同步返回"已启动 id=X"——满足 tool_use↔tool_result 配对契约
+                // Return synchronously with "started id=X" to satisfy the tool_use ↔
+                // tool_result pairing contract.
                 // Subagent profiles are indexed by source name at startup.
                 let msg = format!(
                     "Started background subagent `{}`, task id `{}`. Its result will arrive on a \
@@ -363,7 +410,8 @@ impl Tool for SpawnAgentTool {
                 return ToolEvent::Completed(fields);
             }
 
-            // 同步路径：原行为——阻塞到子 turn 跑完，把最终文本作为结果。
+            // Synchronous path: original behavior — block until the sub-turn finishes,
+            // then use the final text as the result.
             let deps = SubagentDeps {
                 profiles,
                 registry,
@@ -377,10 +425,12 @@ impl Tool for SpawnAgentTool {
                 parent_model,
                 parent_provider,
                 subagent_depth,
-                // 同步路径：父 spawn_agent tool span 全程张开（阻塞等子 turn），
-                // 子事件可嵌套其下。
+                // Synchronous path: the parent `spawn_agent` tool span remains open for
+                // the entire duration (blocking until the child turn completes), allowing
+                // child events to be nested under it.
                 bridge,
-                // 同步路径无后台任务、不暴露 history（父调用全程阻塞，无"边跑边查"需求）。
+                // Synchronous path: no background task, no history exposed (parent call
+                // blocks entirely; no need to "peek while running").
                 task_handle: None,
             };
             match run_subagent_core(parsed, deps, turn_cancel).await {
@@ -401,8 +451,9 @@ impl Tool for SpawnAgentTool {
     }
 }
 
-/// `run_subagent_core` 的依赖打包——避免十几个位置参数。构造期 + ctx 句柄都搬进来，
-/// 全 owned，可跨 await / 进后台 task。
+/// Dependency bundle for `run_subagent_core` — avoids a dozen positional parameters. All
+/// construction-time and ctx handles are moved in, fully owned, so they can cross await
+/// points or be sent to a background task.
 struct SubagentDeps {
     profiles: Arc<BTreeMap<String, SubagentProfile>>,
     registry: Arc<ProviderRegistry>,
@@ -414,22 +465,30 @@ struct SubagentDeps {
     shell: Arc<dyn crate::shell::ShellBackend>,
     http: Arc<dyn crate::http::HttpClient>,
     parent_model: String,
-    /// 父会话当前选中的 provider vendor。与 `parent_model` 组成 `(vendor, model)`
-    /// 选择对——子 agent model 回落到父选择时按这对精确解析 entry。空串表示父 ctx
-    /// 未注入 vendor（旧/测试路径），此时回退到按裸 model id 取首个 entry。
+    /// The provider vendor currently selected in the parent session. Together with
+    /// `parent_model` this forms a `(vendor, model)` selection pair – when the child
+    /// agent's model falls back to the parent's choice, the entry is resolved exactly by
+    /// this pair. An empty string means the parent context did not inject a vendor
+    /// (legacy/test path), in which case the fallback picks the first entry by bare model
+    /// id.
     parent_provider: String,
-    /// 本层（发起方）turn 的剩余派发深度。子 turn 跑在 `subagent_depth - 1` 上；
-    /// 子工具集含 spawn_agent 当且仅当那个减一后的值 `> 0`（见 run_subagent_core）。
+    /// Remaining dispatch depth for this (initiator) turn. Child turns run at
+    /// `subagent_depth - 1`; the child toolset includes `spawn_agent` only when that
+    /// decremented value is `> 0` (see `run_subagent_core`).
     subagent_depth: u32,
-    /// subagent 事件桥：`Some` 时把子 turn 事件嵌套回父 trace。仅同步路径设置。
+    /// Subagent event bridge: when `Some`, nests child turn events back into the parent
+    /// trace. Only set on the synchronous path.
     bridge: Option<crate::tool::SubagentBridge>,
-    /// 后台任务句柄：`Some` 时把子 turn 的 history `Arc` 共享进任务表，供主 agent 经
-    /// `inspect_background_task` 查看子 agent **提交给 LLM 的消息块**。仅后台路径设置——
-    /// 同步路径父 spawn_agent 调用全程阻塞，没有"边跑边查"的需求。
+    /// Background task handle: when `Some`, shares the child turn's history `Arc` into
+    /// the task table so the main agent can inspect the child agent's **message chunks
+    /// submitted to the LLM** via `inspect_background_task`. Only set in the background
+    /// path — the synchronous path's parent `spawn_agent` call blocks entirely, so there
+    /// is no need to "peek while running".
     task_handle: Option<crate::session::TaskHandle>,
 }
 
-/// 从原始 args 里尽力取 profile 名（仅供后台启动确认消息用，失败回退占位符）。
+/// Extracts the profile name from the raw args (used only for the background-start
+/// confirmation message; falls back to a placeholder on failure).
 fn parsed_profile_for_msg(args: &serde_json::Value) -> String {
     args.get("profile")
         .and_then(|v| v.as_str())
@@ -437,11 +496,14 @@ fn parsed_profile_for_msg(args: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// 跑一个子 agent turn，返回最终文本（`Ok`）或错误描述（`Err`）。
+/// Runs a sub-agent turn, returning the final text (`Ok`) or an error description
+/// (`Err`).
 ///
-/// 同步与后台两条路径共用本核心：同步路径把 `Ok/Err` 包成 `ToolEvent::Completed/Failed`，
-/// 后台路径包成 `BackgroundResult::Completed/Failed`。`cancel` 由调用方决定生命周期——
-/// 同步路径传 turn 子 token，后台路径传 session 级子 token。
+/// Both the synchronous and background paths share this core: the synchronous path wraps
+/// `Ok/Err` into `ToolEvent::Completed/Failed`, while the background path wraps them into
+/// `BackgroundResult::Completed/Failed`. The caller determines the lifecycle of `cancel`
+/// — the synchronous path passes a turn-level child token, and the background path passes
+/// a session-level child token.
 async fn run_subagent_core(
     parsed: SpawnArgs,
     deps: SubagentDeps,
@@ -472,10 +534,12 @@ async fn run_subagent_core(
         )))));
     };
 
-    // model 优先级：本次调用入参 > profile 指定 > 父会话当前选中的 model。
-    // 仅当 model 来自父回落（无显式覆盖）时，才连父的 provider vendor 一起继承，
-    // 按 `(vendor, model)` 对精确解析（多网关同模型下不会选错 provider）。显式
-    // 覆盖了 model 时没有 provider 维度信息——退回按裸 model id 取首个 entry。
+    // Model priority: call argument > profile > parent session's current model.
+    // Only when the model falls back to the parent (no explicit override) do we also
+    // inherit the parent's provider vendor, resolving precisely by `(vendor, model)` pair
+    // (so multiple gateways with the same model won't pick the wrong provider). When the
+    // model is explicitly overridden, there is no provider dimension information — fall
+    // back to taking the first entry by bare model id.
     let model_override = parsed.model.clone().or_else(|| profile.model.clone());
     let inherits_parent = model_override.is_none();
     let model = model_override.unwrap_or(parent_model);
@@ -491,16 +555,20 @@ async fn run_subagent_core(
     };
     let provider = entry.provider().clone();
 
-    // 子 turn 的剩余派发深度 = 本层减一。本层走到这里 `subagent_depth >= 1`（execute
-    // 已对 0 fail loud），故子层 >= 0。
+    // The remaining dispatch depth for the child turn is this layer minus one. By this
+    // point `subagent_depth >= 1` (execute already fails loud on 0), so the child depth
+    // is >= 0.
     let child_depth = subagent_depth - 1;
 
-    // 闸门 A：按白名单从父工具集裁子集。`spawn_agent` 不再被无条件排除——改由**深度闸门**
-    // 决定：仅当 `child_depth > 0`（子 agent 自己还能再派发至少一层）且 profile 白名单
-    // 明确允许时，才给子 agent 装一份**新构造的** spawn_agent 工具（它捕获同一份 base
-    // `process_tools` 作裁子集来源，使孙能继续递归）。深度耗尽（child_depth==0）时即便
-    // 白名单写了 spawn_agent 也忽略——结构性收口（与旧硬编码同效，但可配置）。
-    // 未知工具名 hard fail（fail loud，不静默忽略）。
+    // Gate A: subset the parent tool set by the allowlist. `spawn_agent` is no longer
+    // unconditionally excluded — instead, a **depth gate** decides: only when
+    // `child_depth > 0` (the child agent can dispatch at least one more level) and the
+    // profile allowlist explicitly permits it, the child agent receives a **freshly
+    // constructed** `spawn_agent` tool (which captures the same base `process_tools` as
+    // the subset source, enabling grandchildren to continue recursion). When depth is
+    // exhausted (`child_depth == 0`), `spawn_agent` is ignored even if listed in the
+    // allowlist — a structural closure (same effect as the old hardcoded behavior, but
+    // configurable). Unknown tool names hard-fail (fail loud, not silently ignored).
     let mut builder = StaticToolRegistry::builder();
     for name in &profile.tool_allow {
         if name == SPAWN_AGENT_TOOL_NAME {
@@ -508,15 +576,18 @@ async fn run_subagent_core(
                 let child_spawn = SpawnAgentTool::new(
                     profiles.clone(),
                     registry.clone(),
-                    // 传入本层拿到的父策略——子 SpawnAgentTool 构造期捕获它作回退；运行时
-                    // 仍优先用 ctx 注入的 active policy。子 turn 再包一层 NonInteractive。
+                    // Pass the parent policy obtained at this layer to the child
+                    // `SpawnAgentTool`, which captures it as a fallback at construction
+                    // time; at runtime, the active policy injected via `ctx` still takes
+                    // precedence. The child turn is further wrapped in `NonInteractive`.
                     policy.clone(),
                     process_tools.clone(),
                     base_prompt.clone(),
                 );
                 builder = builder.insert(Arc::new(child_spawn));
             }
-            // child_depth==0：深度耗尽，不装——结构性禁止再递归。
+            // child_depth == 0: depth exhausted, skip — structurally prevents further
+            // recursion.
             continue;
         }
         match process_tools.get(name) {
@@ -531,8 +602,9 @@ async fn run_subagent_core(
     }
     let sub_tools = builder.build();
 
-    // system prompt：继承的 base_prompt + profile 自己的 system.md。不走
-    // resolve_system_prompt（避免爬工作区 AGENTS.md / provider·model overlay）。
+    // System prompt: inherited `base_prompt` + profile's own `system.md`. Does not use
+    // `resolve_system_prompt` (to avoid crawling workspace `AGENTS.md` / provider·model
+    // overlay).
     let mut sections = Vec::new();
     if let Some(bp) = base_prompt.as_deref()
         && !bp.is_empty()
@@ -545,29 +617,40 @@ async fn run_subagent_core(
     let system_prompt: Option<Arc<str>> =
         (!sections.is_empty()).then(|| Arc::from(sections.join("\n\n").as_str()));
 
-    // 子 turn 的局部件——全在本 async block 内，跑完即弃。history 用 Arc 包裹：后台路径
-    // 要把同一份 history 共享进任务表，供控制面 peek 子 agent **提交给 LLM 的消息块**。
+    // All sub-turn state is local to this async block and dropped when it completes.
+    // `history` is wrapped in `Arc` so the background path can share the same history
+    // with the task table, allowing the control plane to peek at the message blocks the
+    // sub-agent submits to the LLM.
     let history: Arc<dyn History> = Arc::new(VecHistory::new());
     if let Some(handle) = &task_handle {
         handle.attach_history(history.clone());
     }
     let events = Arc::new(EventEmitter::new());
 
-    // observability 桥：把子 turn 的每个事件包成 AgentEvent::Subagent 转发回父
-    // session 的事件流，让 langfuse 把子 turn 嵌套到父 spawn_agent tool span 下。
-    // 仅 observability——隔离契约对 storage / wire / REPL 不变（它们忽略 Subagent）。
-    // 桥接 task 订阅子 emitter；子 turn 跑完、本函数返回 drop 掉 `events`（最后一个
-    // 强引用）后，子流结束，task 自然退出，无需显式 join。
+    // Observability bridge: wraps each event from the child turn into an
+    // `AgentEvent::Subagent` and forwards it back to the parent session's event stream,
+    // so that Langfuse can nest the child turn under the parent's `spawn_agent` tool
+    // span. This is observability-only — the isolation contract leaves `storage` / `wire`
+    // / `REPL` unchanged (they ignore `Subagent`). The bridge task subscribes to the
+    // child emitter; once the child turn finishes and this function returns, dropping
+    // `events` (the last strong reference) ends the child stream, and the task exits
+    // naturally without an explicit join.
     let bridge_task = bridge.map(|b| {
         let mut sub_events = events.subscribe();
         let agent_type = parsed.profile.clone();
         tokio::spawn(async move {
             while let Some(ev) = sub_events.next().await {
-                // 递归扁平化：本层桥接只 prepend 自己这一跳的 tool_call_id。
-                // - 来自更深层、**已是** `Subagent`（带部分祖先链）⇒ 把本层 id 插到链首、
-                //   保留深层的 `agent_type` 与叶子 `inner` 不变；
-                // - 子 turn 的**叶子**事件 ⇒ 包成 `Subagent{[本层 id], 本层 profile, 叶子}`。
-                // 事件穿过 N 层后 `ancestor_path` 恰为顶层→叶子那层的完整链。
+                // Recursive flattening: this bridge layer only prepends its own
+                // `tool_call_id`.
+                //
+                // - From a deeper layer that is **already** a `Subagent` (with a partial
+                //   ancestor chain) → insert this layer's id at the head of the chain,
+                //   keeping the deeper `agent_type` and leaf `inner` unchanged.
+                // - A **leaf** event from a child turn → wrap it as `Subagent{[this
+                //   layer's id], this layer's profile, leaf}`.
+                //
+                // After the event passes through N layers, `ancestor_path` is exactly the
+                // complete chain from the top layer to the leaf.
                 let forwarded = match ev {
                     AgentEvent::Subagent {
                         mut ancestor_path,
@@ -594,7 +677,8 @@ async fn run_subagent_core(
 
     let permissions = PermissionGate::new();
     let sub_policy: Arc<dyn SandboxPolicy> = Arc::new(NonInteractivePolicy::new(policy));
-    // profile 自己声明的 hook 引擎；未声明 ⇒ NoopHookEngine（行为同改动前）。
+    // Use the hook engine declared in the profile, or fall back to `NoopHookEngine` (same
+    // behavior as before the change).
     let noop = NoopHookEngine;
     let hooks: &dyn HookEngine = match &profile.hooks {
         Some(engine) => engine.as_ref(),
@@ -606,10 +690,12 @@ async fn run_subagent_core(
     let config = TurnConfig {
         model: model.clone(),
         sampling: profile.sampling.clone().unwrap_or_default(),
-        // 子 agent 给个有限步数上限——防失控嵌套循环。
+        // Limit subagent to a fixed number of steps to prevent runaway nested loops.
         request_limit: TurnRequestLimit::Fixed(32),
-        // 纵向深度逐层递减：子 turn 的工具驱动据此再决定孙能否派发。child_depth==0 时
-        // 子 turn 的工具集本就不含 spawn_agent（上面闸门 A 没装），这里冗余设 0 自洽。
+        // Depth decreases by one per level: the child turn's tool driver uses this to
+        // decide whether grandchildren can be dispatched. When `child_depth == 0`, the
+        // child turn's tool set already lacks `spawn_agent` (gate A above is not
+        // installed), so redundantly setting it to 0 here is self-consistent.
         subagent_max_depth: child_depth,
         ..TurnConfig::default()
     };
@@ -632,29 +718,35 @@ async fn run_subagent_core(
         hooks,
         session_id: &session_id,
         request_audit: &audit,
-        // 子 agent turn 不携后台句柄：结构性禁止后台任务自我繁殖
-        // （与"白名单永不含 spawn_agent 自己"同一道防递归思路）。
+        // Sub‑agent turns carry no background handle: structurally prevents background
+        // tasks from spawning themselves (same anti‑recursion design as "whitelist never
+        // contains spawn_agent itself").
         background: None,
-        // 子 agent 不参与父的目标循环：父的 goal_done / goal-gate 只在顶层 turn 生效，
-        // 子 agent 有自己的有限步数上限（request_limit）兜底。
+        // Sub‑agent does not participate in the parent’s goal loop: the parent’s
+        // `goal_done` / `goal‑gate` only apply at the top‑level turn; the sub‑agent has
+        // its own finite step limit (`request_limit`) as a safety net.
         goal: None,
-        // 子 agent turn 不做后台压缩：上下文短、生命周期随工具调用结束，无须跨
-        // turn 的后台摘要。仍享 hard 水位的同步压缩兜底（compact_hard 路径要求
-        // provider_arc）——故给它 provider_arc，其余后台压缩件留空。
+        // Sub-agent turns skip background compaction: the context is short and its
+        // lifetime ends with the tool call, so no cross-turn background summary is
+        // needed. It still benefits from the hard-watermark synchronous compaction
+        // fallback (the `compact_hard` path requires `provider_arc`), so we give it
+        // `provider_arc` and leave the other background compaction fields empty.
         compaction_slot: None,
         history_arc: None,
         provider_arc: Some(provider.clone()),
         session_cancel: None,
-        // 子 agent 的 task 是它的"用户输入"。
+        // The sub-agent's task is its "user input".
         ingest_source: crate::hooks::step::IngestSource::User,
     };
 
     let prompt = vec![ContentBlock::Text(TextContent::new(parsed.task))];
     let run_result = runner.run(prompt).await;
 
-    // 子 turn 结束：drop 掉 runner 与本地 `events` 强引用，让子事件流走向关闭，
-    // 桥接 task 把缓冲里剩余事件冲刷给父 emitter 后退出。await 它确保所有子事件
-    // 在父 spawn_agent tool span 收尾（本函数返回 → ToolCallFinished）之前到达。
+    // End of sub-turn: drop `runner` and the local strong reference to `events`, allowing
+    // the child event stream to close. The bridge task flushes any buffered events to the
+    // parent emitter and then exits. Awaiting it ensures all child events arrive before
+    // the parent `spawn_agent` tool span finishes (this function returns →
+    // `ToolCallFinished`).
     drop(runner);
     drop(events);
     if let Some(task) = bridge_task {
@@ -667,13 +759,13 @@ async fn run_subagent_core(
         )))));
     }
 
-    // 取最后一条 assistant 消息的文本作为结果。
+    // Take the text of the last assistant message as the result.
     Ok(last_assistant_text(&history.snapshot()))
 }
 
-/// 从历史里取**最后一条** [`Role::Assistant`] 消息，拼接其所有 `Text` 片段
-/// （跳过 thinking / tool_use）。tool-use 循环会 append 多条 assistant 消息，
-/// 取最后一条对应"最终回答"。
+/// Take the **last** [`Role::Assistant`] message from the history and concatenate all its
+/// `Text` segments (skipping thinking / tool_use). The tool-use loop may append multiple
+/// assistant messages; the last one corresponds to the "final answer".
 fn last_assistant_text(history: &[crate::llm::Message]) -> String {
     history
         .iter()

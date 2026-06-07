@@ -1,10 +1,11 @@
-//! 端到端 turn 测试：mock provider + mock tool 跑一次完整 turn。
+//! End-to-end turn test: runs a full turn with a mock provider and a mock tool.
 //!
-//! 验证：
-//! - 用户 prompt 被 append 进 history
-//! - LLM 流被消费、TextDelta / ToolUse 被正确翻译为 AgentEvent
-//! - tool_use → tool 调度 → tool 结果回写 history
-//! - 第二轮 LLM EndTurn → run_turn 返回 Ok(EndTurn)
+//! Verifies:
+//! - The user prompt is appended to the history
+//! - The LLM stream is consumed, and `TextDelta` / `ToolUse` are correctly translated
+//!   into `AgentEvent`
+//! - `tool_use` → tool dispatch → tool result is written back to the history
+//! - On the second LLM `EndTurn`, `run_turn` returns `Ok(EndTurn)`
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -47,9 +48,9 @@ fn unsupported_caps() -> Capabilities {
     }
 }
 
-/// 按调用次数返回不同的 chunk 序列：
-/// - 第 1 次：emit 一段文本 + 一个 tool_use 然后 Stop=ToolUse
-/// - 第 2 次：emit 一段文本然后 Stop=EndTurn
+/// Returns different chunk sequences depending on the call count:
+/// - 1st call: emit text + a tool_use, then Stop=ToolUse
+/// - 2nd call: emit text, then Stop=EndTurn
 struct ScriptedProvider {
     calls: Mutex<u32>,
 }
@@ -149,7 +150,7 @@ impl LlmProvider for ScriptedProvider {
     }
 }
 
-/// echo 工具：把 args.msg 原样返回。
+/// Echo tool: returns `args.msg` as-is.
 struct EchoTool {
     schema: ToolSchema,
 }
@@ -271,7 +272,8 @@ async fn full_turn_with_one_tool_call() {
         .await
         .expect("create session");
 
-    // 订阅事件流——必须在 run_turn 开始前订阅，否则事件先到没人接
+    // Subscribe to the event stream before `run_turn` starts, otherwise events may arrive
+    // before any subscriber is ready.
     let mut events = session.subscribe();
 
     let prompt = vec![ContentBlock::Text(TextContent::new("hello"))];
@@ -279,7 +281,7 @@ async fn full_turn_with_one_tool_call() {
 
     assert!(matches!(stop, StopReason::EndTurn));
 
-    // 收 emit 事件直到 TurnEnded
+    // Consume emitted events until TurnEnded
     let mut got_user_prompt_committed = false;
     let mut got_text = false;
     let mut got_tool_call_started = false;
@@ -292,7 +294,8 @@ async fn full_turn_with_one_tool_call() {
             AgentEvent::AssistantText { .. } => got_text = true,
             AgentEvent::ToolCallStarted { fields, .. } => {
                 got_tool_call_started = true;
-                // raw_input 必须带上 LLM 给的原始参数（主循环外层填充）。
+                // raw_input must carry the original arguments from the LLM (filled by the
+                // outer main loop).
                 assert_eq!(
                     fields.raw_input,
                     Some(serde_json::json!({ "msg": "hi" })),
@@ -329,7 +332,8 @@ async fn full_turn_with_one_tool_call() {
 async fn second_run_turn_while_first_in_flight_returns_in_progress() {
     use defect_agent::session::TurnError;
 
-    // provider 总是无限挂起的 stream（不 Stop），让 turn 一直跑
+    // A provider whose stream hangs forever (never stops), keeping the turn running
+    // indefinitely.
     struct HangingProvider;
     impl LlmProvider for HangingProvider {
         fn info(&self) -> ProviderInfo {
@@ -392,7 +396,7 @@ async fn second_run_turn_while_first_in_flight_returns_in_progress() {
             .await
     });
 
-    // 给 h1 一点时间进入 turn
+    // Give h1 a moment to enter the turn
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
     let res2 = session
@@ -400,7 +404,7 @@ async fn second_run_turn_while_first_in_flight_returns_in_progress() {
         .await;
     assert!(matches!(res2, Err(TurnError::TurnInProgress)));
 
-    // 收尾：取消 h1
+    // Cleanup: cancel h1
     session.cancel_turn();
     let r1 = h1.await.expect("join h1");
     assert!(matches!(
@@ -496,11 +500,12 @@ async fn load_session_triggers_observers() {
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }
 
-/// 用 `AskWritesPolicy`（默认）+ Mutating 工具走 Ask 路径。
-/// 客户端"应答" `allow_once` 后工具应被执行、turn 完成。
+/// Uses `AskWritesPolicy` (default) with a mutating tool to exercise the Ask path.
+/// After the client replies with `allow_once`, the tool should execute and the turn
+/// should complete.
 #[tokio::test]
 async fn ask_writes_policy_runs_after_allow_once() {
-    /// Mutating 工具：触发 Ask 分支。
+    /// A Mutating tool that triggers the Ask path.
     struct WriteEcho {
         schema: ToolSchema,
     }
@@ -584,7 +589,7 @@ async fn ask_writes_policy_runs_after_allow_once() {
             .await
     });
 
-    // 等到 PolicyDecision::Ask 事件出来再 resolve
+    // Wait for the `PolicyDecision::Ask` event before resolving
     let mut resolved = false;
     while let Some(ev) = events.next().await {
         match ev {
@@ -610,7 +615,7 @@ async fn ask_writes_policy_runs_after_allow_once() {
     assert!(matches!(stop, StopReason::EndTurn));
 }
 
-/// `AskWritesPolicy` + 用户取消 turn → `Cancelled`，不是 internal error。
+/// `AskWritesPolicy` + user cancels turn → `Cancelled`, not an internal error.
 #[tokio::test]
 async fn ask_writes_policy_cancel_during_ask_returns_cancelled() {
     struct WriteEcho {
@@ -684,7 +689,7 @@ async fn ask_writes_policy_cancel_during_ask_returns_cancelled() {
             .await
     });
 
-    // 等到 Ask 事件出现再 cancel
+    // Wait for the Ask event before cancelling
     while let Some(ev) = events.next().await {
         if let AgentEvent::PolicyDecision { decision, .. } = &ev {
             use defect_agent::policy::PolicyDecision;
@@ -702,9 +707,10 @@ async fn ask_writes_policy_cancel_during_ask_returns_cancelled() {
     );
 }
 
-/// 用户拒绝 → 主循环把 tool_result(is_error=true) 喂回 LLM、再发一轮请求；
-/// 若 provider 在第二轮返回 EndTurn，整体 turn 应当 Ok(EndTurn) 而非
-/// `TurnError::Internal`（acp 桥接层会把它投影成 wire `Internal error`）。
+/// When the user denies, the main loop feeds `tool_result(is_error=true)` back to the LLM
+/// and issues another request; if the provider returns `EndTurn` on the second round, the
+/// overall turn should be `Ok(EndTurn)` rather than `TurnError::Internal` (the ACP bridge
+/// layer would project that as a wire `Internal error`).
 #[tokio::test]
 async fn deny_during_ask_completes_cleanly() {
     struct DestructiveTool {
@@ -729,7 +735,8 @@ async fn deny_during_ask_completes_cleanly() {
             })
         }
         fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
-            // 拒绝后不应被 execute——若被调说明决策路径出错。
+            // Should not be executed after rejection; if called, the decision path is
+            // incorrect.
             let s: Pin<Box<dyn futures::Stream<Item = ToolEvent> + Send>> =
                 Box::pin(stream::iter(Vec::<ToolEvent>::new()));
             s
@@ -779,7 +786,7 @@ async fn deny_during_ask_completes_cleanly() {
             .await
     });
 
-    // 等到 Ask 事件出现 → resolve 为 reject_once
+    // Wait for an Ask event, then resolve with reject_once
     while let Some(ev) = events.next().await {
         match ev {
             AgentEvent::PolicyDecision { id, decision } => {
@@ -802,11 +809,14 @@ async fn deny_during_ask_completes_cleanly() {
     assert!(matches!(stop, StopReason::EndTurn), "got {stop:?}");
 }
 
-/// `max_concurrent_tools` 限流：一个 turn 里发 N 个并发 tool_use 时，同时在跑的
-/// 工具数不得超过配置上限。这是 fanout（同 turn 多个 spawn_agent）的并发闸门。
+/// `max_concurrent_tools` rate‑limiting: when N concurrent `tool_use` calls are issued in
+/// a single turn, the number of tools running simultaneously must not exceed the
+/// configured limit. This is the concurrency gate for fanout (multiple `spawn_agent`
+/// calls in the same turn).
 #[tokio::test]
 async fn max_concurrent_tools_caps_fanout() {
-    /// provider：第 1 次调用发 4 个 tool_use 后 Stop=ToolUse；之后 EndTurn。
+    /// Provider: on the first call, emits 4 tool_use requests then Stop=ToolUse;
+    /// afterwards, EndTurn.
     struct FanoutProvider {
         calls: Mutex<u32>,
     }
@@ -841,7 +851,7 @@ async fn max_concurrent_tools_caps_fanout() {
                         id: "msg-1".to_string(),
                         model: "fanout-001".to_string(),
                     })];
-                    // 4 个并发 tool_use，全部调用同一个 slow 工具
+                    // 4 concurrent tool_use calls, all invoking the same slow tool
                     for i in 0..4 {
                         c.push(Ok(ProviderChunk::ToolUseStart {
                             id: format!("tu-{i}"),
@@ -878,7 +888,8 @@ async fn max_concurrent_tools_caps_fanout() {
         }
     }
 
-    /// 工具：进入时 +1 并更新峰值、睡一会、退出时 -1。借共享计数器观测真实并发。
+    /// Tool: increments a shared counter on entry, updates the peak, sleeps, then
+    /// decrements on exit. Uses the shared counters to observe real concurrency.
     struct SlowTool {
         schema: ToolSchema,
         live: Arc<AtomicUsize>,
@@ -978,17 +989,19 @@ async fn max_concurrent_tools_caps_fanout() {
     );
 }
 
-// 让编译期看到我们用到了 OpenPolicy（避免之后引用断裂）
+// Ensure the compiler sees that `OpenPolicy` is used (to prevent future dead-code
+// warnings).
 #[allow(dead_code)]
 fn _types_in_use() -> Arc<dyn SandboxPolicy> {
     Arc::new(OpenPolicy)
 }
 
 // ---------------------------------------------------------------------------
-// 端到端：before_turn_end hook 续命（你最初的目标）
+// End-to-end: before_turn_end hook keeps the turn alive (your original goal)
 // ---------------------------------------------------------------------------
 
-/// 一个 provider：每次都立刻 EndTurn（不调工具）。让 turn 每轮都走到 before_turn_end 判定。
+/// A provider that always immediately calls EndTurn (without invoking any tool), ensuring
+/// every turn reaches the `before_turn_end` check.
 struct AlwaysEndTurnProvider {
     calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
@@ -1028,8 +1041,9 @@ impl LlmProvider for AlwaysEndTurnProvider {
     }
 }
 
-/// hook 引擎：对 `before_turn_end` 前 N 次返回 `continue`（注入一句反馈），之后放停。
-/// 模拟 "command hook exit 2 → 续命" 的效果，但不依赖真子进程。
+/// A hook engine that returns `continue` (injecting one feedback sentence) for the first
+/// N calls to `before_turn_end`, then stops. Simulates the effect of "command hook exit 2
+/// → continue" without relying on a real subprocess.
 struct ContinueNTimesEngine {
     remaining: std::sync::Mutex<u32>,
 }
@@ -1047,10 +1061,11 @@ impl defect_agent::hooks::HookEngine for ContinueNTimesEngine {
             }
             let mut rem = self.remaining.lock().expect("mutex");
             if *rem == 0 {
-                return HookControl::Proceed; // 放停
+                return HookControl::Proceed; // let it pass through
             }
             *rem -= 1;
-            // 注入续命反馈（走 apply_verdict 的 additional_context → step.feedback）。
+            // Inject a keep-alive feedback (via `apply_verdict`'s `additional_context` →
+            // `step.feedback`).
             let _ = step.apply_verdict(&json!({
                 "control": "continue",
                 "additional_context": ["keep going: condition not yet met"],
@@ -1068,7 +1083,8 @@ async fn turn_end_hook_continue_makes_turn_loop() {
     }) as Arc<dyn LlmProvider>;
     let tools: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::builder().build());
 
-    // hook：续命 2 次后放停 → 总共应有 3 次 LLM 调用（1 初始 + 2 续命）。
+    // Hook: allow 2 turn extensions, then stop → expect 3 LLM calls total (1 initial + 2
+    // extensions).
     let engine = Arc::new(ContinueNTimesEngine {
         remaining: std::sync::Mutex::new(2),
     }) as Arc<dyn defect_agent::hooks::HookEngine>;
@@ -1100,7 +1116,8 @@ async fn turn_end_hook_continue_makes_turn_loop() {
     let stop = session.run_turn(prompt).await.expect("turn");
 
     assert!(matches!(stop, StopReason::EndTurn));
-    // 1 初始 + 2 次续命 = 3 次 LLM 调用。证明 turn-end hook 让循环多转了两轮。
+    // 1 initial + 2 renewals = 3 LLM calls, confirming the turn-end hook caused the loop
+    // to run two extra rounds.
     assert_eq!(
         calls.load(Ordering::SeqCst),
         3,
@@ -1109,10 +1126,11 @@ async fn turn_end_hook_continue_makes_turn_loop() {
 }
 
 // ---------------------------------------------------------------------------
-// 端到端：run_in_background 后台任务 + 被动回流（阶段一）
+// End-to-end: run_in_background background task + passive backflow (phase 1)
 // ---------------------------------------------------------------------------
 
-/// provider：第 1 次调用发一个 tool_use（调 bg_tool）后 Stop=ToolUse；之后每次都 EndTurn。
+/// On the first call, emits a `tool_use` (calls `bg_tool`) then returns `Stop=ToolUse`;
+/// every subsequent call returns `EndTurn`.
 struct BgScriptedProvider {
     calls: Mutex<u32>,
 }
@@ -1183,8 +1201,9 @@ impl LlmProvider for BgScriptedProvider {
     }
 }
 
-/// 一个 fire-and-forget 工具：若 ctx 带 background 句柄，就 spawn 一个后台任务
-/// （立即完成），并**立刻**返回"已启动"。证明工具不阻塞等任务。
+/// A fire-and-forget tool: if `ctx` has a background handle, spawns a background task
+/// (which completes immediately) and returns "started" right away. This tool does not
+/// block waiting for the task.
 struct BgSpawnTool {
     schema: ToolSchema,
 }
@@ -1234,9 +1253,11 @@ impl Tool for BgSpawnTool {
     }
 }
 
-/// 全链路（主动续转）：turn 1 调 bg_tool 后台 spawn 一个任务 → turn 1 不阻塞、
-/// 正常结束；后台任务完成后 **session driver 自发**起一个自主 turn 消化结果，
-/// 无需第二次用户输入。断言该自主 turn 的 UserPromptCommitted 携带后台答案文本。
+/// End-to-end (active reflow): turn 1 calls `bg_tool` to spawn a background task → turn 1
+/// does not block and completes normally; after the background task finishes, the
+/// **session driver spontaneously** starts an autonomous turn to consume the result,
+/// without requiring a second user input. Asserts that the autonomous turn's
+/// `UserPromptCommitted` carries the background answer text.
 #[tokio::test]
 async fn run_in_background_result_actively_reflows() {
     let provider = Arc::new(BgScriptedProvider {
@@ -1275,19 +1296,21 @@ async fn run_in_background_result_actively_reflows() {
         .await
         .expect("session");
 
-    // 订阅事件——必须在后台任务完成前订阅，才能接到 driver 起的自主续转 turn。
+    // Subscribe to events before the background task completes, so we can receive the
+    // driver's automatic continuation turn.
     let mut events = session.subscribe();
 
-    // turn 1：调 bg_tool，spawn 后台任务，不阻塞。
+    // Turn 1: call `bg_tool`, spawn a background task, non-blocking.
     let stop1 = session
         .run_turn(vec![ContentBlock::Text(TextContent::new("kick off"))])
         .await
         .expect("turn 1");
     assert!(matches!(stop1, StopReason::EndTurn));
 
-    // 主动续转：driver 在后台任务完成时**自发**起一个自主 turn 消化结果——
-    // 不需要第二次用户输入。断言该自主 turn 的 UserPromptCommitted 携带后台答案。
-    // 用超时兜底避免 driver 万一不起 turn 时挂死。
+    // Active reflow: the driver spontaneously starts an autonomous turn to consume the
+    // result when the background task completes — no second user input is needed. Assert
+    // that the autonomous turn's `UserPromptCommitted` carries the background answer. Use
+    // a timeout as a fallback to avoid hanging if the driver does not start the turn.
     let saw_active_reflow = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while let Some(ev) = events.next().await {
             if let AgentEvent::UserPromptCommitted { content } = &ev {
@@ -1299,8 +1322,9 @@ async fn run_in_background_result_actively_reflows() {
                     })
                     .collect::<Vec<_>>()
                     .join(" ");
-                // 这条 UserPromptCommitted 来自 driver 自发的续转 turn（非用户输入），
-                // 内容就是后台答案——证明主动 re-invoke 成立。
+                // This `UserPromptCommitted` comes from a driver-initiated continuation
+                // turn (not user input), and its content is the background answer —
+                // confirming that the proactive re-invoke succeeded.
                 if joined.contains("THE-BACKGROUND-ANSWER") {
                     return true;
                 }

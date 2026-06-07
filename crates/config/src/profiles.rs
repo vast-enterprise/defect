@@ -1,36 +1,41 @@
-//! Subagent profile 发现与解析。
+//! Subagent profile discovery and parsing.
 //!
-//! profile 被 `spawn_agent` 工具按名挑选，让父 agent 把任务委派给一个 fresh、
-//! 隔离上下文的子 agent。设计见记忆 `project-subagent-design`。
+//! Profiles are selected by name via the `spawn_agent` tool, allowing a parent agent to
+//! delegate tasks to a fresh, context-isolated child agent. See the design note
+//! `project-subagent-design`.
 //!
-//! ## 两种格式（同一套字段，二选一）
+//! ## Two formats (same fields, choose one)
 //!
-//! - **文件夹版**：`agents/<name>/`，含 `config.toml`（TOML 配置）+ 一个
-//!   system prompt 文件（默认 `system.md`，由 `[prompt] file` 指定）。适合
-//!   prompt 较长、想拆成独立文件的场景。
-//! - **单文件版**：`agents/<name>.md`，frontmatter（`+++` ⇒ **TOML**，
-//!   `---` ⇒ **YAML**，社区标准）之后正文即 system prompt。字段 schema 与
-//!   `config.toml` 完全一致。适合一个文件搞定。单文件版不带额外资源文件，
-//!   故 `[prompt]` 表在此**非法**。YAML 需 `yaml` feature（默认开）；关闭后
-//!   `---` 头会以可操作错误 hard fail，`+++` 仍可用。
+//! - **Directory variant**: `agents/<name>/`, containing a `config.toml` (TOML
+//!   configuration) plus a system prompt file (default `system.md`, overridden by
+//!   `[prompt] file`). Suitable when the prompt is long or you want to keep it in a
+//!   separate file.
+//! - **Single-file variant**: `agents/<name>.md`, where frontmatter (`+++` ⇒ **TOML**,
+//!   `---` ⇒ **YAML**, community standard) is followed by the system prompt body. The
+//!   field schema is identical to `config.toml`. Good for a one-file solution. This
+//!   variant carries no extra resource files, so the `[prompt]` table is **illegal**
+//!   here. YAML requires the `yaml` feature (enabled by default); without it, `---`
+//!   headers hard-fail with an actionable error, while `+++` still works.
 //!
-//! 同一层内两种形态同名（`reviewer/` 与 `reviewer.md`）⇒ hard error——
-//! 一个名字不允许两份真相源。
+//! If both variants exist with the same name in the same directory (e.g., `reviewer/` and
+//! `reviewer.md`), it's a hard error — one name must have a single source of truth.
 //!
-//! ## 分层发现
+//! ## Layered discovery
 //!
-//! 与主配置同构（[`crate::loader`]）：
-//! - 用户层 `<XDG_CONFIG_HOME>/defect/agents/`（或 `~/.config/defect/agents/`）
-//! - 项目层 `<repo_root>/.defect/agents/`
+//! Same structure as the main configuration ([`crate::loader`]):
+//! - User layer: `<XDG_CONFIG_HOME>/defect/agents/` (or `~/.config/defect/agents/`)
+//! - Project layer: `<repo_root>/.defect/agents/`
 //!
-//! 跨层同名时**项目层覆盖用户层**。
+//! When the same name exists in both layers, **the project layer overrides the user
+//! layer**.
 //!
-//! ## 沙箱
+//! ## Sandbox
 //!
-//! `config.toml` 里 `[prompt] file` 等文件引用一律相对 profile 目录解析，
-//! 并复用 [`defect_agent::fs::resolve_workspace_path`]（root 钉在 profile
-//! 目录）阻断 `../` 越界与 symlink 越狱——这道沙箱守的是 **profile 自身的
-//! 资源文件**，与子 agent 干活的工作区沙箱是两回事。
+//! File references in `config.toml` (e.g., `[prompt] file`) are resolved relative to the
+//! profile directory, using [`defect_agent::fs::resolve_workspace_path`] with the root
+//! pinned to the profile directory. This blocks `../` traversal and symlink escapes —
+//! this sandbox protects **the profile's own resource files**, which is separate from the
+//! workspace sandbox used by the child agent during execution.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -46,58 +51,67 @@ use crate::hooks::{HookEntryRaw, profile_hooks_from_raw};
 use crate::loader::find_repo_root;
 use crate::types::{ConfigError, ConfigSource, HooksConfig, LoadConfigOptions};
 
-/// profile 项目层目录（相对 repo root）。对位 [`crate::types`] 的
-/// `PROJECT_CONFIG_RELATIVE`（`.defect/config.toml`）。
+/// Profile-level agent directory (relative to repo root). Mirrors [`crate::types`]'s
+/// `PROJECT_CONFIG_RELATIVE` (`.defect/config.toml`).
 const PROJECT_AGENTS_RELATIVE: &str = ".defect/agents";
-/// profile 用户层目录（相对 XDG_CONFIG_HOME）。对位 `USER_CONFIG_RELATIVE`
-/// （`defect/config.toml`）。
+/// User-level profile directory (relative to `XDG_CONFIG_HOME`). Corresponds to
+/// `USER_CONFIG_RELATIVE` (`defect/config.toml`).
 const USER_AGENTS_RELATIVE: &str = "defect/agents";
-/// `[prompt] file` 缺省值——profile 目录下的 `system.md`。
+/// Default value for `[prompt] file` — `system.md` under the profile directory.
 const DEFAULT_PROMPT_FILE: &str = "system.md";
-/// `[tools] allow` 缺省值：只读集。省略 allow 即得到一个只能读/搜的子 agent，
-/// 靠"没有 mutating 工具"保证安全（工具白名单是主防线）。
+/// Default `[tools] allow`: read-only set. Omitting `allow` yields a sub-agent that can
+/// only read and search; safety is ensured by the absence of mutating tools (the tool
+/// allowlist is the primary defense).
 const DEFAULT_TOOL_ALLOW: &[&str] = &["read_file", "search"];
 
-/// 一个解析好的 subagent profile。
+/// A parsed subagent profile.
 ///
-/// 由 [`discover_profiles`] 产出；`spawn_agent` 工具与 CLI 顶层 `--profile`
-/// 都消费它。
+/// Produced by [`discover_profiles`]; consumed by the `spawn_agent` tool and the
+/// top-level CLI `--profile` flag.
 #[derive(Debug, Clone)]
 pub struct ProfileSpec {
-    /// profile 名（= 目录名）。`spawn_agent` 的 `profile` enum 取值。
+    /// Profile name (directory name). Corresponds to the `profile` enum variant in
+    /// `spawn_agent`.
     pub name: String,
-    /// profile 文件夹的绝对路径。
+    /// Absolute path to the profile directory.
     pub dir: PathBuf,
-    /// 选择期描述——`spawn_agent` 据此让 LLM 决定挑哪个 profile，也进工具
-    /// description 的 catalog。必填。
+    /// Selection description — `spawn_agent` uses this to let the LLM decide which
+    /// profile to pick; it also goes into the tool description's catalog. Required.
     pub description: String,
-    /// 可选 model 覆盖；省略 ⇒ 子 agent 回落到父会话当前选中的 model。
-    /// 不单设 `provider`：model id 经 provider registry 的 `entry_for_model`
-    /// 已唯一确定 provider，再加 provider 字段就是第二份真相源。需要指定某家
-    /// provider 时，写一个该 provider 名下的 model id 即可。
-    pub model: Option<String>,
-    /// 已读好的 system prompt 文本（来自 `[prompt] file`）。
-    pub system_prompt_text: String,
-    /// 工具白名单——子 agent 只看得到这些工具。省略 ⇒ `DEFAULT_TOOL_ALLOW`。
-    pub tool_allow: Vec<String>,
-    /// 可选采样参数覆盖。
-    pub sampling: Option<SamplingParams>,
-    /// 该 profile 自己声明的 `[hooks]`——子 agent 跑 turn 时挂的钩子。
+    /// Optional model override; omitted ⇒ the sub-agent falls back to the parent
+    /// session's currently selected model.
     ///
-    /// 与"继承世界、不继承身份"原则一致：profile 的钩子是它身份的一部分，由
-    /// profile 自己的 `config.toml` / frontmatter 声明，**不**从父会话继承。
-    /// 每条带上 profile 所在层的 [`ConfigSource`]（项目层覆盖用户层时也随之
-    /// 替换，因为整个 [`ProfileSpec`] 被覆盖）。省略 ⇒ 空（子 agent 无钩子）。
+    /// There is no separate `provider` field: the model ID already uniquely determines
+    /// the provider via the provider registry's `entry_for_model`, so adding a provider
+    /// field would create a second source of truth. To use a specific provider, simply
+    /// write a model ID that belongs to that provider.
+    pub model: Option<String>,
+    /// The pre-resolved system prompt text (from `[prompt] file`).
+    pub system_prompt_text: String,
+    /// Tool allowlist — sub-agents can only see these tools. Omitted ⇒
+    /// `DEFAULT_TOOL_ALLOW`.
+    pub tool_allow: Vec<String>,
+    /// Optional sampling parameter overrides.
+    pub sampling: Option<SamplingParams>,
+    /// The `[hooks]` declared by this profile — hooks attached when a sub-agent runs a
+    /// turn.
+    ///
+    /// Consistent with the "inherit world, not identity" principle: a profile's hooks are
+    /// part of its identity, declared in the profile's own `config.toml` / frontmatter,
+    /// and are **not** inherited from the parent session. Each entry carries the
+    /// [`ConfigSource`] of the profile's layer (replaced when a project layer overrides a
+    /// user layer, since the entire [`ProfileSpec`] is overridden). Omitted ⇒ empty
+    /// (sub-agent has no hooks).
     pub hooks: HooksConfig,
 }
 
-/// `config.toml` 的原始反序列化形态。`deny_unknown_fields` 与主配置一致——
-/// 未知键 hard fail（[[feedback-minimize-no-paternalistic-guards]]）。
+/// Raw deserialization shape of `config.toml`. `deny_unknown_fields` matches the main
+/// config — unknown keys hard-fail ([[feedback-minimize-no-paternalistic-guards]]).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProfileConfigToml {
-    /// 必填——缺失即 serde 报 "missing field `description`"，被 [`discover_profiles`]
-    /// 包成带文件路径的 hard error。
+    /// Required — if missing, serde reports "missing field `description`", which
+    /// [`discover_profiles`] wraps into a hard error that includes the file path.
     description: String,
     #[serde(default)]
     model: Option<String>,
@@ -107,9 +121,10 @@ struct ProfileConfigToml {
     tools: Option<ProfileToolsToml>,
     #[serde(default)]
     sampling: Option<ProfileSamplingToml>,
-    /// `[hooks]` 表：事件名 → 该事件下的 hook 条目数组。形态与主配置
-    /// `[hooks]` 完全一致（复用 [`HookEntryRaw`]）。profile 是单一闭合真相源，
-    /// 不支持跨层 `disable`——出现 `disable` 键会按未知事件名 hard fail。
+    /// The `[hooks]` table: event name → array of hook entries for that event. Its shape
+    /// is identical to the top-level `[hooks]` (reuses [`HookEntryRaw`]). A profile is a
+    /// single closed truth source and does not support cross-layer `disable` — a
+    /// `disable` key causes a hard fail as if the event name were unknown.
     #[serde(default)]
     hooks: BTreeMap<String, Vec<HookEntryRaw>>,
 }
@@ -127,9 +142,9 @@ struct ProfileToolsToml {
     allow: Option<Vec<String>>,
 }
 
-/// 采样覆盖的子集——只暴露 v0 用得到的几个标量；映射到
-/// [`SamplingParams`] 时叠在 `default()` 上，其余字段（thinking /
-/// stop_sequences）保持默认。
+/// Subset of sampling overrides – only expose the scalars needed by v0; when mapping to
+/// [`SamplingParams`], merge on top of `default()` and leave other fields (`thinking` /
+/// `stop_sequences`) at their defaults.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProfileSamplingToml {
@@ -155,24 +170,26 @@ impl ProfileSamplingToml {
     }
 }
 
-/// 发现并解析所有可用 profile。
+/// Discover and parse all available profiles.
 ///
-/// 先扫用户层、再扫项目层；同名 profile 项目层覆盖用户层。任一 profile 的
-/// `config.toml` 解析失败 / `system.md` 越界或读不到，都是 hard error（fail
-/// loud，不静默跳过坏 profile）。目录里非 profile 的杂项（无 `config.toml`
-/// 的子目录、非目录项）静默跳过。
+/// Scans user-level first, then project-level; for profiles with the same name, the
+/// project-level one overrides the user-level one. If any profile's `config.toml` fails
+/// to parse or its `system.md` is out of bounds or unreadable, it is a hard error (fail
+/// loud, do not silently skip bad profiles). Non-profile items in the directory
+/// (subdirectories without `config.toml`, non-directory entries) are silently skipped.
 ///
 /// # Errors
-/// - [`ConfigError::Io`]：读 `config.toml` / `system.md` 失败
-/// - [`ConfigError::Invalid`]：`config.toml` 解析失败、缺 `description`、
-///   或 `system.md` 路径越界
+/// - [`ConfigError::Io`]: reading `config.toml` / `system.md` failed
+/// - [`ConfigError::Invalid`]: `config.toml` parsing failed, missing `description`, or
+///   `system.md` path out of bounds
 pub fn discover_profiles(
     opts: &LoadConfigOptions,
 ) -> Result<BTreeMap<String, ProfileSpec>, ConfigError> {
     let mut profiles = BTreeMap::new();
 
-    // 用户层先，项目层后——后写覆盖先写，实现"项目覆盖用户"。source 随层标注，
-    // 供 profile 的 `[hooks]` 条目记录来源（trust gating）。
+    // User layer first, project layer second — later writes override earlier ones, so
+    // project overrides user. `source` is tagged per layer for the profile's `[hooks]`
+    // entries to record provenance (trust gating).
     if let Some(user_dir) = resolve_user_agents_dir(opts) {
         scan_agents_dir(&user_dir, ConfigSource::User, &mut profiles)?;
     }
@@ -187,18 +204,19 @@ pub fn discover_profiles(
     Ok(profiles)
 }
 
-/// 扫一个 `agents/` 目录，把其中每个 profile 解析成 [`ProfileSpec`] 写入
-/// `out`（跨层同名时本层覆盖先前层——调用方按 用户→项目 顺序传入实现
-/// "项目覆盖用户"）。目录不存在 ⇒ no-op。
+/// Scan an `agents/` directory, parse each profile into a [`ProfileSpec`], and write it
+/// into `out` (when names collide across layers, the current layer overwrites the
+/// previous one — the caller passes layers in user→project order to implement "project
+/// overrides user"). If the directory does not exist, this is a no-op.
 ///
-/// 两种 profile 形态并存：
-/// - **文件夹**：含 `config.toml` 的子目录，名 = 目录名，system prompt 来自
-///   `[prompt] file`（默认 `system.md`）。
-/// - **单文件**：`<name>.md`，名 = 文件名去扩展名，`+++` 之间是 TOML
-///   frontmatter，其后是 system prompt 正文。
+/// Two profile forms coexist:
+/// - **Folder**: a subdirectory containing `config.toml`; the name is the directory name,
+///   and the system prompt comes from `[prompt] file` (default `system.md`).
+/// - **Single file**: `<name>.md`; the name is the filename without extension, TOML
+///   frontmatter is between `+++` delimiters, and the system prompt follows.
 ///
-/// **同一层内**两个 profile 同名（如 `reviewer/` 与 `reviewer.md`）⇒ hard
-/// error——避免一个名字两份真相源。
+/// **Within the same layer**, two profiles with the same name (e.g. `reviewer/` and
+/// `reviewer.md`) cause a hard error — avoid having two sources of truth for one name.
 fn scan_agents_dir(
     agents_dir: &Path,
     source: ConfigSource,
@@ -206,7 +224,8 @@ fn scan_agents_dir(
 ) -> Result<(), ConfigError> {
     let entries = match std::fs::read_dir(agents_dir) {
         Ok(entries) => entries,
-        // 目录不存在是常态（用户没建任何 profile）——不是错误。
+        // The directory not existing is normal (the user hasn't created any profiles) —
+        // not an error.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
             return Err(ConfigError::Io {
@@ -216,7 +235,8 @@ fn scan_agents_dir(
         }
     };
 
-    // 先收进本层局部 map，以便检测层内同名冲突；再整体并入 `out`。
+    // First collect into a local map for this layer to detect name collisions within it,
+    // then merge the whole layer into `out`.
     let mut layer: BTreeMap<String, ProfileSpec> = BTreeMap::new();
     for entry in entries {
         let entry = entry.map_err(|err| ConfigError::Io {
@@ -228,7 +248,7 @@ fn scan_agents_dir(
         let parsed = if path.is_dir() {
             let config_path = path.join("config.toml");
             if !config_path.is_file() {
-                // 没有 config.toml 的子目录不是 profile——跳过，不报错。
+                // Subdirectories without a config.toml are not profiles — skip silently.
                 continue;
             }
             let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
@@ -241,7 +261,7 @@ fn scan_agents_dir(
             };
             Some((name, parse_profile_file(agents_dir, &path, source)?))
         } else {
-            // 非目录、非 .md 文件——跳过。
+            // Not a directory or `.md` file — skip.
             None
         };
 
@@ -263,10 +283,10 @@ fn scan_agents_dir(
     Ok(())
 }
 
-/// 把解析好的 frontmatter/config + 已得到的 system prompt 文本组装成
-/// [`ProfileSpec`]。文件夹版与单文件版共用——两种形态只在"system prompt
-/// 文本从哪来"上不同，其余字段映射一致。`name` 由调用方在 `scan_agents_dir`
-/// 统一回填。
+/// Assembles the parsed frontmatter/config and the already-obtained system prompt text
+/// into a [`ProfileSpec`]. Shared by both the directory-based and single-file variants —
+/// they differ only in where the system prompt text comes from; all other field mappings
+/// are identical. The `name` is filled in uniformly by the caller in `scan_agents_dir`.
 fn spec_from_cfg(
     dir: &Path,
     cfg: ProfileConfigToml,
@@ -278,11 +298,12 @@ fn spec_from_cfg(
         .tools
         .and_then(|t| t.allow)
         .unwrap_or_else(|| DEFAULT_TOOL_ALLOW.iter().map(|s| s.to_string()).collect());
-    // profile 的 `[hooks]` → HooksConfig，每条带上 profile 所在层的 source。
-    // 事件名拼错 / 非法 handler 形态在此 hard fail，路径定位到 config 文件。
+    // Converts the `[hooks]` section of a profile into a `HooksConfig`, where each hook
+    // carries the `source` of the profile's layer. Misspelled event names or invalid
+    // handler shapes hard-fail here, with errors pointing to the config file path.
     let hooks = profile_hooks_from_raw(cfg.hooks, source, config_path)?;
     Ok(ProfileSpec {
-        name: String::new(), // 由 scan_agents_dir 回填
+        name: String::new(), // Filled in by `scan_agents_dir`
         dir: dir.to_path_buf(),
         description: cfg.description,
         model: cfg.model,
@@ -293,8 +314,9 @@ fn spec_from_cfg(
     })
 }
 
-/// 解析文件夹版 profile：读 `config.toml`，再按 `[prompt] file`（默认
-/// `system.md`，相对 profile 目录 + 沙箱守界）读 system prompt。
+/// Parse a folder-based profile: read `config.toml`, then read the system prompt from the
+/// file specified by `[prompt] file` (defaults to `system.md`, resolved relative to the
+/// profile directory with sandbox confinement).
 fn parse_profile_folder(
     dir: &Path,
     config_path: &Path,
@@ -329,9 +351,10 @@ fn parse_profile_folder(
     spec_from_cfg(dir, cfg, system_prompt_text, source, config_path)
 }
 
-/// 解析单文件版 profile：`<name>.md`，frontmatter（`+++` TOML 或 `---` YAML）
-/// 之后正文即 system prompt。`dir` 取 `.md` 所在的 `agents/` 目录（profile 不带
-/// 额外资源文件，故 `[prompt] file` 在单文件版**无意义**，写了即冲突报错）。
+/// Parse a single-file profile: `<name>.md` with frontmatter (`+++` TOML or `---` YAML)
+/// followed by the system prompt body. `dir` is the `agents/` directory containing the
+/// `.md` file (a single-file profile has no extra resource files, so `[prompt] file` is
+/// meaningless and causes a conflict if specified).
 fn parse_profile_file(
     dir: &Path,
     file_path: &Path,
@@ -366,11 +389,12 @@ fn parse_profile_file(
     spec_from_cfg(dir, cfg, body.to_string(), source, file_path)
 }
 
-/// 解析用户层 `agents/` 目录。与 [`crate::loader`] 的
-/// `resolve_user_config_path` 同源优先级，但**找不到时返回 `None`**（用户
-/// 没设 XDG/HOME 时用户层 profile 直接缺席，不像主配置那样 hard error）。
+/// Parse the user-level `agents/` directory. Uses the same priority order as
+/// [`crate::loader`]'s `resolve_user_config_path`, but returns `None` when not found (if
+/// neither XDG nor HOME is set, the user-level profile is simply absent, unlike the main
+/// config which would hard error).
 fn resolve_user_agents_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
-    // `--local`：忽略用户级 agents 目录。
+    // `--local`: ignore the user-level agents directory.
     if opts.local {
         return None;
     }

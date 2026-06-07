@@ -1,11 +1,12 @@
-//! ACP（Agent Client Protocol）服务端实现。
+//! ACP (Agent Client Protocol) server implementation.
 //!
-//! 桥接 [`defect_agent`] 暴露的事件流与 ACP 线上协议；不参与业务逻辑，
-//! 仅做协议适配与传输（v0 = stdio）。
+//! Bridges the event stream exposed by [`defect_agent`] with the ACP wire protocol; does
+//! not participate in business logic,
+//! only protocol adaptation and transport (v0 = stdio).
 
 #![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
-//!
-//! ACP (Agent Client Protocol) bridge — translates between internal events and ACP wire messages.
+//! ACP (Agent Client Protocol) bridge — translates between internal events and ACP wire
+//! messages.
 
 mod echo_provider;
 pub mod fs;

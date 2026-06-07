@@ -1,5 +1,5 @@
 //! BashTool unit tests.
-//! #10（真 LLM e2e）不在这里跑。
+//! #10 (real LLM e2e) does not run here.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +20,7 @@ use crate::shell::LocalShellBackend;
 
 use super::BashTool;
 
-/// 把 ToolStream 跑到尽头收集成 Vec。
+/// Runs the `ToolStream` to completion and collects the results into a `Vec`.
 async fn drive(stream: defect_agent::tool::ToolStream) -> Vec<ToolEvent> {
     stream.collect().await
 }
@@ -179,7 +179,7 @@ async fn case5_huge_output_is_truncated() {
     let dir = tempdir().unwrap();
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
-    // 写 ~2 MiB 数据，cap 1 MiB
+    // Write ~2 MiB of data, capped at 1 MiB
     let cmd = "yes a | head -c 2097152";
     let events = drive(tool.execute(json!({"command": cmd, "timeout_ms": 30000}), ctx)).await;
     assert_eq!(events.len(), 1);
@@ -198,7 +198,8 @@ async fn case6_workdir_escape_is_invalid_args() {
     let dir = tempdir().unwrap();
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
-    // /tmp 是 dir 的祖先节点的姐妹（dir 在 /tmp/xxxxx 下），".." 跳出 = escape
+    // /tmp is a sibling of dir's ancestor (dir is under /tmp/xxxxx), so ".." traversal
+    // escapes the workdir.
     let events =
         drive(tool.execute(json!({"command": "pwd", "workdir": "../../../etc"}), ctx)).await;
     assert_eq!(events.len(), 1);
@@ -219,7 +220,7 @@ async fn case7_workdir_subdir_resolves() {
     let events = drive(tool.execute(json!({"command": "pwd", "workdir": "sub"}), ctx)).await;
     assert_eq!(events.len(), 1);
     let text = extract_text(&events[0]);
-    // canonicalize 后应包含 sub 目录路径
+    // After canonicalization, the path should contain the "sub" directory.
     assert!(text.contains("sub"), "pwd output: {text:?}");
 }
 
@@ -228,7 +229,7 @@ async fn case9_stdin_null_does_not_hang() {
     let dir = tempdir().unwrap();
     let tool = BashTool::new();
     let ctx = ctx_with(dir.path(), CancellationToken::new());
-    // cat 从 stdin 读；stdin = null 应当立刻 EOF，cat 退出 0
+    // cat reads from stdin; stdin = null should immediately EOF, causing cat to exit 0
     let events = drive(tool.execute(json!({"command": "cat", "timeout_ms": 5000}), ctx)).await;
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], ToolEvent::Completed(_)));

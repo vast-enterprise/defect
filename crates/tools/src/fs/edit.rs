@@ -1,4 +1,4 @@
-//! `edit_file` 工具：精确字符串替换。
+//! `edit_file` tool: exact string replacement.
 //!
 //! Edit tool — applies a patch to an existing file.
 
@@ -162,13 +162,14 @@ async fn run_edit(
         },
     };
 
-    // 紧贴 read 之后取一份"读取时的指纹"作为基线。后端要么用 mtime+size
-    // （LocalFsBackend），要么走默认实现重新读全文 hash（AcpFsBackend）。
-    // 任何一种方案都可以与"写前再取"的指纹比对，识别 read→write 窗口
-    // 期间的并发外部修改。
+    // Immediately after the read, capture a "read-time fingerprint" as a baseline. The
+    // backend either uses mtime+size (`LocalFsBackend`) or falls back to re-reading the
+    // full content hash (`AcpFsBackend`). Either scheme can be compared with the
+    // "pre-write" fingerprint to detect concurrent external modifications during the
+    // read→write window.
     //
-    // 失败时（极少见，例如 NotPermitted）放弃这层守护，正常推进——
-    // v1 conflict detection 是 best-effort，不应阻塞主流程。
+    // On failure (rare, e.g. `NotPermitted`), drop this guard and proceed normally — v1
+    // conflict detection is best-effort and should not block the main flow.
     let baseline_fp = fs.fingerprint(path.clone()).await.ok();
 
     let (new_content, matches_replaced) = match apply_edit(
@@ -193,14 +194,16 @@ async fn run_edit(
     let bytes_before = old_content.len() as u64;
     let bytes_after = new_content.len() as u64;
 
-    // Conflict detection：写前再取一次指纹，与 baseline 比对。不一致即抛
-    // [`FsError::Conflict`]——LLM 看到错误后应该重读再 edit，而不是覆盖。
+    // Conflict detection: re-fingerprint before writing and compare against the baseline.
+    // If they differ, return [`FsError::Conflict`] — the LLM should re-read and re-edit
+    // rather than overwrite.
     if let Some(baseline) = baseline_fp {
         match fs.fingerprint(path.clone()).await {
             Ok(current) if current != baseline => {
                 return ToolEvent::Failed(map_fs_err(FsError::Conflict(path)));
             }
-            // 取不到当前指纹时不阻塞——v1 conflict detection 是 best-effort。
+            // Don't block if the current fingerprint is unavailable — v1 conflict
+            // detection is best-effort.
             _ => {}
         }
     }
@@ -237,7 +240,7 @@ async fn run_edit(
 
 enum EditOutcome {
     NotFound,
-    /// match 数（≥ 2）
+    /// Number of matches (≥ 2)
     Ambiguous(u32),
 }
 

@@ -1,29 +1,30 @@
-//! `defect-cli` examples 的共用 helper。**仅供 examples/ 用**，不进 crate
-//! 公共 API（`defect-cli` 是 binary crate，没有 lib target）。
+//! Shared helper for `defect-cli` examples. **For `examples/` only** — not part of the
+//! crate's public API (`defect-cli` is a binary crate with no lib target).
 //!
-//! 与 [`crates/llm/examples/common/mod.rs`] 区别：本模块面向 ACP 形态——
-//! - subscriber 一律 `with_writer(std::io::stderr)`（stdout 给 wire 用）
-//! - 默认 EnvFilter 静默 toac 的 `INFO request` 事件（含 authorization
-//!   header in plain text (see tracing design)
+//! Difference from [`crates/llm/examples/common/mod.rs`]: this module is ACP-oriented —
+//! - subscriber always uses `with_writer(std::io::stderr)` (stdout is reserved for wire)
+//! - default `EnvFilter` silences toac's `INFO request` events (which contain
+//!   authorization header in plain text; see tracing design)
 //!
 //! See tracing design.
 
 use std::io::IsTerminal;
 use std::path::Path;
 
-/// 装好 tracing：默认 `info,toac=warn`，环境变量 `RUST_LOG` 整体覆盖。
+/// Set up tracing: defaults to `info,toac=warn`, overridden entirely by the `RUST_LOG`
+/// environment variable.
 ///
-/// `toac=warn` 是默认 directive 的一部分——toac wire crate 的 request
-/// 事件级别是 `info` 且包含 `headers={"authorization": "Bearer ..."}`，
-/// 默认必须 silence 掉，避免 stderr 泄露凭证。需要看 wire 请求时显式
-/// 用 `RUST_LOG=...,toac=debug`（debug 不打 headers）。
+/// `toac=warn` is part of the default directive — the toac wire crate emits request
+/// events at `info` level with `headers={"authorization": "Bearer ..."}`, so they must be
+/// silenced by default to avoid leaking credentials to stderr. To inspect wire requests,
+/// explicitly set `RUST_LOG=...,toac=debug` (debug level does not include headers).
 ///
-/// **stderr 强制**：stdio ACP 占用 stdout，subscriber 写 stdout 会污染
-/// 协议线，客户端解码必炸。
+/// **stderr is mandatory**: the stdio ACP occupies stdout; writing to stdout from the
+/// subscriber would corrupt the protocol wire, causing client decode failures.
 ///
 /// # Panics
 ///
-/// 重复初始化会 panic——examples 只在 main 调一次。
+/// Re-initialization panics — examples call this only once in `main`.
 pub fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter =
@@ -36,12 +37,14 @@ pub fn init_tracing() {
         .init();
 }
 
-/// 极简 `.env` 加载器：`KEY=VALUE` 一行一条，`#` 开头注释、空行跳过；
-/// 支持外层 `"..."` / `'...'` 包裹去除。**已在进程 env 里的变量保留原值**，
-/// 避免 .env 覆盖 shell 显式 export。读不到文件 / 解析失败仅 warn。
+/// A minimal `.env` loader: one `KEY=VALUE` per line, lines starting with `#` are
+/// comments, blank lines are skipped; outer `"..."` / `'...'` quotes are stripped.
+/// **Variables already set in the process environment are preserved**, so `.env` cannot
+/// override a shell-exported variable. Missing file or parse errors only produce a
+/// warning.
 ///
-/// 与 `crates/cli/src/main.rs::load_env_file` 同款实现——examples 不能
-/// 引用 binary crate 的私有 fn，只好复制。
+/// This is the same implementation as `crates/cli/src/main.rs::load_env_file` — examples
+/// cannot reference private functions from the binary crate, so this is a copy.
 pub fn load_env_file(path: &Path) {
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -64,7 +67,7 @@ pub fn load_env_file(path: &Path) {
         if k.is_empty() || std::env::var_os(k).is_some() {
             continue;
         }
-        // SAFETY: examples 入口未起其他线程。
+        // SAFETY: no other threads have been spawned at the entry point of the examples.
         unsafe { std::env::set_var(k, v) };
     }
 }

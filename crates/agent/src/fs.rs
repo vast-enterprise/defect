@@ -1,17 +1,15 @@
-//! 文件系统后端抽象。
+//! Filesystem backend abstraction.
 //!
-//! [`FsBackend`] 是 fs 工具家族（`read_file` / `write_file` / `edit_file`）
-//! 与底层 IO 之间的 trait 边界。两个 v0 实现：
-//! - `defect_tools::fs::LocalFsBackend`：直接打盘
-//! - `defect_acp::fs::AcpFsBackend`：走 ACP `fs/read_text_file` /
-//!   `fs/write_text_file` 反向请求委托给客户端
+//! [`FsBackend`] is the trait boundary between the fs tool family (`read_file` /
+//! `write_file` / `edit_file`) and the underlying I/O. Two v0 implementations:
+//! - `defect_tools::fs::LocalFsBackend`: writes directly to disk
+//! - `defect_acp::fs::AcpFsBackend`: delegates to the client via ACP `fs/read_text_file`
+//!   / `fs/write_text_file` reverse requests
 //!
-//! 装配权在 `defect-acp` 的 `session/new` handler——按客户端的
-//! [`FileSystemCapabilities`] 协商结果选择后端，注入给
-//! [`crate::session::AgentCore::create_session`]。
-//!
+//! Assembly is handled in the `defect-acp` `session/new` handler — the backend is
+//! selected based on the client's [`FileSystemCapabilities`] negotiation result and
+//! injected into [`crate::session::AgentCore::create_session`].
 
-//!
 //! [`FileSystemCapabilities`]: agent_client_protocol_schema::FileSystemCapabilities
 
 use std::collections::hash_map::DefaultHasher;
@@ -23,12 +21,16 @@ use thiserror::Error;
 
 use crate::error::BoxError;
 
-/// 文件内容的指纹。用于 [`FsBackend::fingerprint`] 与 [`Fingerprint::of`]：
-/// `edit_file` 读取后记录指纹，写入前再次取指纹；不一致即视为并发写冲突。
+/// A fingerprint of file content. Used with [`FsBackend::fingerprint`] and
+/// [`Fingerprint::of`]:
+/// `edit_file` records the fingerprint after reading, and takes it again before writing;
+/// a mismatch indicates a concurrent write conflict.
 ///
-/// 用 `(bytes, hash)` 而非单纯哈希：长度 + 哈希双重比较，把单 `u64` 哈希
-/// 的碰撞概率压到可忽略。`DefaultHasher` 只用于进程内一次性比较，不持久化
-/// 也不跨进程，所以可以容忍 std 默认实现的"未指定但稳定"语义。
+/// Uses `(bytes, hash)` instead of a plain hash: comparing both length and hash reduces
+/// the collision probability of a single `u64` hash to negligible. `DefaultHasher` is
+/// only used for in-process one-shot comparisons, never persisted or shared across
+/// processes, so the standard library's "unspecified but stable" semantics are
+/// acceptable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint {
     pub bytes: u64,
@@ -36,8 +38,8 @@ pub struct Fingerprint {
 }
 
 impl Fingerprint {
-    /// 直接对一段文本取指纹。`edit_file` 读到 old_content 后用这个先打个点，
-    /// 避免在写前再读一次。
+    /// Compute a fingerprint directly from a text string. `edit_file` uses this after
+    /// reading `old_content` to avoid re-reading before writing.
     pub fn of(content: &str) -> Self {
         let mut h = DefaultHasher::new();
         content.hash(&mut h);
@@ -48,11 +50,12 @@ impl Fingerprint {
     }
 }
 
-/// 仅用于测试的 no-op fs 后端。所有方法都返回 [`FsError::NotPermitted`]，
-/// 让需要 `Arc<dyn FsBackend>` 的测试场景（不实际跑 fs 工具）能跳过装配。
+/// A no-op fs backend for testing only. All methods return [`FsError::NotPermitted`],
+/// allowing test scenarios that require `Arc<dyn FsBackend>` (without actually running fs
+/// tools) to skip setup.
 ///
-/// 真实运行时用 `defect_tools::fs::LocalFsBackend` 或
-/// `defect_acp::fs::AcpFsBackend`。
+/// In production, use `defect_tools::fs::LocalFsBackend` or
+/// `defect_acp::fs::AcpFsBackend`.
 pub struct NoopFsBackend;
 
 impl FsBackend for NoopFsBackend {
@@ -78,25 +81,28 @@ impl FsBackend for NoopFsBackend {
     }
 }
 
-/// fs 后端 trait。
+/// Fs backend trait.
 ///
-/// 两个动词足够表达 v0 fs 工具家族的全部底层操作：
-/// - `edit_file` 由工具层组合（先 [`read_text`] 再 [`write_text`](FsBackend::write_text)），
-///   后端不感知 patch 语义
-/// - 删除 / 移动 / mkdir 不进入 v0 fs 工具家族（ACP 没有对位反向方法），
-///   LLM 用 `bash`
+/// Two verbs cover all low-level operations of the v0 fs tool family:
+/// - `edit_file` is composed at the tool layer (first [`read_text`] then
+///   [`write_text`](FsBackend::write_text));
+///   the backend is unaware of patch semantics
+/// - Delete / move / mkdir are not part of the v0 fs tool family (ACP has no
+///   corresponding inverse methods);
+///   the LLM uses `bash`
 ///
-/// 入参用 owned `PathBuf` / `String`：把 future 的生命周期收敛到 `&'_ self`，
-/// 避免显式生命周期参数；与 `LlmProvider::complete` 同款取舍。
+/// Parameters use owned `PathBuf` / `String` to confine the future's lifetime to `&'_
+/// self`,
+/// avoiding explicit lifetime parameters; same trade-off as `LlmProvider::complete`.
 ///
 /// [`read_text`]: FsBackend::read_text
 pub trait FsBackend: Send + Sync {
-    /// 读取整个文件的 UTF-8 文本。
+    /// Reads the entire file as UTF-8 text.
     ///
-    /// `line` / `limit` 与 ACP `ReadTextFileRequest` 同语义：
-    /// - `line = Some(n)` 表示从第 n 行（1-based）开始读
-    /// - `limit = Some(k)` 表示最多读 k 行
-    /// - 两者皆 None 表示读全文
+    /// `line` / `limit` have the same semantics as ACP `ReadTextFileRequest`:
+    /// - `line = Some(n)` starts reading from line n (1-based)
+    /// - `limit = Some(k)` reads at most k lines
+    /// - Both `None` reads the full file
     fn read_text(
         &self,
         path: PathBuf,
@@ -104,13 +110,16 @@ pub trait FsBackend: Send + Sync {
         limit: Option<u32>,
     ) -> BoxFuture<'_, Result<String, FsError>>;
 
-    /// 读取整个文件的原始字节。`read_file` 工具在识别到图片等二进制类型时
-    /// 走这条，把字节交给上层 base64 编码成多模态 tool_result。
+    /// Reads the raw bytes of an entire file. The `read_file` tool takes this path when
+    /// it detects a binary type such as an image, passing the bytes to the caller for
+    /// base64 encoding into a multimodal `tool_result`.
     ///
-    /// 默认实现返回 [`FsError::NotPermitted`]——委托后端（`AcpFsBackend`）
-    /// 的 ACP `fs/read_text_file` 反向通道是纯文本的，拿不到二进制；ACP 环境
-    /// 下读图片这件事由 system prompt 引导模型回避（`# Environment` 段会注明
-    /// frontend 是 delegated）。本地后端（`LocalFsBackend`）重写为直接读盘。
+    /// The default implementation returns [`FsError::NotPermitted`] — the delegated
+    /// backend (`AcpFsBackend`) uses the ACP `fs/read_text_file` reverse channel, which
+    /// is text-only and cannot obtain binary data. In ACP environments, reading images is
+    /// discouraged by the system prompt (the `# Environment` section notes that the
+    /// frontend is delegated). The local backend (`LocalFsBackend`) overrides this to
+    /// read directly from disk.
     fn read_bytes(&self, path: PathBuf) -> BoxFuture<'_, Result<Vec<u8>, FsError>> {
         Box::pin(async move {
             let _ = path;
@@ -120,21 +129,24 @@ pub trait FsBackend: Send + Sync {
         })
     }
 
-    /// 全量覆盖写一个 UTF-8 文本文件。
+    /// Write a UTF-8 text file, overwriting any existing content.
     ///
-    /// 后端负责确保父目录存在（`mkdir -p` 语义）。
+    /// The backend is responsible for ensuring the parent directory exists (`mkdir -p`
+    /// semantics).
     ///
     /// Line-ending / atomicity responsibilities are split as:
-    /// - 本地后端做行末符规范化与 `tmp + rename` 原子写
-    /// - 委托后端把决定权交给客户端
+    /// - Local backend performs line-ending normalization and atomic write via `tmp +
+    ///   rename`
+    /// - Delegated backend leaves the decision to the client
     fn write_text(&self, path: PathBuf, content: String) -> BoxFuture<'_, Result<(), FsError>>;
 
-    /// 取一份"内容指纹"。用于 `edit_file` 在 read → modify → write 的窗口
-    /// 中检测并发写冲突。
+    /// Returns a "content fingerprint" used by `edit_file` to detect concurrent write
+    /// conflicts in the read–modify–write window.
     ///
-    /// 默认实现走 [`FsBackend::read_text`] 全文读 + [`Fingerprint::of`]——这
-    /// 让委托后端（如 `AcpFsBackend`）无需额外协议方法即可工作。本地后端
-    /// 可重写此方法，用 mtime + size 做更便宜的判定。
+    /// The default implementation reads the full content via [`FsBackend::read_text`] and
+    /// computes [`Fingerprint::of`] — this allows delegating backends (e.g.
+    /// `AcpFsBackend`) to work without additional protocol methods. Local backends may
+    /// override this method to use cheaper checks like mtime + size.
     fn fingerprint(&self, path: PathBuf) -> BoxFuture<'_, Result<Fingerprint, FsError>> {
         Box::pin(async move {
             let text = self.read_text(path, None, None).await?;
@@ -143,50 +155,58 @@ pub trait FsBackend: Send + Sync {
     }
 }
 
-/// fs 后端错误。
+/// Fs backend error.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum FsError {
-    /// 文件不存在。
+    /// File not found.
     #[error("file not found: {0}")]
     NotFound(PathBuf),
 
-    /// 操作被拒：路径越界 / 二进制 / 客户端 deny / 权限不足等。
-    /// v0 用字符串占位；演进时再升枚举。
+    /// Operation not permitted: path out of bounds, binary file, client deny,
+    /// insufficient permissions, etc.
+    /// v0 uses a string placeholder; upgrade to an enum in a later iteration.
     #[error("operation not permitted: {0}")]
     NotPermitted(String),
 
-    /// 文件超过大小阈值。
+    /// File exceeds the size threshold.
     #[error("file too large: {bytes} bytes > {limit}")]
     TooLarge { bytes: u64, limit: u64 },
 
-    /// 文件在 read-modify-write 期间被外部修改。
-    /// `edit_file` 在写入前用 [`FsBackend::fingerprint`] 比对：
-    /// 不一致即抛 `Conflict`，提示 LLM 重读再编辑而不是覆盖。
+    /// File was externally modified during a read-modify-write cycle.
+    /// `edit_file` compares fingerprints via [`FsBackend::fingerprint`] before writing:
+    /// a mismatch raises `Conflict`, prompting the LLM to re-read and re-edit instead of
+    /// overwriting.
     #[error("file changed since last read: {0}")]
     Conflict(PathBuf),
 
-    /// 底层 IO / RPC 失败。
+    /// Underlying I/O or RPC failure.
     #[error("backend failure: {0}")]
     Backend(#[source] BoxError),
 }
 
-/// 把请求路径解析到工作区内的绝对路径，并校验未越界。
+/// Resolves a request path to an absolute path within the workspace, verifying it does
+/// not escape.
 ///
-/// 行为：
-/// 1. 相对路径基于 `workspace_root` 拼接；绝对路径直接用
-/// 2. 从目标路径向上查找最近的**已存在**祖先目录，对它做 canonicalize
-///    （write 场景下目标本身乃至多级父目录都可能尚未存在）
-/// 3. 校验已存在祖先的真实路径以 `workspace_root` 的真实路径开头——
-///    防 symlink 越狱（`workspace/dir/link → /etc` 这类）
-/// 4. 把剩余不存在的路径段原样拼回，再拼上文件名返回
+/// Behavior:
+/// 1. Relative paths are joined with `workspace_root`; absolute paths are used as-is.
+/// 2. Walks up from the target to find the nearest **existing** ancestor and
+///    canonicalizes it
+///    (on writes, the target itself and even multiple parent directories may not yet
+///    exist).
+/// 3. Checks that the real path of the existing ancestor starts with the real path of
+///    `workspace_root` —
+///    prevents symlink escape (e.g. `workspace/dir/link → /etc`).
+/// 4. Appends the remaining non-existent path segments as-is, then appends the file name.
 ///
-/// [`crate::fs::FsBackend`] 的 `LocalFsBackend` / `AcpFsBackend` 实现都调用
-/// 同一份函数——委托模式下 agent 仍自己守边界，不依赖客户端 enforce。
+/// Both `LocalFsBackend` and `AcpFsBackend` implementations of [`crate::fs::FsBackend`]
+/// call
+/// this same function — in delegated mode the agent still enforces its own boundary, not
+/// relying on the client.
 ///
 /// # Errors
-/// - [`FsError::NotPermitted`]：路径越界 / 无父目录 / 无文件名
-/// - [`FsError::Backend`]：祖先 canonicalize 失败（IO 错误）
+/// - [`FsError::NotPermitted`]: path escapes / no parent directory / no file name
+/// - [`FsError::Backend`]: canonicalization of ancestor failed (IO error)
 pub fn resolve_workspace_path(workspace_root: &Path, requested: &Path) -> Result<PathBuf, FsError> {
     let target = if requested.is_absolute() {
         requested.to_path_buf()
@@ -198,9 +218,10 @@ pub fn resolve_workspace_path(workspace_root: &Path, requested: &Path) -> Result
         FsError::NotPermitted(format!("path has no parent: {}", target.display()))
     })?;
 
-    // 从 parent 向上查找最近已存在的祖先目录。
-    // canonicalize 要求路径存在——write 场景下目标乃至多级父目录都可能
-    // 尚未创建，因此向上走到第一个真实存在的目录再 canonicalize。
+    // Walk up from `parent` to find the nearest existing ancestor directory.
+    // `canonicalize` requires the path to exist — in a write scenario the target
+    // and even multiple parent directories may not yet exist, so we walk up to
+    // the first real directory before calling `canonicalize`.
     let (existing_ancestor, missing_suffix) = find_existing_ancestor(parent).ok_or_else(|| {
         FsError::NotPermitted(format!(
             "no existing ancestor found for: {}",
@@ -226,20 +247,24 @@ pub fn resolve_workspace_path(workspace_root: &Path, requested: &Path) -> Result
         FsError::NotPermitted(format!("path has no file component: {}", target.display()))
     })?;
 
-    // 把不存在的那段路径原样拼回已存在祖先后面，再拼文件名。
+    // Append the missing path segments back to the existing ancestor, then join the file
+    // name.
     Ok(existing_canon.join(missing_suffix).join(file_name))
 }
 
-/// 从 `path` 开始向上走，返回 `(最近已存在的祖先, 剩余路径段)`。
+/// Walk upward from `path`, returning `(nearest existing ancestor, remaining path
+/// segments)`.
 ///
-/// 剩余路径段保持原有相对关系（不使用 canonicalize 后的形式），
-/// 以便拼回时保留原始语义。
+/// The remaining path segments preserve their original relative structure (not
+/// canonicalized),
+/// so that reassembly retains the original semantics.
 fn find_existing_ancestor(path: &Path) -> Option<(&Path, PathBuf)> {
     let mut missing = Vec::new();
     let mut current = path;
     loop {
         if current.exists() {
-            // 从下往上收集的路径段需要逆序拼回
+            // The path segments collected from bottom to top need to be reversed before
+            // joining.
             missing.reverse();
             return Some((current, missing.into_iter().collect()));
         }

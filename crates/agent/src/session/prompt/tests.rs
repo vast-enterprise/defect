@@ -54,12 +54,13 @@ fn resolves_layers_in_order_with_headings_and_rules() {
     .expect("resolve")
     .expect("system prompt");
 
-    // 各段套一级标题、以 markdown 水平线相隔。标题出现顺序即拼接顺序。
+    // Each section is wrapped in a top-level heading, separated by a Markdown horizontal
+    // rule. The headings appear in concatenation order.
     let titles: Vec<&str> = resolved.lines().filter(|l| l.starts_with("# ")).collect();
     assert_eq!(
         titles,
         [
-            "# Base Prompt", // base file
+            "# Base Prompt", // from the base file
             "# Base Prompt", // base text
             "# Environment",
             "# System Instructions", // prompt.text
@@ -71,16 +72,17 @@ fn resolves_layers_in_order_with_headings_and_rules() {
         ]
     );
 
-    // 片段之间是水平分割线。
+    // Horizontal rules separate the fragments.
     assert!(resolved.contains("\n\n---\n\n"));
 
-    // Environment 段紧跟 base prompt 之后、project 之前。
+    // The `# Environment` section immediately follows the base prompt and precedes the
+    // project section.
     let env_at = resolved.find("# Environment").expect("env section");
     let base_at = resolved.find("base file").expect("base section");
     let project_at = resolved.find("repo prompt").expect("project section");
     assert!(base_at < env_at && env_at < project_at);
 
-    // 正文内容仍在。
+    // The body content is still present.
     assert!(resolved.contains("provider overlay"));
     assert!(resolved.contains("session overlay"));
     assert!(resolved.contains("- frontend: ACP (fs: local, shell: local)"));
@@ -103,7 +105,8 @@ fn emits_environment_even_without_prompts() {
     .expect("resolve")
     .expect("environment always present");
 
-    // 即便没有任何 prompt 配置，Environment 段始终注入。
+    // The `Environment` segment is always injected, even without any prompt
+    // configuration.
     assert!(resolved.starts_with("# Environment"));
     assert!(resolved.contains("- platform: "));
     assert!(resolved.contains("- defect version: "));

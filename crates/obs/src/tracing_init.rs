@@ -1,15 +1,17 @@
-//! tracing-subscriber 初始化。
+//! tracing-subscriber initialization.
 //!
-//! 进程级——只能调用一次。`RUST_LOG` 优先于配置文件 `[tracing].filter`。
+//! Process-level — must be called only once. `RUST_LOG` takes precedence over the config
+//! file's `[tracing].filter`.
 
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_FILTER: &str = "info,toac=warn";
 
-/// 初始化全局 tracing subscriber。
+/// Initializes the global tracing subscriber.
 ///
-/// 解析顺序：`RUST_LOG` env > 入参 `filter` > `DEFAULT_FILTER`。
-/// 输出走 stderr，自动检测终端启用 ANSI 颜色。
+/// Resolution order: `RUST_LOG` env > argument `filter` > `DEFAULT_FILTER`.
+/// Output goes to stderr; ANSI colors are enabled automatically when stderr is a
+/// terminal.
 pub fn init_tracing(filter: Option<&str>) -> anyhow::Result<()> {
     let default_filter = filter.unwrap_or(DEFAULT_FILTER);
     tracing_subscriber::fmt()

@@ -1,4 +1,5 @@
-//! `HookStep` 的信封往返单测：构造 step → to_envelope → 喂 mock verdict → 断言控制流 + 字段改动。
+//! Envelope round-trip test for `HookStep`: construct step → to_envelope → feed mock
+//! verdict → assert control flow + field changes.
 
 use super::*;
 use serde_json::json;
@@ -45,7 +46,7 @@ fn turn_end_continue_injects_feedback() {
 
 #[test]
 fn turn_end_veto_means_continue() {
-    // command hook exit 2 → {"control":"veto"}；turn-end 把 veto 解读为续命。
+    // command hook exit 2 → {"control":"veto"}; turn-end interprets veto as continue.
     let mut step = turn_end(true);
     let ctrl = step
         .apply_verdict(&json!({"control": "veto", "additional_context": ["just test failed"]}))
@@ -130,7 +131,8 @@ fn tool_apply_short_circuit_fills_result() {
             "is_error": true,
         }))
         .expect("verdict");
-    // 拦工具 ≠ 结束 turn：control 仍 Proceed，turn 继续；result 被填上。
+    // Blocking the tool does not end the turn: control remains `Proceed`, the turn
+    // continues, and the result is filled in.
     assert_eq!(ctrl, HookControl::Proceed);
     let r = step.result.expect("synthetic result");
     assert!(r.is_error);
@@ -189,12 +191,12 @@ fn after_generate_envelope_and_observe_only() {
     assert_eq!(env["usage"]["input_tokens"], 10);
     assert_eq!(env["stop_reason"], "end_turn");
 
-    // 观察型：control 仍可 break，但无"填产出"。
+    // Observation: control can still break, but there is no "fill output".
     let ctrl = step.apply_verdict(&json!({})).expect("verdict");
     assert_eq!(ctrl, HookControl::Proceed);
 }
 
-// ----- 作用域 / 变更型 step -----
+// ----- Scope / Mutation step -----
 
 #[test]
 fn session_enter_injects_and_breaks() {
@@ -240,7 +242,7 @@ fn before_ingest_prepends_input_preserving_existing() {
         .apply_verdict(&json!({"prepend_input": ["hint-a", "hint-b"]}))
         .expect("verdict");
     assert_eq!(ctrl, HookControl::Proceed);
-    // 前插两块在前、原块保留在后。
+    // Two blocks are prepended; the original block remains at the end.
     assert_eq!(step.input.len(), 3);
     let texts: Vec<&str> = step
         .input
@@ -268,7 +270,8 @@ fn before_compact_can_skip() {
 
 #[test]
 fn before_compact_veto_means_skip() {
-    // command hook exit 2 → veto；compact 把 veto 解读为跳过本次压缩。
+    // The hook's exit code 2 is interpreted as "veto", which the compact step treats as
+    // "skip this compaction".
     let mut step = BeforeCompact {
         token_estimate: 9000,
         threshold: 8000,
@@ -281,7 +284,7 @@ fn before_compact_veto_means_skip() {
 
 #[test]
 fn tool_apply_veto_means_break() {
-    // 默认 step（如 ToolApply）把 veto 解读为 Break。
+    // By default, a step like `ToolApply` interprets `veto` as `Break`.
     let mut step = tool_apply();
     let ctrl = step
         .apply_verdict(&json!({"control": "veto"}))
@@ -324,12 +327,13 @@ fn before_permission_stub_records_resolved() {
     assert_eq!(step.resolved, Some(true));
 }
 
-// ----- pipeline 合并语义 -----
+// ----- pipeline merge semantics -----
 
 #[test]
 fn pipeline_accumulates_data_then_early_exits_on_control() {
     let mut step = tool_apply();
-    // 三个 verdict：① 改 args ② 再改 args（看到①的结果）③ break。
+    // Three verdicts: ① modify args, ② modify args again (seeing the result of ①), ③
+    // break.
     let verdicts = vec![
         json!({"args": {"command": "step1"}}),
         json!({"args": {"command": "step2"}}),
@@ -342,27 +346,29 @@ fn pipeline_accumulates_data_then_early_exits_on_control() {
             reason: AcpStopReason::EndTurn
         }
     );
-    // 数据轴累积到最后一次改动。
+    // The data axis accumulates to the last modification.
     assert_eq!(step.args["command"], "step2");
 }
 
 #[test]
 fn pipeline_stops_at_first_control() {
     let mut step = turn_end(true);
-    // 第一个 continue 即早退，第二个 verdict 不应被应用。
+    // The first `continue` causes an early exit; the second verdict should not be
+    // applied.
     let verdicts = vec![
         json!({"control": "continue", "additional_context": ["first"]}),
         json!({"control": "break"}),
     ];
     let ctrl = run_step_pipeline(&mut step, verdicts, |_| None);
     assert_eq!(ctrl, HookControl::Continue);
-    assert_eq!(step.feedback.len(), 1); // 只应用了第一个
+    assert_eq!(step.feedback.len(), 1); // Only the first was applied.
 }
 
 #[test]
 fn pipeline_error_handler_can_skip_or_block() {
     let mut step = tool_apply();
-    // 第一个 verdict 形态错误；on_error 选择跳过(None)，继续到第二个。
+    // The first verdict is malformed; `on_error` chooses to skip (None), proceeding to
+    // the second.
     let verdicts = vec![
         json!({"result": {"kind": "bogus"}}),
         json!({"control": "break"}),
@@ -375,7 +381,7 @@ fn pipeline_error_handler_can_skip_or_block() {
         }
     );
 
-    // on_error 选择早退(Some)：错误等价 break。
+    // on_error returning Some causes an early exit, equivalent to break.
     let mut step2 = tool_apply();
     let ctrl2 = run_step_pipeline(
         &mut step2,

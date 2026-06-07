@@ -1,9 +1,11 @@
-//! LLM 调用、重试与流式 drain。
+//! LLM invocation, retry, and streaming drain.
 //!
-//! 从 turn 主流程疏散出来：`call_llm_with_retry` / `call_llm_attempt` /
-//! `drain_provider_stream` / `handle_chunk` 作为 [`super::TurnRunner`] 的方法实现，
-//! 加上其专属累积类型（[`DrainOutcome`] / [`LlmAttempt`] / [`ToolUseAccumulated`]）与
-//! usage / 重试相关的纯函数 helper。
+//! Extracted from the turn main flow: `call_llm_with_retry` / `call_llm_attempt` /
+//! `drain_provider_stream` / `handle_chunk` are implemented as methods on
+//! [`super::TurnRunner`],
+//! along with their dedicated accumulation types ([`DrainOutcome`] / [`LlmAttempt`] /
+//! [`ToolUseAccumulated`]) and
+//! pure-function helpers for usage / retry.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +26,8 @@ use crate::session::TurnError;
 use super::{TurnRunner, TurnState};
 
 impl TurnRunner<'_> {
-    /// 返回成功拿到的流 + 成功时的 attempt 号（供 run_inner 发 LlmCallFinished）。
+    /// Returns the stream on success, along with the attempt number (used by `run_inner`
+    /// to emit `LlmCallFinished`).
     pub(super) async fn call_llm_with_retry(
         &self,
         req: &CompletionRequest,
@@ -36,12 +39,14 @@ impl TurnRunner<'_> {
         loop {
             attempt += 1;
             state.request_count = state.request_count.saturating_add(1);
-            // 一次 attempt = 一个 llm_call span。span 包住"发请求 + 等响应 +
-            // 决定是否重试 + 退避 sleep"四步——失败后进入下一轮重试时
-            // 重新建 span（attempt 字段 +1），便于排障对齐每次实际请求。
-            // 注意：用 .instrument(span).await，**不要** span.enter() 然后 await
-            // ——后者会在 await 时把 entered guard 跨过 await，是 tracing
-            // 文档显式警告的 anti-pattern。
+            // One attempt = one `llm_call` span. The span wraps four steps: send request,
+            // wait for response, decide whether to retry, and backoff sleep. On failure,
+            // a new span is created for the next retry (attempt field +1), making it
+            // easier to correlate each actual request during debugging.
+            //
+            // Note: use `.instrument(span).await`, **not** `span.enter()` then `await` —
+            // the latter would carry the entered guard across the await point, which is
+            // an anti-pattern explicitly warned about in the tracing documentation.
             let span = tracing::info_span!(
                 "llm_call",
                 vendor = %vendor,
@@ -55,16 +60,19 @@ impl TurnRunner<'_> {
             match step {
                 LlmAttempt::Done(stream) => return Ok((stream, attempt)),
                 LlmAttempt::Failed(err) => return Err(TurnError::Provider(err)),
-                // Cancelled：返回空流，attempt 号无意义（不会发 Finished，见 run_inner）。
+                // Cancelled: return an empty stream; the attempt number is meaningless
+                // (no `Finished` is emitted, see `run_inner`).
                 LlmAttempt::Cancelled => return Ok((empty_stream(), attempt)),
                 LlmAttempt::Retry => continue,
             }
         }
     }
 
-    /// 一次 llm 调用 attempt：发请求、emit 事件、决定下一步。
-    /// 与 [`Self::call_llm_with_retry`] 拆开是为了让 `info_span!` 通过
-    /// `.instrument(...)` 包住整段 future 而不跨 await 持 entered guard。
+    /// A single LLM call attempt: send the request, emit events, and decide the next
+    /// step.
+    /// Separated from [`Self::call_llm_with_retry`] so that `info_span!` can wrap the
+    /// entire future via `.instrument(...)` without holding an entered guard across an
+    /// await.
     async fn call_llm_attempt(
         &self,
         req: &CompletionRequest,
@@ -75,8 +83,9 @@ impl TurnRunner<'_> {
             .emit(AgentEvent::LlmCallStarted {
                 model: req.model.clone(),
                 attempt,
-                // Arc 包裹：fan-out 给多个订阅者时 clone 退化成引用计数，
-                // 避免长上下文下整份 messages 历史被反复深拷贝。
+                // Wrapping in `Arc` so that cloning degrades to reference counting when
+                // fanning out to multiple subscribers, avoiding repeated deep copies of
+                // the entire message history under long contexts.
                 request: Arc::new(LlmRequestSnapshot {
                     system: req.system.clone(),
                     messages: req.messages.clone(),
@@ -90,9 +99,10 @@ impl TurnRunner<'_> {
             .await
         {
             Ok(stream) => {
-                // 成功路径**不在这里**发 LlmCallFinished——此刻流还没 drain，
-                // 本次调用的 usage 尚未到达。Finished 由 run_inner 在 drain 之后
-                // 带上 outcome.usage（单次调用真 usage）发出。
+                // On the success path, `LlmCallFinished` is **not** emitted here — the
+                // stream has not been drained yet, so the usage for this call is not
+                // available. `Finished` is emitted by `run_inner` after draining, with
+                // `outcome.usage` (the actual usage for this single call).
                 LlmAttempt::Done(stream)
             }
             Err(err) => {
@@ -164,7 +174,7 @@ impl TurnRunner<'_> {
         }
     }
 
-    /// 处理单个 chunk。返回 `true` 表示流已到 Stop。
+    /// Process a single chunk. Returns `true` if the stream has reached Stop.
     async fn handle_chunk(
         &self,
         chunk: ProviderChunk,
@@ -224,9 +234,10 @@ impl TurnRunner<'_> {
     }
 }
 
-// ----- LLM drain 累积类型 -----
+// ----- LLM drain accumulation type -----
 
-/// 一次 LLM 调用 attempt 的结果（包给 `.instrument(span).await` 的最小分支）。
+/// Result of a single LLM call attempt (the smallest unit wrapped by
+/// `.instrument(span).await`).
 enum LlmAttempt {
     Done(ProviderStream),
     Failed(crate::llm::ProviderError),
@@ -268,12 +279,13 @@ pub(super) struct ToolUseAccumulated {
 
 // ----- helpers -----
 
-/// 把 drain 累积的内容组装成一条 assistant 消息。
+/// Assemble the content accumulated by the drain into a single assistant message.
 pub(super) fn assistant_message(outcome: &DrainOutcome) -> Message {
     let mut content: Vec<MessageContent> = Vec::new();
-    // Thinking 必须排在 Text / ToolUse 之前 —— Anthropic wire 顺序约定
-    // 是 thinking → text → tool_use，错位会被服务端拒；OpenAI 兼容侧
-    // reasoning_content 是 message 顶级字段不在乎顺序，统一形态便于阅读。
+    // Thinking must precede Text / ToolUse — the Anthropic wire protocol requires the
+    // order thinking → text → tool_use; misordering causes server rejection. On the
+    // OpenAI-compatible side, reasoning_content is a top-level message field and order is
+    // irrelevant, but keeping a uniform shape aids readability.
     if !outcome.thinking_buf.is_empty() || outcome.thinking_signature.is_some() {
         content.push(MessageContent::Thinking {
             text: outcome.thinking_buf.clone(),
@@ -318,10 +330,11 @@ fn add_usage(a: Usage, b: Usage) -> Usage {
     }
 }
 
-/// 一次 LLM 调用的「真实输入 token」= `input + cache_read + cache_creation`。
-/// 对齐 Claude Code 的 `getTokenCountFromUsage`：缓存命中/创建的部分也都进了
-/// 模型输入侧，必须计入。任一字段 `None` 视为 0；三项全 `None` 则返回 `None`
-/// （provider 没报输入量，无法作为基线）。
+/// The "real input tokens" for an LLM call = `input + cache_read + cache_creation`.
+/// Matches Claude Code's `getTokenCountFromUsage`: cache hits and creations are also
+/// part of the model's input side and must be counted. Any field that is `None` is
+/// treated as 0; if all three are `None`, returns `None` (the provider did not report
+/// input tokens, so no baseline is available).
 pub(super) fn real_input_tokens(usage: &Usage) -> Option<u64> {
     let input = usage.input_tokens;
     let cache_read = usage.cache_read_input_tokens;
@@ -345,24 +358,27 @@ fn add_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     }
 }
 
-/// `attempt` 是**刚刚失败**那次的次数（从 1 起），用于推算退避指数。
+/// `attempt` is the count of the **just-failed** attempt (1-based), used to compute the
+/// backoff exponent.
 fn retry_delay(hint: RetryHint, attempt: u32) -> Option<Duration> {
     match hint {
         RetryHint::No => None,
         RetryHint::Immediate => Some(Duration::from_millis(0)),
         RetryHint::After(d) => Some(d),
-        // 服务端无建议时（含 529 overloaded / 5xx / timeout）走指数退避 + jitter，
-        // 而非固定短延迟——过载是按时间窗概率性发生的，固定 500ms×N 几乎必然在
-        // 同一波过载里连续撞墙。公式对齐 `defect-http` 的 transport 退避层。
+        // When the server provides no hint (including 529 overloaded, 5xx, or timeout),
+        // use exponential backoff with jitter instead of a fixed short delay — overloads
+        // occur probabilistically within time windows, so a fixed 500ms×N almost always
+        // hits the same overload wave repeatedly. The formula aligns with the
+        // `defect-http` transport backoff layer.
         RetryHint::Backoff => Some(backoff_delay(attempt)),
         RetryHint::AfterAction(_) => Some(Duration::from_millis(0)),
     }
 }
 
-/// `BACKOFF_INITIAL * 2^(attempt-1)`，加 ±25% jitter，封顶 [`BACKOFF_MAX`]。
-/// 与 `defect-http` 的 transport 重试层同款（`initial * 2^n ± 25%`）。
+/// `BACKOFF_INITIAL * 2^(attempt-1)` with ±25% jitter, capped at [`BACKOFF_MAX`].
+/// Same formula as `defect-http`'s transport retry layer (`initial * 2^n ± 25%`).
 fn backoff_delay(attempt: u32) -> Duration {
-    // attempt 从 1 起：第 1 次失败用 2^0 = initial，第 2 次 2^1，依此类推。
+    // attempt starts at 1: first failure uses 2^0 = initial, second uses 2^1, and so on.
     let exp = attempt.saturating_sub(1).min(20);
     let base_nanos = BACKOFF_INITIAL.as_nanos().saturating_mul(1u128 << exp);
     let cap_nanos = BACKOFF_MAX.as_nanos();
@@ -375,11 +391,13 @@ fn backoff_delay(attempt: u32) -> Duration {
     Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
 }
 
-/// 退避基准：第 1 次重试约等这么久，之后指数翻倍。
+/// Base backoff: the first retry waits approximately this long, then doubles
+/// exponentially.
 const BACKOFF_INITIAL: Duration = Duration::from_millis(500);
-/// 退避封顶——避免 attempt 很大时睡太久。
+/// Backoff cap – prevents sleeping too long when `attempt` is large.
 const BACKOFF_MAX: Duration = Duration::from_secs(16);
-/// jitter 幅度：±25%，打散同一波过载里多个请求的重试时刻。
+/// Jitter magnitude: ±25%, to spread out retry timing across multiple requests in the
+/// same burst of load.
 const BACKOFF_JITTER_FRAC: f64 = 0.25;
 
 fn empty_stream() -> ProviderStream {
@@ -400,7 +418,7 @@ mod tests {
 
     #[test]
     fn backoff_grows_exponentially_within_jitter() {
-        // attempt 1 → ~500ms ±25% → [375, 625]ms
+        // attempt 1 → ~500 ms ±25 % → [375, 625] ms
         for _ in 0..100 {
             let d = backoff_delay(1);
             assert!(

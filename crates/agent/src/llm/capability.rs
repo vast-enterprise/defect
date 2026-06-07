@@ -2,30 +2,34 @@
 
 use serde::{Deserialize, Serialize};
 
-/// provider 级能力矩阵。
+/// Provider-level capability matrix.
 ///
-/// 模型级差异由 [`ModelCapabilityOverrides`] 表达；主循环按需合并：
-/// 模型级 `Some(_)` 覆盖 provider 级，`None` 沿用 provider 级。
+/// Model-level differences are expressed via [`ModelCapabilityOverrides`]; the main loop
+/// merges them as needed:
+/// a model-level `Some(_)` overrides the provider level, while `None` falls back to the
+/// provider level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
-    /// 工具调用（content_block 含 tool_use / tool_calls 字段）。
+    /// Tool calls (content_block contains `tool_use` / `tool_calls` fields).
     pub tool_calls: FeatureSupport,
-    /// 同一轮内并发多个 tool_use。
+    /// Multiple concurrent tool_use calls within a single turn.
     pub parallel_tool_calls: FeatureSupport,
-    /// 思考链。
+    /// Chain of thought.
     pub thinking: FeatureSupport,
-    /// 多模态输入（图片）。
+    /// Multimodal input (images).
     pub vision: FeatureSupport,
-    /// prompt cache。
+    /// Prompt cache.
     pub prompt_cache: FeatureSupport,
-    /// thinking 内容回放策略。详见 [`ThinkingEcho`]。
+    /// Thinking content replay strategy. See [`ThinkingEcho`].
     pub thinking_echo: ThinkingEcho,
 }
 
-/// 模型级覆写。`None` 表示沿用 provider 级 [`Capabilities`] 字段。
+/// Model-level overrides. `None` means fall back to the provider-level [`Capabilities`]
+/// field.
 ///
-/// 字段集合按"现实中真的会按模型变化"的属性限定，不与 [`Capabilities`]
-/// 机械一一对应。后续如出现新差异点再加。
+/// The field set is limited to properties that actually vary per model in practice, and
+/// does not mechanically mirror [`Capabilities`]. Additional fields may be added later as
+/// new differences emerge.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCapabilityOverrides {
     pub thinking: Option<FeatureSupport>,
@@ -35,12 +39,12 @@ pub struct ModelCapabilityOverrides {
     pub thinking_echo: Option<ThinkingEcho>,
 }
 
-/// thinking 内容回放策略。
+/// Policy for replaying thinking content.
 ///
-/// `Required` —— 上一轮 assistant 的 thinking 必须出现在下一轮请求里
-/// （Anthropic extended thinking、DeepSeek-v4-pro）。`Forbidden` ——
-/// 回放会被服务端拒（DeepSeek-R1、OpenAI o1 / o3 官方）。`Optional`
-/// —— 服务端容忍两种行为。
+/// `Required` — the previous assistant turn's thinking must be included in the next
+/// request (Anthropic extended thinking, DeepSeek-v4-pro). `Forbidden` — replay is
+/// rejected by the server (DeepSeek-R1, official OpenAI o1/o3). `Optional` — the server
+/// accepts either behavior.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,51 +55,56 @@ pub enum ThinkingEcho {
     Optional,
 }
 
-/// 三态特性支持声明。
+/// Tri-state feature support declaration.
 ///
-/// 选用三态而非 `bool` 是为了表达 [`FeatureSupport::PassthroughAsTool`]
-/// ——通过适配伪支持。即便 v0 没有产生此值的实现，从一开始定下三态
-/// 也比未来从 `bool` 升枚举省事。
+/// Using a tri-state instead of `bool` allows expressing
+/// [`FeatureSupport::PassthroughAsTool`] — pseudo-support via adaptation. Even though v0
+/// has no implementation that produces this value, defining a tri-state from the start is
+/// simpler than upgrading from `bool` to an enum later.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeatureSupport {
     Supported,
     Unsupported,
-    /// 通过适配伪支持。
+    /// Passthrough support via adapter.
     ///
-    /// 例如某 provider 没原生 `web_search`，但 agent 把它包装成一个
-    /// 工具暴露给 LLM，借此"假装"支持。
+    /// For example, a provider may not natively support `web_search`, but the agent wraps
+    /// it as a tool exposed to the LLM, thereby "pretending" to support it.
     PassthroughAsTool,
 }
 
-/// provider 自报家门的 hosted capability 集合。
+/// The set of hosted capabilities that the provider advertises.
 ///
-/// 与 [`Capabilities`] 区分：
-/// - [`Capabilities`] 描述模型能力（thinking / vision / tool_calls 等）
-/// - [`HostedCapabilities`] 描述 provider adapter 自身实现状态：当前
-///   adapter 能不能在 wire 上声明 hosted web_search / fetch / code_execution
+/// Distinguished from [`Capabilities`]:
+/// - [`Capabilities`] describes model-level abilities (thinking, vision, tool_calls,
+///   etc.)
+/// - [`HostedCapabilities`] describes the provider adapter's own implementation state:
+///   whether the current adapter can declare hosted `web_search`, `fetch`, or
+///   `code_execution` on the wire.
 ///
-/// session 启动期通过 [`super::LlmProvider::hosted_capabilities`] 拿到
-/// 此结构，与 `capabilities.web_search.mode` 一起决定本 session 的 web
-/// search 能力来源。注意：本地 grep/glob 工具（`search` tool）不属于
-/// capability 层，由 `[tools.search]` 单独管理。
+/// At session startup, this struct is obtained via
+/// [`super::LlmProvider::hosted_capabilities`] and, together with
+/// `capabilities.web_search.mode`, determines the source of web search capability for the
+/// session. Note that local grep/glob tools (the `search` tool) are not part of the
+/// capability layer and are managed separately by `[tools.search]`.
 ///
 /// Native metadata returned by the model after a completions call.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostedCapabilities {
-    /// provider adapter 是否支持 hosted web search。
+    /// Whether the provider adapter supports hosted web search.
     ///
-    /// 当前 hosted tool 版本由 adapter 内部硬编码取最新（Anthropic
-    /// `web_search_20260209`、OpenAI Responses API `web_search`）；
-    /// agent 不感知具体版本字段。
+    /// The hosted tool version is hardcoded internally by the adapter to always use the
+    /// latest (Anthropic `web_search_20260209`, OpenAI Responses API `web_search`); the
+    /// agent is unaware of the specific version field.
     pub web_search: bool,
 }
 
 impl HostedCapabilities {
-    /// 用单个字段构造。跨 crate 的测试或 adapter 实现需要这个入口，
-    /// 因为本结构体 `#[non_exhaustive]` 后不能直接 struct literal。
+    /// Constructs from a single field. Cross-crate tests or adapter implementations need
+    /// this entry point because the struct is `#[non_exhaustive]` and cannot be built
+    /// with a struct literal directly.
     #[must_use]
     pub const fn with_web_search(web_search: bool) -> Self {
         Self { web_search }

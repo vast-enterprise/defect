@@ -1,8 +1,8 @@
-//! Amazon Bedrock provider。
+//! Amazon Bedrock provider.
 //!
-//! Bedrock 的 chat 请求体仍然走 Anthropic Messages 形状，但 transport 用
-//! AWS Bedrock Runtime SDK。这里只支持 Anthropic 系列 messages 协议，不
-//! 单独发明 `instance` 之类的上层概念。
+//! Bedrock chat request bodies still use the Anthropic Messages shape, but the transport
+//! uses the AWS Bedrock Runtime SDK. Only the Anthropic messages protocol is supported;
+//! no higher-level concepts like `instance` are introduced.
 
 use std::env;
 use std::fmt::Debug;
@@ -100,7 +100,8 @@ impl std::fmt::Debug for BedrockProvider {
 impl BedrockProvider {
     /// # Errors
     ///
-    /// AWS SDK 配置加载失败，或 Bedrock client 初始化失败时返回错误。
+    /// Returns an error if the AWS SDK configuration fails to load or the Bedrock client
+    /// fails to initialize.
     pub async fn new(config: BedrockConfig) -> Result<Self, ProviderError> {
         let region = config.resolve_region();
         let vendor = config

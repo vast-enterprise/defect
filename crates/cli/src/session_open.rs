@@ -1,9 +1,10 @@
-//! 本机直跑 session 的开启逻辑——交互 REPL（`repl`）与单轮 oneshot
-//! （`oneshot`）共用的中立 helper。
+//! Logic for opening a local session — a neutral helper shared by the interactive REPL
+//! (`repl`) and the single-shot (`oneshot`) paths.
 //!
-//! 两条前端路径都在本机直接执行文件与命令：fs / shell 都用 local 后端，
-//! frontend 标 [`Frontend::Cli`]。它们**平级依赖**本模块，互不依赖——避免
-//! 让 oneshot 反过来依赖 repl 模块（那会把 oneshot 绑死在 `repl` feature 上）。
+//! Both frontend paths execute files and commands directly on the local machine: fs and
+//! shell both use the local backend, and the frontend is marked [`Frontend::Cli`]. They
+//! depend on this module at the same level, not on each other — this avoids making
+//! oneshot depend on the repl module (which would tie oneshot to the `repl` feature).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,12 +13,14 @@ use agent_client_protocol_schema::SessionId;
 use defect_agent::session::{AgentCore, Frontend, Session, new_session_id};
 use defect_tools::{LocalFsBackend, LocalShellBackend};
 
-/// 开一个本机直跑的 session（fs/shell 都用 local 后端，frontend 标 Cli）。
-/// `resume = Some(id)` 恢复该 session，否则新建。
+/// Opens a session running directly on the local machine (both fs and shell use local
+/// backends, frontend is `Cli`).
+/// `resume = Some(id)` resumes that session; otherwise creates a new one.
 ///
 /// # Errors
 ///
-/// `load_session` / `create_session` 失败（session 不存在、id 重复、cwd 不可用等）。
+/// Returns an error if `load_session` / `create_session` fails (session does not exist,
+/// duplicate id, cwd unavailable, etc.).
 pub async fn open_session(
     agent: &Arc<dyn AgentCore>,
     cwd: &Path,

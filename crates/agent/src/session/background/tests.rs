@@ -1,4 +1,5 @@
-//! [`BackgroundTasks`] 单测：任务活过 spawn、完成回流、取消、id 唯一。
+//! Tests for [`BackgroundTasks`]: tasks survive spawn, completion flows back,
+//! cancellation, and unique IDs.
 
 use super::*;
 
@@ -10,7 +11,7 @@ async fn completed_task_flows_into_queue() {
     });
     assert_eq!(id, "bg-0");
 
-    // 轮询直到任务跑完并入队（spawn 是异步的）。
+    // Poll until the task finishes and is enqueued (spawn is asynchronous).
     let outcome = wait_for_one(&bg).await;
     assert_eq!(outcome.task_id, "bg-0");
     assert_eq!(outcome.label, "reviewer");
@@ -19,7 +20,7 @@ async fn completed_task_flows_into_queue() {
         BackgroundResult::Completed("done".to_string())
     );
 
-    // drain 取空后再 drain 为空。
+    // Draining again after draining is empty.
     assert!(bg.drain_completed().is_empty());
 }
 
@@ -27,7 +28,7 @@ async fn completed_task_flows_into_queue() {
 async fn task_outlives_spawn_call() {
     let bg = BackgroundTasks::new(CancellationToken::new(), Default::default());
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    // 任务阻塞在 rx 上——spawn 返回后它仍在跑。
+    // The task blocks on `rx` — it is still running after `spawn` returns.
     bg.spawn("slow".to_string(), |_cancel, _progress| async move {
         let _ = rx.await;
         BackgroundResult::Completed("late".to_string())
@@ -39,7 +40,7 @@ async fn task_outlives_spawn_call() {
     );
     assert!(bg.drain_completed().is_empty(), "not done yet");
 
-    // 放行 → 任务完成 → 入队、running 清零。
+    // Allow the task to complete, enqueue the result, and reset running to zero.
     tx.send(()).unwrap();
     let outcome = wait_for_one(&bg).await;
     assert_eq!(
@@ -100,24 +101,25 @@ fn format_outcome_labels_source_and_status() {
 
 #[test]
 fn truncate_body_respects_limit() {
-    // limit 0 ⇒ 空串（只留元信息）。
+    // limit 0 ⇒ empty string (metadata only).
     assert_eq!(truncate_body("hello world", 0), "");
-    // 未超限 ⇒ 原样。
+    // Not exceeding limit → unchanged.
     assert_eq!(truncate_body("hello", 10), "hello");
     assert_eq!(truncate_body("hello", 5), "hello");
-    // 超限 ⇒ 截断 + 标记，按字符数（非字节）。
+    // Exceeds limit → truncate + marker, counted in characters (not bytes).
     let out = truncate_body("hello world", 5);
     assert!(out.starts_with("hello "), "kept prefix: {out}");
     assert!(out.contains("+6 more chars"), "marker: {out}");
-    // 多字节字符按标量切，不 panic、不切坏。
-    let cjk = "你好世界啊"; // 5 个标量
+    // Multi-byte characters are split on scalar boundaries; no panics or broken
+    // characters.
+    let cjk = "你好世界啊"; // 5 scalar values
     assert_eq!(truncate_body(cjk, 5), cjk);
     let cut = truncate_body(cjk, 2);
     assert!(cut.starts_with("你好"));
     assert!(cut.contains("+3 more chars"));
 }
 
-// 造一条 assistant 消息（文本 + 一个 tool_use）。
+// Build an assistant message containing text and one tool_use.
 fn assistant_msg(text: &str, tool: &str) -> Message {
     Message {
         role: Role::Assistant,
@@ -147,12 +149,12 @@ fn user_msg(text: &str) -> Message {
 
 #[test]
 fn recent_blocks_flattens_messages_and_orders() {
-    // 两条消息 → 摊平成 user + (assistant text + tool_use) = 3 个 block。
+    // Two messages flatten into user + (assistant text + tool_use) = 3 blocks.
     let msgs = vec![
         user_msg("do the thing"),
         assistant_msg("working on it", "read_file"),
     ];
-    // limit 大，正文保留。
+    // Large limit; full content retained.
     let (total, recent) = recent_blocks_of(&msgs, 10, 1000);
     assert_eq!(total, 3);
     let kinds: Vec<BlockKind> = recent.iter().map(|b| b.kind).collect();
@@ -164,9 +166,9 @@ fn recent_blocks_flattens_messages_and_orders() {
             BlockKind::ToolUse
         ]
     );
-    // tool_use 的文本是工具名。
+    // The text of a `ToolUse` block is the tool name.
     assert_eq!(recent[2].text, "read_file");
-    // recent(n) 取尾部 n。
+    // `recent(n)` takes the last `n` items.
     let (_total, last2) = recent_blocks_of(&msgs, 2, 1000);
     assert_eq!(last2.len(), 2);
     assert_eq!(last2[0].kind, BlockKind::AssistantText);
@@ -176,7 +178,8 @@ fn recent_blocks_flattens_messages_and_orders() {
 #[test]
 fn recent_blocks_default_limit_drops_free_form_body_keeps_tool_name() {
     let msgs = vec![assistant_msg("a long assistant reply", "read_file")];
-    // limit 0：自由正文(assistant text)清空，工具名(非正文)保留。
+    // With limit 0, free-form assistant text is cleared but the tool name (non-text) is
+    // preserved.
     let (_total, recent) = recent_blocks_of(&msgs, 10, 0);
     let text_block = recent
         .iter()
@@ -201,22 +204,25 @@ async fn peek_reads_attached_history_committed_blocks() {
         CancellationToken::new(),
         BackgroundProgressConfig::default(),
     );
-    // 用一个外部可控的 history Arc：任务体 attach 它，我们从外面往里 append 模拟子 turn 提交。
+    // Use an externally owned `history` Arc: the task body attaches it, and we append to
+    // it from outside to simulate child-turn submissions.
     let history: Arc<dyn History> = Arc::new(VecHistory::new());
     let history_for_task = history.clone();
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let id = bg.spawn("worker".to_string(), move |_c, handle| async move {
         handle.attach_history(history_for_task);
-        let _ = rx.await; // 阻塞，保持 running，便于中途 peek
+        let _ = rx.await; // Blocks, keeping the task running so it can be peeked mid-execution.
         BackgroundResult::Completed("done".to_string())
     });
 
-    // 模拟子 turn 把消息块提交进 history（与任务体 attach 同一份 Arc）。
+    // Simulate a child turn submitting message blocks into the history (the same `Arc`
+    // that the task body attached).
     history.append(user_msg("task instructions"));
     history.append(assistant_msg("on it", "read_file"));
 
-    // 轮询直到 attach 生效（任务体一进去就 attach；status==Running 在 spawn 时即翻，
-    // 早于 future 体执行，故必须等到 history 真正挂上、block_count 反映出来）。
+    // Poll until the attach takes effect (the task body attaches as soon as it enters;
+    // `status == Running` flips at spawn time, before the future body executes, so we
+    // must wait until the history is actually attached and `block_count` reflects it).
     let mut snap = bg.peek(&id, None).expect("task exists");
     for _ in 0..200 {
         if snap.block_count == 3 {
@@ -226,7 +232,8 @@ async fn peek_reads_attached_history_committed_blocks() {
         snap = bg.peek(&id, None).expect("task exists");
     }
     assert_eq!(snap.status, TaskStatus::Running);
-    // 默认 limit=0：assistant 正文空，但 user/工具名等结构可见；共 3 个 block。
+    // With default limit=0, the assistant body is empty but user/tool name structures are
+    // visible; 3 blocks total.
     assert_eq!(snap.block_count, 3);
     let kinds: Vec<BlockKind> = snap.recent.iter().map(|b| b.kind).collect();
     assert_eq!(
@@ -239,7 +246,7 @@ async fn peek_reads_attached_history_committed_blocks() {
     );
     assert_eq!(snap.recent[2].text, "read_file");
 
-    // 放行任务收尾。
+    // Allow the task to finish.
     let _ = tx.send(());
 }
 
@@ -249,7 +256,7 @@ async fn peek_without_attached_history_returns_empty_blocks() {
         CancellationToken::new(),
         BackgroundProgressConfig::default(),
     );
-    // 任务不 attach history。
+    // The task does not attach history.
     let id = bg.spawn("worker".to_string(), |_c, _handle| async {
         BackgroundResult::Completed("done".to_string())
     });
@@ -264,7 +271,8 @@ async fn peek_without_attached_history_returns_empty_blocks() {
     assert!(snap.recent.is_empty());
 }
 
-/// 轮询 `drain_completed` 直到拿到恰好一个结果（带超时上限，避免挂死）。
+/// Poll `drain_completed` until exactly one result is available (with a timeout to
+/// prevent hanging).
 async fn wait_for_one(bg: &BackgroundTasks) -> BackgroundOutcome {
     for _ in 0..200 {
         let mut done = bg.drain_completed();

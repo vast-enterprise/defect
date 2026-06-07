@@ -1,19 +1,26 @@
-//! 后台任务控制面工具：`inspect_background_task` 与 `cancel_background_task`。
+//! Background task control-surface tools: `inspect_background_task` and
+//! `cancel_background_task`.
 //!
-//! 主 agent 用 `spawn_agent { run_in_background: true }` fire-and-forget 一个 subagent
-//! 后，这两个工具让它能**回头看**与**提前掐**：
+//! After the main agent fire-and-forgets a subagent via `spawn_agent { run_in_background:
+//! true }`, these two tools let it **inspect** and **preemptively cancel** that subagent:
 //!
-//! - [`InspectBackgroundTaskTool`]：不带 `task_id` 时列出所有后台任务（id / 标签 / 状态 /
-//!   进度 block 数）；带 `task_id` 时返回该任务的状态与**最近几个 block**（assistant 文本 /
-//!   思考 / 工具调用起止），即对应 subagent 此刻的上下文与进度。
-//! - [`CancelBackgroundTaskTool`]：按 `task_id` 提前中断单个后台任务，不波及其它任务。
+//! - [`InspectBackgroundTaskTool`]: without `task_id`, lists all background tasks (id /
+//!   label / status / progress block count); with `task_id`, returns the task's status
+//!   and **most recent blocks** (assistant text / thinking / tool-call boundaries), i.e.
+//!   the subagent's current context and progress.
+//! - [`CancelBackgroundTaskTool`]: preemptively cancels a single background task by
+//!   `task_id`, without affecting other tasks.
 //!
-//! 两者都从 [`ToolContext::background`] 拿 session 级任务表。该句柄只在**顶层 turn**注入
-//! （子 agent 嵌套 turn 为 `None`），故这两个工具与 `spawn_agent` 一样是顶层 agent 的能力——
-//! 装配时只叠进 overlay、不进子 agent 的裁子集来源，子 agent 结构性够不着（与禁递归同思路）。
+//! Both read the session-level task table from [`ToolContext::background`]. That handle
+//! is injected only in the **top-level turn** (it is `None` in nested subagent turns), so
+//! these tools—like `spawn_agent`—are capabilities of the top-level agent: they are
+//! layered into the overlay but not into the subagent's tool subset, making them
+//! structurally inaccessible to subagents (same reasoning as recursion prevention).
 //!
-//! 进度数据来自 `spawn_agent` 后台路径挂的进度 forwarder：它订阅子 turn 事件、把"最近几个
-//! block"喂进任务进度环（[`ProgressBlock`](crate::session::ProgressBlock)）。本模块只读这个环。
+//! Progress data comes from the progress forwarder attached to `spawn_agent`'s background
+//! path: it subscribes to sub-turn events and feeds the "most recent blocks" into the
+//! task's progress ring ([`ProgressBlock`](crate::session::ProgressBlock)). This module
+//! is read-only on that ring.
 
 use std::pin::Pin;
 
@@ -31,17 +38,18 @@ use crate::tool::{
     ToolStream,
 };
 
-/// `inspect_background_task` 工具名。
+/// The name of the `inspect_background_task` tool.
 pub(crate) const INSPECT_BACKGROUND_TASK_TOOL_NAME: &str = "inspect_background_task";
-/// `cancel_background_task` 工具名。
+/// The name of the `cancel_background_task` tool.
 pub(crate) const CANCEL_BACKGROUND_TASK_TOOL_NAME: &str = "cancel_background_task";
 
 fn io_err(msg: String) -> std::io::Error {
     std::io::Error::other(msg)
 }
 
-/// 当 `ctx.background` 为 `None` 时两个工具共用的 fail-loud 错误——不静默降级，否则模型
-/// 以为查/取消成功了、实际什么都没发生。
+/// A shared fail-loud error for both tools when `ctx.background` is `None` — do not
+/// silently degrade, otherwise the model may think the query/cancel succeeded when
+/// nothing actually happened.
 fn no_background_err() -> ToolEvent {
     ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(
         "background tasks are not available in this context (only the top-level agent can \
@@ -50,7 +58,8 @@ fn no_background_err() -> ToolEvent {
     ))))
 }
 
-/// 把一条任务快照渲染成给模型看的一行（列举用，不带 block 明细）。
+/// Renders a task snapshot as a single line for the model (for listing, without block
+/// details).
 fn render_summary_line(s: &TaskSnapshot) -> String {
     format!(
         "- {} ({}) [{}] — {} progress block(s)",
@@ -61,7 +70,7 @@ fn render_summary_line(s: &TaskSnapshot) -> String {
     )
 }
 
-/// 把一条任务快照渲染成带最近 block 明细的多行文本（peek 用）。
+/// Render a task snapshot as multi-line text with recent block details (for peek).
 fn render_detail(s: &TaskSnapshot) -> String {
     let mut out = format!(
         "background task {} ({}) [{}], {} progress block(s) total",
@@ -75,8 +84,10 @@ fn render_detail(s: &TaskSnapshot) -> String {
     } else {
         out.push_str(&format!("\nmost recent {} block(s):", s.recent.len()));
         for b in &s.recent {
-            // 正文已在写入进度环时按 block_text_limit 收敛（截断 / 清空），这里直接渲染。
-            // 正文为空（limit=0 的默认鸟瞰模式）时只标类别，不留一个空挂的冒号。
+            // The body text was already truncated or cleared by `block_text_limit` when
+            // writing to the progress ring, so just render it directly.
+            // When the body is empty (the default bird's-eye mode with `limit=0`), show
+            // only the category label without a dangling colon.
             if b.text.is_empty() {
                 out.push_str(&format!("\n  [{}]", b.kind.as_str()));
             } else {
@@ -87,7 +98,8 @@ fn render_detail(s: &TaskSnapshot) -> String {
     out
 }
 
-/// 把文本包成一个 `Completed` 工具事件（content + raw_output 同源）。
+/// Wraps text into a `Completed` tool event, with `content` and `raw_output` sharing the
+/// same source.
 fn completed_text(text: String) -> ToolEvent {
     let mut fields = ToolCallUpdateFields::default();
     fields.content = Some(vec![ToolCallContent::Content(Content::new(
@@ -99,7 +111,8 @@ fn completed_text(text: String) -> ToolEvent {
 
 // ===================== inspect_background_task =====================
 
-/// 查后台任务的状态与进度。无 `task_id` ⇒ 列举全部；有 ⇒ 查单个的最近消息块。
+/// Query the status and progress of a background task. Without `task_id`, list all tasks;
+/// with it, query the most recent message block for a single task.
 pub struct InspectBackgroundTaskTool {
     schema: ToolSchema,
 }
@@ -206,7 +219,8 @@ impl Tool for InspectBackgroundTaskTool {
                     completed_text(format!("{} background task(s):\n{body}", tasks.len()))
                 }
                 Some(id) => {
-                    // recent_blocks=None ⇒ peek 用配置默认（默认 10）。
+                    // When `recent_blocks` is `None`, `peek` uses the configured default
+                    // (10).
                     match bg.peek(&id, parsed.recent_blocks) {
                         Some(snap) => completed_text(render_detail(&snap)),
                         None => ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(io_err(
@@ -224,7 +238,7 @@ impl Tool for InspectBackgroundTaskTool {
 
 // ===================== cancel_background_task =====================
 
-/// 提前中断单个后台任务。
+/// Cancel a single background task early.
 pub struct CancelBackgroundTaskTool {
     schema: ToolSchema,
 }
@@ -275,7 +289,8 @@ impl Tool for CancelBackgroundTaskTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // 取消是个有副作用的控制动作（终止一个运行中的任务），标 Mutating。
+        // Cancellation is a control action with side effects (terminates a running task);
+        // mark as Mutating.
         SafetyClass::Mutating
     }
 

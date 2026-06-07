@@ -1,6 +1,7 @@
-//! e2e 集测的公共脚手架：mock server 启动、回显工具、agent core 装配。
+//! Common scaffolding for e2e integration tests: mock server startup, echo tool, and
+//! agent core assembly.
 //!
-//! 由 `anthropic_e2e.rs` / `openai_e2e.rs` 通过 `mod common;` 引入。
+//! Imported by `anthropic_e2e.rs` / `openai_e2e.rs` via `mod common;`.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -24,15 +25,17 @@ use futures::stream;
 use serde_json::json;
 use wiremock::MockServer;
 
-/// 启动一个本地 wiremock server。
+/// Starts a local `wiremock` server.
 ///
-/// `wiremock` 的 server 在 drop 时自动停掉，调用方持有它的整个测试期。
+/// The server is automatically shut down when dropped; the caller holds it for the entire
+/// test.
 pub async fn start_mock_server() -> MockServer {
     MockServer::start().await
 }
 
-/// 把 SSE 事件序列拼成 wire 格式（`event:` + `data:` + 空行）的字节流，
-/// 直接喂给 [`wiremock::ResponseTemplate::set_body_raw`]。
+/// Concatenates a sequence of SSE events into the wire-format byte stream (`event:` +
+/// `data:` + blank line), suitable for feeding directly to
+/// [`wiremock::ResponseTemplate::set_body_raw`].
 pub fn encode_sse_events(events: &[(&str, &str)]) -> Vec<u8> {
     let mut out = String::new();
     for (name, data) in events {
@@ -41,7 +44,8 @@ pub fn encode_sse_events(events: &[(&str, &str)]) -> Vec<u8> {
             out.push_str(name);
             out.push('\n');
         }
-        // data 可能含换行（裸 JSON 不会，但留余地——按 SSE 规范每行 data:）
+        // data may contain newlines (raw JSON does not, but leave room — per SSE spec
+        // each line must be prefixed with `data:`)
         for line in data.split('\n') {
             out.push_str("data: ");
             out.push_str(line);
@@ -52,8 +56,9 @@ pub fn encode_sse_events(events: &[(&str, &str)]) -> Vec<u8> {
     out.into_bytes()
 }
 
-/// 回显工具：把 `args.msg` 字段当作输出，用来在 turn 里走完整的
-/// "tool_use → tool 执行 → tool_result 回写历史" 闭环。
+/// Echo tool: outputs the `args.msg` field, used to exercise the full
+/// "tool_use → tool execution → tool_result written back to history" round-trip within a
+/// turn.
 pub struct EchoTool {
     schema: ToolSchema,
 }
@@ -117,9 +122,10 @@ impl Tool for EchoTool {
     }
 }
 
-/// 用给定 provider 装配一个 [`DefaultAgentCore`]，并创建一个 session。
+/// Assembles a [`DefaultAgentCore`] with the given provider and creates a session.
 ///
-/// 用 `OpenPolicy` 跳过权限交互，便于跑通 ReadOnly 工具的快路径。
+/// Uses `OpenPolicy` to skip permission interactions, making it easier to exercise the
+/// fast path for ReadOnly tools.
 pub async fn build_session(provider: Arc<dyn LlmProvider>, model: &str) -> Arc<dyn Session> {
     let tools: Arc<dyn ToolRegistry> = Arc::new(
         StaticToolRegistry::builder()

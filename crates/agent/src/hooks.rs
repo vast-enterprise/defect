@@ -2,19 +2,24 @@
 //!
 //! ## Abstraction layers
 //!
-//! - [`HookStep`](step::HookStep)：主循环在各 step 边界调用的拦截点（按事件名分桶）
-//! - [`StepHandler`]：单个执行器（Builtin / Command / Prompt 三种形态在子模块实现）
-//! - [`HookMatcher`]：单条 hook 的匹配条件（按 tool / glob / safety 过滤）
-//! - [`HookEngine`]：主循环面向的派发器；持有 [`HandlerTable`]、执行 pipeline、合并 verdict
+//! - [`HookStep`](step::HookStep): interception points called by the main loop at step
+//!   boundaries (bucketed by event name)
+//! - [`StepHandler`]: a single executor (implemented in submodules as Builtin / Command /
+//!   Prompt)
+//! - [`HookMatcher`]: matching conditions for a single hook (filtering by tool / glob /
+//!   safety)
+//! - [`HookEngine`]: the dispatcher the main loop interacts with; holds a
+//!   [`HandlerTable`], executes the pipeline, and merges verdicts
 //!
-//! ## 默认实现
+//! ## Default implementations
 //!
-//! [`NoopHookEngine`]：所有 fire 直接返回 `Pass`，observe 直接丢弃；session/turn 装配
-//! 时若没有显式 hook 引擎走这个，保持"hook 未配置 = 主循环行为不变"。
+//! [`NoopHookEngine`]: all `fire` calls return `Pass` directly, `observe` calls are
+//! discarded; used when no explicit hook engine is provided during session/turn assembly,
+//! preserving "no hook configured = main loop behavior unchanged".
 //!
-//! [`DefaultHookEngine`]：用 [`arc_swap::ArcSwap`] 持有 handler 表，按 §3.4 的
-//! pipeline 语义串行调度；matcher / 超时 / panic 捕获按 hooks.md §3.5 的降级表
-//! 处理。
+//! [`DefaultHookEngine`]: holds the handler table via [`arc_swap::ArcSwap`], dispatches
+//! serially according to the pipeline semantics of §3.4; matcher, timeout, and panic
+//! capture are handled per the degradation table in hooks.md §3.5.
 
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -36,31 +41,36 @@ pub mod command;
 pub mod prompt;
 pub mod step;
 
-/// `DefaultHookEngine` 的默认 per-handler 超时（hooks.md §8）。
+/// Default per-handler timeout for `DefaultHookEngine` (hooks.md §8).
 const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 单条 hook 的匹配条件。
+/// Matching conditions for a single hook.
 ///
-/// 形态与 `defect-config` 的 `HookMatcher` 一致；agent crate 不依赖 config，
-/// 这里独立定义、CLI 装配时把 config 形态翻成 agent 形态（详见
+/// Shape is identical to `defect-config`'s `HookMatcher`; the agent crate does not depend
+/// on config,
+/// so this is defined independently and the CLI translates the config shape into the
+/// agent shape at assembly time.
 /// See hooks design for trust model.
 ///
-/// 字段全空 = 匹配该事件下所有触发。
+/// All fields empty = match all triggers under that event.
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct HookMatcher {
-    /// 按工具名精确匹配（仅 `*ToolUse*` 事件）。
+    /// Match by exact tool name (only for `*ToolUse*` events).
     pub tool: Option<String>,
-    /// 按工具名 glob 匹配（仅 `*ToolUse*` 事件）。
+    /// Glob match by tool name (only for `*ToolUse*` events).
     pub tool_glob: Option<String>,
-    /// 按 [`SafetyClass`] 过滤（仅 `PreToolUse`）；任一匹配即命中。空 vec = 不过滤。
+    /// Filter by [`SafetyClass`] (only `PreToolUse`); any match triggers. Empty vec = no
+    /// filter.
     pub safety: Vec<SafetyClass>,
 }
 
 impl HookMatcher {
-    /// Step 模型的匹配：按工具名 + safety（都从 step 信封取，非工具 step 传 `None`）。
+    /// Matches a step model by tool name and safety (both taken from the step envelope;
+    /// non-tool steps pass `None`).
     ///
-    /// 字段全空 = 命中所有。`tool` 精确、`tool_glob` 通配、`safety` 任一命中（空 vec = 不过滤）。
+    /// All fields empty = matches everything. `tool` is exact, `tool_glob` is a glob
+    /// pattern, `safety` matches any (empty vec = no filter).
     pub fn matches_step(&self, tool: Option<&str>, safety: Option<SafetyClass>) -> bool {
         if let Some(expected) = &self.tool
             && tool.is_none_or(|n| n != expected)
@@ -79,12 +89,14 @@ impl HookMatcher {
     }
 }
 
-/// 工具名 glob 匹配，统一走 [`globset`]（与 skill triggers / search 同款）。
+/// Tool name glob matching, using [`globset`] (same as skill triggers / search).
 ///
-/// 工具名以 `.` 分隔（如 `mcp.fs.read`），不是文件路径——`globset` 默认把 `*`
-/// 视作"不跨 `/`"，但工具名里没有 `/`，所以 `mcp.*` 能正常匹配整串。模式在每次
-/// 匹配时编译（工具名匹配调用稀疏、模式短，编译开销可忽略）。非法模式不 panic：
-/// 记一条 warn 并当作不匹配（matcher 失配 = 该 hook 不触发，安全侧）。
+/// Tool names are dot-separated (e.g. `mcp.fs.read`), not file paths — `globset` treats
+/// `*` as "does not cross `/`" by default, but tool names contain no `/`, so `mcp.*`
+/// matches the whole string correctly. Patterns are compiled on each match (tool name
+/// matches are infrequent and patterns are short, so compilation overhead is negligible).
+/// Invalid patterns do not panic: a warn is logged and the match is treated as no-match
+/// (matcher mismatch = the hook is not triggered, safe side).
 fn tool_name_matches(pattern: &str, name: &str) -> bool {
     match globset::Glob::new(pattern) {
         Ok(glob) => glob.compile_matcher().is_match(name),
@@ -95,7 +107,7 @@ fn tool_name_matches(pattern: &str, name: &str) -> bool {
     }
 }
 
-/// 共享给 handler 的轻量上下文。
+/// A lightweight context shared with the handler.
 #[non_exhaustive]
 pub struct HookCtx<'a> {
     pub session_id: &'a SessionId,
@@ -113,7 +125,7 @@ impl<'a> HookCtx<'a> {
     }
 }
 
-/// Handler 失败原因。
+/// Reasons for handler failure.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum HookError {
@@ -123,20 +135,23 @@ pub enum HookError {
     #[error("hook handler failed: {0}")]
     HandlerFailed(#[source] BoxError),
 
-    /// handler 信任未通过 / 未注册等配置层错误。
+    /// Handler trust not established, unregistered, or other configuration-layer errors.
     #[error("hook configuration error: {0}")]
     Configuration(String),
 }
 
-/// **Step 模型的 handler**（迁移目标）。引擎给它一个挂载点的输入信封（[`step::HookStep::to_envelope`]
-/// 的产物），它产出一个 verdict JSON——引擎再用 [`step::HookStep::apply_verdict`] 把 verdict 应用回
-/// step。两种 hook 都实现它：内部 Rust hook 直接算 verdict；command/prompt hook 把信封喂子进程/LLM、
-/// Parse output into a verdict.
+/// **Step model handler** (migration target). The engine gives it an input envelope for a
+/// mount point (produced by [`step::HookStep::to_envelope`]), and it produces a verdict
+/// JSON — the engine then applies the verdict back to the step via
+/// [`step::HookStep::apply_verdict`]. Both hook types implement this: internal Rust hooks
+/// compute the verdict directly; command/prompt hooks feed the envelope to a
+/// subprocess/LLM and parse the output into a verdict.
 ///
-/// 返回 `Ok(None)` = 不干预（等价空 verdict）；`Ok(Some(verdict))` = 应用该 verdict；`Err` = 失败，
-/// 由引擎按降级表处理。
+/// Returns `Ok(None)` = no intervention (equivalent to an empty verdict);
+/// `Ok(Some(verdict))` = apply that verdict; `Err` = failure, handled by the engine
+/// according to the degradation table.
 pub trait StepHandler: Send + Sync {
-    /// 处理一个挂载点：输入信封 → verdict JSON。
+    /// Process a mount point: input envelope → verdict JSON.
     fn handle_step<'a>(
         &'a self,
         envelope: &'a Value,
@@ -148,17 +163,21 @@ pub trait StepHandler: Send + Sync {
 // HookEngine
 // ---------------------------------------------------------------------------
 
-/// 主循环面向的派发器（step 模型）。
+/// Dispatcher for the main loop (step model).
 ///
-/// 唯一入口 [`Self::dispatch`]：给定一个挂载点的 [`step::HookStep`]，引擎按 `event_name` 找到匹配
-/// handler，逐个把 step 的信封喂进去、把 verdict 应用回 step（数据轴累积），合并出最终
-/// [`step::HookControl`]（控制轴早退）。step 上的字段改动（注入 / 改 args / 填产出…）就地生效；
-/// Summary: what the caller should read + control indication.
+/// The sole entry point is [`Self::dispatch`]: given a [`step::HookStep`] for a mount
+/// point, the engine finds matching handlers by `event_name`, feeds each handler the step
+/// envelope, applies the verdict back to the step (accumulating on the data axis), and
+/// merges the final [`step::HookControl`] (early exit on the control axis). Field
+/// mutations on the step (injection, argument changes, output filling, etc.) take effect
+/// in place. Summary: what the caller should read + control indication.
 ///
-/// 默认实现 [`DefaultHookEngine`]；测试 / 默认 session 装配走 [`NoopHookEngine`]。
+/// Default implementation is [`DefaultHookEngine`]; tests and default session setup use
+/// [`NoopHookEngine`].
 pub trait HookEngine: Send + Sync {
-    /// **默认实现返回 [`step::HookControl::Proceed`]**（= 不干预），[`NoopHookEngine`] 即用它。
-    /// [`DefaultHookEngine`] 覆盖它走真实派发。
+    /// **Default implementation returns [`step::HookControl::Proceed`]** (no
+    /// intervention); [`NoopHookEngine`] uses this directly. [`DefaultHookEngine`]
+    /// overrides it for real dispatch.
     fn dispatch<'a>(
         &'a self,
         _step: &'a mut dyn step::HookStep,
@@ -172,10 +191,12 @@ pub trait HookEngine: Send + Sync {
 // NoopHookEngine
 // ---------------------------------------------------------------------------
 
-/// 默认 hook 引擎：`dispatch` 走 trait 默认实现（`Proceed`，即不干预）。
+/// Default hook engine: `dispatch` uses the trait's default implementation (`Proceed`,
+/// i.e., no-op).
 ///
-/// session / turn 装配时若没有显式注入 hook 引擎走它——保证"未配置 hook
-/// = 主循环行为完全不变"，与 [`crate::http::NoopHttpClient`] 同款。
+/// When assembling a session/turn without an explicitly injected hook engine, this is
+/// used — ensuring that "no hook configured = main loop behavior is completely
+/// unchanged", analogous to [`crate::http::NoopHttpClient`].
 #[derive(Debug, Default)]
 pub struct NoopHookEngine;
 
@@ -185,27 +206,30 @@ impl HookEngine for NoopHookEngine {}
 // DefaultHookEngine
 // ---------------------------------------------------------------------------
 
-/// 一份按 step `event_name` 分桶的 handler 表。
+/// A handler table bucketed by step `event_name`.
 ///
-/// 装配在 [`DefaultHookEngine`] 内，外部用 [`DefaultHookEngine::reload`]
-/// 整体替换——`ArcSwap` 让运行期热加载几乎零开销。
+/// It is mounted inside [`DefaultHookEngine`] and replaced atomically via
+/// [`DefaultHookEngine::reload`] — `ArcSwap` makes runtime hot-reloading nearly
+/// zero-cost.
 #[derive(Default)]
 pub struct HandlerTable {
-    /// 按 step `event_name`（snake_case）索引的 handler 列表。声明顺序即 pipeline 执行顺序。
+    /// Handler list indexed by step `event_name` (snake_case). Declaration order
+    /// determines pipeline execution order.
     pub step_buckets: std::collections::HashMap<&'static str, Vec<StepHandlerEntry>>,
 }
 
-/// 一条已装配的 step handler：name + matcher + handler + 单条超时。
+/// A fully assembled step handler: name, matcher, handler, and per-entry timeout.
 pub struct StepHandlerEntry {
-    /// 展示名，仅用于 tracing / 可观测性里标识这条 hook。默认匿名标签
-    /// （见 [`Self::new`]）；装配方可用 [`Self::with_name`] 覆盖。
+    /// Display name, used only in tracing / observability to identify this hook. Defaults
+    /// to an anonymous label (see [`Self::new`]); assemblers can override it with
+    /// [`Self::with_name`].
     pub name: String,
     pub matcher: HookMatcher,
     pub handler: Arc<dyn StepHandler>,
     pub timeout: Option<Duration>,
 }
 
-/// 未命名 hook 在 tracing 里的占位名。
+/// Placeholder name used in tracing for unnamed hooks.
 pub const ANONYMOUS_HOOK_NAME: &str = "anonymous";
 
 impl StepHandlerEntry {
@@ -218,7 +242,8 @@ impl StepHandlerEntry {
         }
     }
 
-    /// 设置展示名。`None` 保持匿名占位（[`ANONYMOUS_HOOK_NAME`]）。
+    /// Sets the display name. `None` keeps the anonymous placeholder
+    /// ([`ANONYMOUS_HOOK_NAME`]).
     pub fn with_name(mut self, name: Option<String>) -> Self {
         if let Some(name) = name {
             self.name = name;
@@ -237,7 +262,7 @@ impl HandlerTable {
         Self::default()
     }
 
-    /// 某 step `event_name` 下已装配的 step handler。
+    /// Step handlers assembled under the step `event_name`.
     pub fn step_handlers(&self, event_name: &str) -> &[StepHandlerEntry] {
         self.step_buckets
             .get(event_name)
@@ -245,18 +270,20 @@ impl HandlerTable {
             .unwrap_or(&[])
     }
 
-    /// 在某 step `event_name` 下追加一条 step handler。
+    /// Appends a step handler under the given step `event_name`.
     pub fn push_step(&mut self, event_name: &'static str, entry: StepHandlerEntry) {
         self.step_buckets.entry(event_name).or_default().push(entry);
     }
 }
 
-/// 默认 hook 引擎：按 hooks.md §3.4 的 pipeline 语义串行调度。
+/// Default hook engine: serial dispatch following the pipeline semantics of hooks.md
+/// §3.4.
 ///
-/// - 用 [`ArcSwap`] 持有 [`HandlerTable`]，[`Self::reload`] 可整体热替换
-/// - `fire` 内部按 matcher 过滤 → 串行 await，每个 handler 看到的是前序
-///   patch 应用之后的事件
-/// - 单条 handler 超时 / panic / 错误按 §3.5 表降级
+/// - Uses [`ArcSwap`] to hold a [`HandlerTable`]; [`Self::reload`] enables full hot-swap
+/// - `fire` internally filters by matcher → serial await, each handler sees the event
+///   after
+///   all prior patches have been applied
+/// - Timeout, panic, or error in a single handler is downgraded per §3.5 table
 pub struct DefaultHookEngine {
     table: ArcSwap<HandlerTable>,
 }
@@ -268,14 +295,17 @@ impl DefaultHookEngine {
         }
     }
 
-    /// 用一份新的 handler 表整体替换当前表；运行期热加载用。
+    /// Atomically replace the entire handler table with a new one; used for runtime
+    /// hot-reloading.
     ///
-    /// 旧表在所有正在跑的 fire/observe 调用结束后由 `Arc` 自动回收。
+    /// The old table is automatically reclaimed by `Arc` once all in-flight
+    /// `fire`/`observe` calls finish.
     pub fn reload(&self, table: HandlerTable) {
         self.table.store(Arc::new(table));
     }
 
-    /// 当前 handler 表的快照引用。仅供测试 / 诊断观察用。
+    /// A snapshot reference to the current handler table. Intended for
+    /// testing/diagnostics only.
     #[doc(hidden)]
     pub fn snapshot(&self) -> Arc<HandlerTable> {
         self.table.load_full()
@@ -301,7 +331,8 @@ impl HookEngine for DefaultHookEngine {
                 return step::HookControl::Proceed;
             }
 
-            // matcher 用工具名 / safety 过滤——从 step 信封里取（仅 *ToolApply* step 带这些字段）。
+            // The matcher filters by tool name and safety, which are extracted from the
+            // step envelope (only *ToolApply* steps carry these fields).
             let envelope_json = with_common_header(step.to_envelope(), step.event_name(), &ctx);
             let tool = envelope_json.get("tool").and_then(Value::as_str);
             let safety = envelope_json
@@ -313,7 +344,8 @@ impl HookEngine for DefaultHookEngine {
                 if !entry.matcher.matches_step(tool, safety) {
                     continue;
                 }
-                // 每个 handler 看到的是上一个 handler 改写后的信封 + 通用头。
+                // Each handler sees the envelope as modified by the previous handler,
+                // plus the common headers.
                 let envelope = with_common_header(step.to_envelope(), step.event_name(), &ctx);
                 let timeout = entry.timeout.unwrap_or(DEFAULT_HANDLER_TIMEOUT);
                 let handler_ctx = HookCtx::new(ctx.session_id, ctx.cwd, ctx.cancel.clone());
@@ -336,7 +368,8 @@ impl HookEngine for DefaultHookEngine {
                 };
                 let Some(verdict) = verdict else { continue };
                 match step.apply_verdict(&verdict) {
-                    // 控制轴早退：非 Proceed 即停止 pipeline。
+                    // Early exit on control: anything other than Proceed stops the
+                    // pipeline.
                     Ok(step::HookControl::Proceed) => {}
                     Ok(control) => return control,
                     Err(err) => {
@@ -349,10 +382,13 @@ impl HookEngine for DefaultHookEngine {
     }
 }
 
-/// 把通用头并进 step 专属信封。通用头：`session_id` / `cwd` / `hook_event`。
+/// Merge common headers into the step-specific envelope. Common headers: `session_id` /
+/// `cwd` / `hook_event`.
 ///
-/// step 自身不持有 `HookCtx`（零借用、`Send`），所以通用上下文由引擎在派发时统一补上——
-/// 用户 hook 因此在每个信封里都能拿到 session / cwd / 事件名。step 专属字段优先（不被覆盖）。
+/// The step itself does not hold a `HookCtx` (zero-borrow, `Send`), so the engine fills
+/// in the common context at dispatch time — this ensures every user hook envelope
+/// contains session, cwd, and event name. Step-specific fields take precedence (they are
+/// not overwritten).
 fn with_common_header(envelope: Value, event_name: &str, ctx: &HookCtx<'_>) -> Value {
     let Value::Object(mut map) = envelope else {
         return envelope;
@@ -366,7 +402,8 @@ fn with_common_header(envelope: Value, event_name: &str, ctx: &HookCtx<'_>) -> V
     Value::Object(map)
 }
 
-/// 信封里的 `safety` 字段（snake_case）→ [`SafetyClass`]。未知 / 缺省 → `None`。
+/// The `safety` field (snake_case) from the envelope maps to [`SafetyClass`]; unknown or
+/// missing values yield `None`.
 fn parse_safety(s: &str) -> Option<SafetyClass> {
     match s {
         "read_only" => Some(SafetyClass::ReadOnly),
@@ -377,7 +414,8 @@ fn parse_safety(s: &str) -> Option<SafetyClass> {
     }
 }
 
-// catch_unwind payload → 文本，避免依赖具体 panic 类型
+// Extract a text representation from a `catch_unwind` payload without depending on the
+// concrete panic type.
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
@@ -399,7 +437,8 @@ mod tests {
 
     #[test]
     fn glob_basic() {
-        // 迁移到 globset 后的工具名匹配语义（`.` 非路径分隔符，`*`/`?` 照常）。
+        // Tool name matching semantics after migrating to globset (`.` is not a path
+        // separator; `*`/`?` behave normally).
         assert!(tool_name_matches("*.rs", "main.rs"));
         assert!(tool_name_matches("*", ""));
         assert!(tool_name_matches("a*c", "abc"));
@@ -408,13 +447,13 @@ mod tests {
         assert!(tool_name_matches("???", "abc"));
         assert!(!tool_name_matches("???", "abcd"));
         assert!(tool_name_matches("mcp.*", "mcp.fs.read"));
-        // 非法模式不 panic，当作不匹配。
+        // Invalid patterns do not panic; they are treated as non-matching.
         assert!(!tool_name_matches("[bad", "anything"));
     }
 
-    // ----- step 模型派发（迁移 slice 1）-----
+    // ----- step model dispatch (migrate slice 1) -----
 
-    /// 返回固定 verdict 的 step handler。
+    /// A step handler that returns a fixed verdict.
     struct StubStepHandler {
         verdict: Value,
     }
@@ -458,7 +497,7 @@ mod tests {
         };
         let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
         assert_eq!(control, step::HookControl::Continue);
-        // verdict 的注入落到了 step 上。
+        // The verdict injection landed on the step.
         assert_eq!(step.feedback.len(), 1);
     }
 
@@ -481,7 +520,7 @@ mod tests {
     async fn dispatch_matcher_filters_by_tool() {
         let engine = DefaultHookEngine::new();
         let mut table = HandlerTable::empty();
-        // 只匹配 tool=="edit" 的 handler；step 的 tool 是 "bash" → 不命中。
+        // Only matches handlers where tool=="edit"; the step's tool is "bash" → no match.
         table.push_step(
             "before_tool_apply",
             StepHandlerEntry::new(
@@ -505,7 +544,7 @@ mod tests {
             result: None,
         };
         let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
-        // 不命中 → Proceed。
+        // No match → Proceed.
         assert_eq!(control, step::HookControl::Proceed);
     }
 
@@ -513,7 +552,8 @@ mod tests {
     async fn dispatch_matcher_filters_by_safety() {
         let engine = DefaultHookEngine::new();
         let mut table = HandlerTable::empty();
-        // 只匹配 Destructive 的 handler；step 的 safety 是 ReadOnly → 不命中。
+        // Only match handlers with `Destructive` safety; the step's safety is `ReadOnly`,
+        // so it does not match.
         table.push_step(
             "before_tool_apply",
             StepHandlerEntry::new(
@@ -539,7 +579,7 @@ mod tests {
         let control = engine.dispatch(&mut step, ctx(&session_id, cwd)).await;
         assert_eq!(control, step::HookControl::Proceed);
 
-        // safety 命中（Destructive）→ handler 跑，返回 break。
+        // Safety hit (Destructive) → handler runs, returns break.
         let mut step2 = step::BeforeToolApply {
             tool_name: "bash".to_string(),
             safety: SafetyClass::Destructive,
@@ -553,7 +593,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_merges_common_header() {
         let engine = DefaultHookEngine::new();
-        // 用一个回显信封的 handler 确认通用头被并入。
+        // Use an echo handler to verify that the common header is merged.
         struct EchoHandler {
             seen: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
         }

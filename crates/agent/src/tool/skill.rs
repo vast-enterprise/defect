@@ -1,21 +1,34 @@
-//! `skill`：把一个 skill 的完整说明加载进当前对话。
+//! `skill`: loads the full specification of a skill into the current conversation.
 //!
-//! Skill 是用户配置的可复用提示片段——一段 markdown body 加上同目录下可选的
-//! `scripts/` / `refs/` 资源。模型按 progressive disclosure 分三层看到 skill
-//! Contents:
+//! A skill is a user-configurable reusable prompt fragment — a markdown body plus
+//! optional
+//! `scripts/` / `refs/` resources in the same directory. The model sees skill contents in
+//! three
+//! layers via progressive disclosure:
 //!
-//! - **L1 清单**：所有 skill 的 `name + description`。本工具把它编进自己的
-//!   `description`（与 `spawn_agent` 把 profile catalog 编进 description 同款），
-//!   模型一开机就看得到有哪些 skill 可用。可选地也由
-//!   `crate::hooks::builtin::SkillManifestHook` 注入 system prompt。
-//! - **L2 body**：模型调本工具按 `name` 拉取的 `SKILL.md` 全文，作为 tool result
-//!   进入对话——之后模型**在当前对话里**按说明干活（区别于 `spawn_agent` 派生
-//!   隔离子会话）。
-//! - **L3 附件**：body 里引用的 `scripts/*.sh` / `refs/*.md`，模型用普通 `bash`
-//!   / `read_file` 工具按需读——tool result 里回填了 skill 目录绝对路径供拼接。
+//! - **L1 manifest**: all skills' `name + description`. This tool embeds them into its
+//!   own
+//!   `description` (same pattern as `spawn_agent` embedding the profile catalog), so the
+//!   model
+//!   knows which skills are available from startup. Optionally also injected into the
+//!   system
+//!   prompt by `crate::hooks::builtin::SkillManifestHook`.
+//! - **L2 body**: the full `SKILL.md` fetched by name when the model calls this tool,
+//!   arriving
+//!   as a tool result — the model then works according to the instructions **within the
+//!   current
+//!   conversation** (unlike `spawn_agent` which spawns an isolated sub-session).
+//! - **L3 attachments**: `scripts/*.sh` / `refs/*.md` referenced in the body, read on
+//!   demand by
+//!   the model via ordinary `bash` / `read_file` tools — the tool result includes the
+//!   absolute
+//!   skill directory path for constructing paths.
 //!
-//! 本工具是纯 [`Tool`] 实现，`safety_hint = ReadOnly`（只查内存里已加载的 skill
-//! 索引、不写盘、不出网），与其它内置工具一视同仁。
+//! This tool is a pure [`Tool`] implementation with `safety_hint = ReadOnly` (only
+//! queries the
+//! in-memory loaded skill index, no disk writes, no network access), treated identically
+//! to other
+//! built-in tools.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -35,70 +48,83 @@ use crate::tool::{
     ToolStream,
 };
 
-/// `skill` 工具的名字。
+/// The name of the `skill` tool.
 pub(crate) const SKILL_TOOL_NAME: &str = "skill";
 
-/// skill 的自动激活触发条件（Agent Skills open-standard 的 `triggers` 子表）。
+/// Auto-activation triggers for a skill (the `triggers` sub-table of the Agent Skills
+/// open-standard).
 ///
-/// 定义在 agent 侧、由 `defect-config` 在解析期填充并复用（依赖方向：config →
-/// agent，不能反向）。`globs` 在配置解析期就编译成 [`globset::GlobSet`]——坏
-/// glob 当场 fail-fast，运行期不再 parse；为空时为 `None`。匹配逻辑见
-/// `crate::hooks::builtin::SkillTriggersHook`。
+/// Defined on the agent side, populated and reused by `defect-config` during parsing
+/// (dependency direction: config → agent, not reversible). `globs` is compiled into a
+/// [`globset::GlobSet`] at config parse time—invalid globs fail fast immediately, no
+/// runtime parsing; `None` when no globs are configured. See
+/// `crate::hooks::builtin::SkillTriggersHook` for matching logic.
 #[derive(Debug, Clone, Default)]
 pub struct SkillTriggers {
-    /// 编译好的文件路径 glob 集合；`None` = 未配置 globs。
+    /// Compiled file-path glob set; `None` means no globs were configured.
     pub globs: Option<globset::GlobSet>,
-    /// prompt 关键字（大小写不敏感 substring 匹配）。
+    /// Prompt keywords (case-insensitive substring matching).
     pub keywords: Vec<String>,
 }
 
-/// 一个可被 `skill` 工具加载的 skill（agent 侧表示）。
+/// A skill that can be loaded by the `skill` tool (agent-side representation).
 ///
-/// `defect-config` 的 `SkillSpec` 是配置侧真相源；CLI 装配时投影成本结构再交给
-/// 工具。两边分开是因为 `defect-config` 依赖 `defect-agent`——不能反向依赖成环
-/// （与 [`crate::tool::SubagentProfile`] / `ProfileSpec` 同款边界）。
+/// `SkillSpec` in `defect-config` is the configuration-side source of truth; during CLI
+/// assembly it is projected into this struct before being handed to the tool. The two are
+/// kept separate because `defect-config` depends on `defect-agent` — a reverse dependency
+/// would create a cycle (same boundary as [`crate::tool::SubagentProfile`] /
+/// `ProfileSpec`).
 #[derive(Debug, Clone)]
 pub struct SkillEntry {
-    /// 选择期描述，进 L1 清单（工具 description 的 catalog）。
+    /// Description shown in the selection phase, included in the L1 manifest (the catalog
+    /// of tool descriptions).
     pub description: String,
-    /// `SKILL.md` 去 frontmatter 后的 body 全文——L2 加载时回给模型。
+    /// The full body of `SKILL.md` after stripping frontmatter — returned to the model
+    /// during L2 loading.
     pub body: String,
-    /// skill 目录绝对路径——L2 tool result 里回填，供模型拼 `scripts/` /
-    /// `refs/` 等资源的绝对路径喂给 `bash` / `read_file`。
+    /// Absolute path to the skill directory, backfilled in L2 tool results so the model
+    /// can construct absolute paths to resources like `scripts/` / `refs/` for `bash` /
+    /// `read_file`.
     pub dir: PathBuf,
-    /// `always: true` ⇒ body 在 session 启动直接拼进 system prompt（always-on，
-    /// 见 `crate::hooks::builtin::SkillManifestHook`）。
+    /// `always: true` ⇒ body is directly appended to the system prompt at session start
+    /// (always-on; see `crate::hooks::builtin::SkillManifestHook`).
     pub always: bool,
-    /// 自动激活触发条件（按文件 glob / prompt 关键字），见 [`SkillTriggers`]。
+    /// Automatic activation triggers (by file glob or prompt keyword); see
+    /// [`SkillTriggers`].
     pub triggers: SkillTriggers,
 }
 
-/// `skill` 工具。挂在 `StaticToolRegistry` 上、随 `process_tools` 被所属
-/// `AgentCore` 的各 session 共享一份（**不是**进程全局单例——一个进程里可以装配
-/// 多个 `AgentCore`，各持自己的 skill 索引）。
+/// The `skill` tool. It is registered on `StaticToolRegistry` and shared across sessions
+/// of the owning `AgentCore` via `process_tools` (it is **not** a process-global
+/// singleton—a single process may host multiple `AgentCore` instances, each with its own
+/// skill index).
 pub struct SkillTool {
     schema: ToolSchema,
     skills: Arc<BTreeMap<String, SkillEntry>>,
 }
 
 impl SkillTool {
-    /// 构造一个 `skill` 工具。`skills` 为空时调用方**不应**注册本工具
-    /// （schema 的 `name` enum 会是空集，永远调用失败）——见 [`Self::has_skills`]。
+    /// Constructs a `skill` tool. When `skills` is empty, callers **should not** register
+    /// this tool
+    /// (the schema's `name` enum will be empty, so it will always fail) — see
+    /// [`Self::has_skills`].
     pub fn new(skills: Arc<BTreeMap<String, SkillEntry>>) -> Self {
         let schema = build_schema(&skills);
         Self { schema, skills }
     }
 
-    /// 是否发现到任何 skill。装配方据此决定是否注册本工具。
+    /// Whether any skills were discovered. The assembler uses this to decide whether to
+    /// register this tool.
     pub fn has_skills(skills: &BTreeMap<String, SkillEntry>) -> bool {
         !skills.is_empty()
     }
 }
 
-/// 动态构造 schema：`name` 是发现到的 skill 名的 enum（硬约束），工具
-/// description 内嵌 `- <name>: <description>` 的 catalog（软引导，即 L1 清单）。
-/// 两者缺一不可：光 enum 模型不知用途，光 catalog 模型可能填错名（与
-/// [`crate::tool::SpawnAgentTool`] 的 `build_schema` 同款理由）。
+/// Dynamically builds the schema: `name` is an enum of discovered skill names (hard
+/// constraint), and the tool description embeds a catalog of `- <name>: <description>`
+/// entries (soft guidance, i.e. an L1 manifest). Both are required: the enum alone gives
+/// the model no context for usage, while the catalog alone risks the model misspelling
+/// names (same rationale as [`crate::tool::SpawnAgentTool`]'s `build_schema`).
 fn build_schema(skills: &BTreeMap<String, SkillEntry>) -> ToolSchema {
     let names: Vec<&str> = skills.keys().map(String::as_str).collect();
     let catalog = skills
@@ -142,7 +168,8 @@ impl Tool for SkillTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // 只查内存里已加载的 skill 索引、把 body 文本喂回模型——不写盘、不出网。
+        // Only queries the in-memory skill index and feeds the body text back to the
+        // model — no disk writes, no network access.
         SafetyClass::ReadOnly
     }
 
@@ -181,7 +208,8 @@ impl Tool for SkillTool {
             fields.content = Some(vec![ToolCallContent::Content(Content::new(
                 ContentBlock::Text(TextContent::new(output.clone())),
             ))]);
-            // raw_output 给遥测（langfuse projector 只读 raw_output 作 observation output）。
+            // raw_output is for telemetry (the langfuse projector reads only raw_output
+            // as the observation output).
             fields.raw_output = Some(serde_json::Value::String(output));
             ToolEvent::Completed(fields)
         };
@@ -191,9 +219,9 @@ impl Tool for SkillTool {
     }
 }
 
-/// 拼 L2 加载的 tool result 文本：标题 + 目录提示 + body。目录提示让模型知道
-/// `scripts/` / `refs/` 等资源的绝对路径根（与 opencode 的 "Base directory"
-/// 行同款）。
+/// Compose the tool result text for an L2-loaded skill: title + directory hint + body.
+/// The directory hint tells the model the absolute root for resources like `scripts/` /
+/// `refs/` (analogous to opencode's "Base directory" line).
 fn render_skill(name: &str, skill: &SkillEntry) -> String {
     format!(
         "# Skill: {name}\n\n{body}\n\n\

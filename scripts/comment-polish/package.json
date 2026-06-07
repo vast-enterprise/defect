@@ -1,0 +1,17 @@
+{
+  "name": "comment-polish",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Polish Rust comments into idiomatic English via tree-sitter extraction + DeepSeek.",
+  "bin": {
+    "comment-polish": "src/polish.js"
+  },
+  "scripts": {
+    "polish": "node src/polish.js"
+  },
+  "dependencies": {
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-rust": "^0.21.0"
+  }
+}

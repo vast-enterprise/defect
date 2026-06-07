@@ -1,50 +1,57 @@
-//! `AgentEvent` → Langfuse ingestion 事件的翻译。
+//! Translation of `AgentEvent` into Langfuse ingestion events.
 //!
-//! [`TraceProjector`] 是**有状态、逐 session** 的投影器（与 `defect-storage` 的
-//! `RecordProjector` 同构）。主循环每收到一个 [`AgentEvent`] 调一次
-//! [`TraceProjector::project`]，拿回 0..N 个 [`IngestionEvent`] 交给上报器。
+//! [`TraceProjector`] is a **stateful, per-session** projector (isomorphic to
+//! `defect-storage`'s `RecordProjector`). The main loop calls [`TraceProjector::project`]
+//! for each incoming [`AgentEvent`] and returns 0..N [`IngestionEvent`]s to the reporter.
 //!
-//! ## 层级（每个 turn 一个 trace）
+//! ## Hierarchy (one trace per turn)
 //!
 //! ```text
 //! trace (turn)
-//! └── step (span)                 每轮一个：一次 llm_call + 它触发的工具
+//! └── step (span)                 One per turn: one llm_call + the tools it triggers
 //!     ├── llm_call (generation)
-//!     └── tool (span)             与 llm_call 同为 step 的子节点（兄弟）
+//!     └── tool (span)             Sibling of llm_call under the same step
 //!         └── (spawn_agent) → subagent (span)
-//!             └── step (span)     子 agent 内同构递归
+//!             └── step (span)     Recursive isomorphic structure inside subagent
 //!                 ├── llm_call
 //!                 └── tool / spawn_agent → subagent → ...
 //! ```
 //!
-//! 关键：**step span** 是每轮的容器，`llm_call`（generation）与该轮触发的工具
-//! 都挂在它下面，互为兄弟。这样 generation 的时长回归**纯 LLM 调用**（在
-//! `LlmCallFinished` 收尾，不再延迟到下轮、不再包住工具执行时间）；工具时长落在
-//! step 里。
+//! Key point: the **step span** is the container for each turn. Both `llm_call`
+//! (generation) and the tools triggered in that turn hang under it as siblings. This
+//! makes the generation duration reflect **pure LLM call** time (it ends at
+//! `LlmCallFinished`, no longer delayed to the next turn or wrapping tool execution
+//! time); tool duration lives inside the step.
 //!
-//! ## 递归 subagent（扁平化 ancestor_path）
+//! ## Recursive subagent (flattened ancestor_path)
 //!
-//! [`AgentEvent::Subagent`] 携带一条 `ancestor_path`（顶层 `spawn_agent` 工具调用到
-//! 当前层的 `ToolCallId` 链），`inner` 永远是叶子事件。projector 用这条链**确定性**
-//! 派生所有 span id，故无需逐层 anchor，任意深度同构处理。每个 subagent 层是一个
-//! 独立 **scope**（与顶层 turn 共用同一套 step/gen/tool 投影逻辑）。
+//! [`AgentEvent::Subagent`] carries an `ancestor_path` (a chain of `ToolCallId`s from the
+//! top-level `spawn_agent` tool call to the current layer), and `inner` is always a leaf
+//! event. The projector **deterministically** derives all span ids from this chain, so no
+//! per-layer anchoring is needed; arbitrary depth is handled uniformly. Each subagent
+//! layer is an independent **scope** (sharing the same step/gen/tool projection logic as
+//! the top-level turn).
 //!
-//! ## id 策略
+//! ## ID strategy
 //!
-//! - **traceId**：`TurnStarted` 时生成一次 `Uuid::new_v4()`，turn 内复用。
-//!   **不可**用 `{session}-turn-{seq}` 自增——resume 后会撞 id（见设计文档 §3.5）。
-//! - **scope 前缀**：顶层 = `{trace}`；subagent 路径 `[A,B]` = `{trace}-sub-A-sub-B`。
-//!   subagent span 的 id **就是**它的 scope 前缀。
-//! - **step / generation / tool span id**：派生自 scope 前缀 + 序号 / `ToolCallId`，
-//!   全局唯一且确定性——subagent span 的父（发起它的 tool span）由路径直接算出。
-//! - **anchor**：唯一需要存的状态是**顶层 `spawn_agent` 工具调用 id → trace_id**
-//!   （trace_id 随机不可推导）。同一 turn 的所有 subagent 共享该 trace_id，故只锚顶层。
-//! - **信封 id**：每个 ingestion 事件一个 `Uuid::new_v4()`，供 Langfuse 去重。
+//! - **traceId**: Generated once with `Uuid::new_v4()` at `TurnStarted`, reused within
+//!   the turn. **Must not** use an auto-incrementing `{session}-turn-{seq}` — resuming
+//!   would cause id collisions (see design doc §3.5).
+//! - **scope prefix**: Top-level = `{trace}`; subagent path `[A,B]` =
+//!   `{trace}-sub-A-sub-B`. The subagent span's id **is** its scope prefix.
+//! - **step / generation / tool span id**: Derived from the scope prefix + sequence
+//!   number / `ToolCallId`, globally unique and deterministic — the parent of a subagent
+//!   span (the tool span that spawned it) is computed directly from the path.
+//! - **anchor**: The only state that needs to be stored is the **top-level `spawn_agent`
+//!   tool call id → trace_id** (trace_id is random and not derivable). All subagents in
+//!   the same turn share that trace_id, so only the top-level anchor is needed.
+//! - **envelope id**: One `Uuid::new_v4()` per ingestion event, for Langfuse
+//!   deduplication.
 //!
-//! ## 时间戳
+//! ## Timestamps
 //!
-//! `AgentEvent` 不带时间，调用方传入 `now`（RFC3339 字符串）。projector 不自己
-//! 读时钟，便于测试与确定性。
+//! `AgentEvent` carries no timestamps; the caller passes `now` (an RFC3339 string). The
+//! projector does not read the clock itself, making it easier to test and deterministic.
 
 use std::collections::HashMap;
 
@@ -56,86 +63,100 @@ use defect_agent::llm::{Message, MessageContent, Role, Usage};
 
 use super::model::{EventKind, IngestionEvent, ObservationBody, ObservationLevel, TraceBody};
 
-/// 部署环境标签（写进 trace / observation 的 `environment`）。
+/// Deployment environment label (written into the `environment` field of traces and
+/// observations).
 const DEFAULT_ENVIRONMENT: &str = "production";
-/// 每个 agent turn 对应的 Langfuse trace 名称。
+/// The Langfuse trace name for each agent turn.
 const TRACE_NAME: &str = "turn";
-/// 每轮（一次 llm_call + 它触发的工具）的容器 span 名称。
+/// The container span name for each turn (one `llm_call` plus the tools it triggers).
 const STEP_NAME: &str = "step";
-/// LLM 调用对应的 Langfuse generation 名称。
+/// The name of the Langfuse generation that corresponds to an LLM call.
 const GENERATION_NAME: &str = "llm_call";
-/// `spawn_agent` 工具名（wire 上的字符串）。真相源是
-/// `defect_agent::tool::spawn_agent::SPAWN_AGENT_TOOL_NAME`（`pub(crate)` 不可跨 crate 引），
-/// 这里按 wire 名复制一份——projector 据它把**顶层** spawn_agent 工具调用锚定到 trace_id。
+/// The wire-level name of the `spawn_agent` tool. The canonical source is
+/// `defect_agent::tool::spawn_agent::SPAWN_AGENT_TOOL_NAME` (which is `pub(crate)` and
+/// thus inaccessible across crates),
+/// so this is a copy of the wire name — the projector uses it to anchor **top-level**
+/// `spawn_agent` tool calls to a `trace_id`.
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
-/// subagent 独立 span 的名称前缀（与发起它的工具 span 分开的那一层）。
+/// The name prefix for a subagent's own span (the layer separate from the tool span that
+/// spawned it).
 const SUBAGENT_SPAN_NAME: &str = "subagent";
 
-/// 逐 session 的投影状态。
+/// Per-session projection state.
 pub struct TraceProjector {
     session_id: String,
-    /// 当前**顶层** turn 的元信息；`None` 表示不在 turn 内（TurnStarted 之前 /
-    /// TurnEnded 之后）。注意 subagent 的事件可能在顶层 turn 结束后仍到达（后台），
-    /// 那时 `turn` 已 `None`，但 subagent scope 仍存活、trace_id 经 [`Self::anchors`] 取回。
+    /// Metadata for the current **top-level** turn; `None` when not inside a turn (before
+    /// `TurnStarted` / after `TurnEnded`). Note that subagent events may still arrive (in
+    /// the background) after the top-level turn ends, at which point `turn` is `None`,
+    /// but the subagent scope remains alive and the trace_id is retrieved via
+    /// [`Self::anchors`].
     turn: Option<TurnMeta>,
-    /// 暂存的用户 prompt 文本。主循环**先发 `UserPromptCommitted` 再发 `TurnStarted`**，
-    /// 所以收到 prompt 时 turn 还没建——先存这里，`TurnStarted` 建 turn 时取走。
+    /// Temporarily stores the user prompt text. The main loop emits `UserPromptCommitted`
+    /// **before** `TurnStarted`, so when the prompt arrives the turn has not been created
+    /// yet — it is stashed here and consumed when `TurnStarted` builds the turn.
     pending_input: Option<String>,
-    /// **顶层** `spawn_agent` 工具调用 id → 其所属 trace_id。subagent 事件据
-    /// `ancestor_path[0]` 查它取回 trace_id（trace_id 随机不可推导；同一 turn 的所有
-    /// 嵌套 subagent 共享该 trace_id，故只锚顶层这一跳）。subagent（路径长度 1）结束时清除。
+    /// Top-level `spawn_agent` tool call id → its owning trace_id. Subagent events look
+    /// up the trace_id via `ancestor_path[0]` (trace_id is random and not derivable; all
+    /// nested subagents in the same turn share this trace_id, so only the top-level hop
+    /// is anchored). Cleared when the subagent (path length 1) ends.
     anchors: HashMap<String, String>,
-    /// 所有进行中的 scope：`scope 前缀` → 状态。**session 级**——顶层 turn scope（前缀
-    /// = trace_id）与各 subagent scope（前缀 = `{trace}-sub-...`）共存。subagent scope
-    /// 可能跨 turn 边界存活（后台），故不随 turn 清空，各自在对应 `TurnEnded` 时移除。
+    /// All active scopes: `scope prefix` → state. **Session-level** — top-level turn
+    /// scopes (prefix = `trace_id`) coexist with subagent scopes (prefix =
+    /// `{trace}-sub-...`). Subagent scopes may survive across turn boundaries
+    /// (background), so they are not cleared with the turn; each is removed when its
+    /// corresponding `TurnEnded` fires.
     scopes: HashMap<String, ScopeState>,
 }
 
-/// 当前顶层 turn 的元信息（trace 级，不含 step/gen/tool 投影状态——那些在
-/// `scopes[trace_id]` 这个 scope 里，与 subagent scope 同构）。
+/// Metadata for the current top-level turn (trace-level; does not include step/gen/tool
+/// projection state — those live in `scopes[trace_id]`, which is isomorphic to a subagent
+/// scope).
 struct TurnMeta {
     trace_id: String,
-    /// 用户 prompt 文本，写进 trace input。
+    /// The user prompt text, written into the trace input.
     input: Option<String>,
-    /// 整个 turn 的最终助手文本（写进 trace output）。
+    /// The final assistant text for the entire turn (written into the trace output).
     final_output: String,
 }
 
-/// 一个 scope（顶层 turn 或某 subagent 层）的 step/generation/tool 投影状态。
+/// Projection state for a scope (top-level turn or a subagent layer) of steps,
+/// generations, and tools.
 ///
-/// 顶层与 subagent 共用本结构——这正是"subagent 不过是有亲代的 agent"在 observability
-/// 侧的体现：同一套 step 容器 + generation + tool span 逻辑，仅挂载点（`step_parent`）
-/// 与 id 前缀（`prefix`）不同。
+/// Top-level and subagent scopes share this structure — this is the observability-side
+/// manifestation of "a subagent is just an agent with a parent": the same step container,
+/// generation, and tool span logic, differing only in the mount point (`step_parent`) and
+/// id prefix (`prefix`).
 struct ScopeState {
-    /// id 派生前缀：顶层 = `{trace}`；subagent = `{trace}-sub-A-sub-B`。
-    /// subagent scope 的 `prefix` 同时**就是**其 subagent span 的 id。
+    /// ID prefix: top-level = `{trace}`; subagent = `{trace}-sub-A-sub-B`.
+    /// For a subagent scope, `prefix` is also the subagent span's id.
     prefix: String,
-    /// 本 scope 里 step span 的父 observation：顶层 = `None`（直接挂 trace）；
-    /// subagent = `Some(subagent span id)` = `Some(prefix)`。
+    /// The parent observation for step spans in this scope: top-level = `None` (attached
+    /// directly to the trace); subagent = `Some(subagent span id)` = `Some(prefix)`.
     step_parent: Option<String>,
-    /// 当前进行中的 step span id（`None` = 尚无 llm_call）。
+    /// The currently active step span id (`None` = no `llm_call` yet).
     current_step_id: Option<String>,
-    /// 第几个 step——派生 step id。
+    /// The sequence number of this step, used to derive the step id.
     step_seq: u32,
-    /// 当前 step 里进行中的 generation。
+    /// The current in-progress generation within this step.
     current_gen: Option<PendingGeneration>,
-    /// 工具调用 id → 已分配的 span id（Started/Finished 跨事件配对）。
+    /// Tool call ID → assigned span ID (pairing Started/Finished events).
     tool_spans: HashMap<String, String>,
 }
 
-/// 进行中的 generation 累积状态。收尾（`LlmCallFinished`）时一次性 flush 成
-/// generation-update。
+/// Accumulated state for an in-progress generation. Flushed into a single
+/// generation-update when finalized by `LlmCallFinished`.
 struct PendingGeneration {
     id: String,
     parent_step_id: String,
     model: String,
-    /// 累积的助手回复正文。
+    /// Accumulated assistant reply text.
     output: String,
-    /// 累积的 thinking 文本（放进 generation 的 metadata.reasoning，不进 output）。
+    /// Accumulated thinking text (stored in generation's `metadata.reasoning`, not in
+    /// `output`).
     thinking: String,
-    /// 本次调用的 token 用量（来自 LlmCallFinished.usage）。
+    /// Token usage for this call (from `LlmCallFinished.usage`).
     usage: Usage,
-    /// 失败信息（来自 LlmCallFinished.error）。
+    /// Error message (from `LlmCallFinished.error`).
     error: Option<String>,
 }
 
@@ -153,7 +174,7 @@ impl ScopeState {
 }
 
 impl TraceProjector {
-    /// 新建逐 session 投影器。
+    /// Creates a new per-session projector.
     pub fn new(session_id: impl Into<String>) -> Self {
         Self {
             session_id: session_id.into(),
@@ -164,8 +185,9 @@ impl TraceProjector {
         }
     }
 
-    /// 翻译一个事件为 0..N 个 ingestion 事件。`now` 是 RFC3339 时间戳。
-    /// `new_id` 提供唯一 id（信封 id / trace id）——注入以便测试确定性。
+    /// Translates an event into 0..N ingestion events. `now` is an RFC3339 timestamp.
+    /// `new_id` supplies a unique id (envelope id / trace id) — injected for
+    /// deterministic testing.
     pub fn project(
         &mut self,
         event: AgentEvent,
@@ -222,7 +244,8 @@ impl TraceProjector {
                 let path: Vec<String> = ancestor_path.iter().map(ToString::to_string).collect();
                 self.on_subagent(&path, agent_type, *inner, now, new_id)
             }
-            // 不上报：进度增量、权限审计（本期不入 langfuse）。
+            // Do not report: progress increments and permission audits (not included in
+            // langfuse for this release).
             AgentEvent::ToolCallProgress { .. }
             | AgentEvent::PolicyDecision { .. }
             | AgentEvent::PermissionResolved { .. } => Vec::new(),
@@ -230,7 +253,7 @@ impl TraceProjector {
         }
     }
 
-    // ---- 顶层 turn 事件 ----
+    // ---- Top-level turn events ----
 
     fn on_turn_started(
         &mut self,
@@ -243,13 +266,15 @@ impl TraceProjector {
             id: trace_id.clone(),
             name: Some(TRACE_NAME.into()),
             session_id: Some(self.session_id.clone()),
-            // trace-create 时就带上 input，UI 立刻能看到用户输入（不必等 TurnEnded）。
+            // Include input at trace creation so the UI can immediately display user
+            // input without waiting for TurnEnded.
             input: input.clone().map(serde_json::Value::String),
             environment: Some(DEFAULT_ENVIRONMENT.into()),
             timestamp: Some(now.to_string()),
             ..Default::default()
         };
-        // 顶层 scope：前缀 = trace_id，step 直接挂 trace（step_parent = None）。
+        // Top-level scope: prefix is `trace_id`, steps are attached directly to the trace
+        // (`step_parent` is `None`).
         self.scopes
             .insert(trace_id.clone(), ScopeState::new(trace_id.clone(), None));
         self.turn = Some(TurnMeta {
@@ -341,8 +366,9 @@ impl TraceProjector {
         let Some(trace_id) = self.turn.as_ref().map(|t| t.trace_id.clone()) else {
             return Vec::new();
         };
-        // 顶层 spawn_agent 工具调用：锚定 trace_id，供后续（含后台、跨 turn）subagent
-        // 事件经 ancestor_path[0] 取回 trace_id。
+        // Top-level `spawn_agent` tool call: anchor the `trace_id` so that later subagent
+        // events (including background and cross-turn) can retrieve it via
+        // `ancestor_path[0]`.
         if name == SPAWN_AGENT_TOOL_NAME {
             self.anchors.insert(tool_call_id.clone(), trace_id.clone());
         }
@@ -376,9 +402,11 @@ impl TraceProjector {
         scope_tool_finished(scope, &trace_id, tool_call_id, fields, now, new_id)
     }
 
-    /// `cleared` 为 `Some` 表示微压缩（清理 tool_result，无 LLM）；`None` 表示全量
-    /// 摘要压缩。两者投成同形观测，仅 name/metadata 区分。压缩是 turn 级、跨 step 的
-    /// 操作（不属某次 llm_call），故直接挂 trace（无 parent）。
+    /// When `cleared` is `Some`, a micro-compression (clearing `tool_result` without LLM
+    /// involvement) is performed; when `None`, a full summary compression is done. Both
+    /// produce structurally identical observations, differing only in `name`/`metadata`.
+    /// Compression is a turn-level, cross-step operation (not part of any single
+    /// `llm_call`), so it is attached directly to the trace (no parent).
     fn on_context_compressed(
         &mut self,
         tokens_before: u64,
@@ -430,7 +458,8 @@ impl TraceProjector {
         };
         let trace_id = turn.trace_id.clone();
         let mut events = Vec::new();
-        // 收尾顶层 scope：flush 仍进行中的 generation + 关闭当前 step，然后移除 scope。
+        // Finalize the top-level scope: flush any in-flight generation, close the current
+        // step, then remove the scope.
         if let Some(mut scope) = self.scopes.remove(&trace_id) {
             events.extend(flush_generation(&mut scope, &trace_id, now, new_id));
             events.extend(close_current_step(&mut scope, &trace_id, now, new_id));
@@ -458,23 +487,29 @@ impl TraceProjector {
         events.push(IngestionEvent::trace(
             new_id(),
             now.to_string(),
-            // 同 trace_id 二次发送 = 更新（合并 endTime/output/metadata）。
+            // A second send with the same trace_id acts as an update (merging
+            // endTime/output/metadata).
             EventKind::TraceCreate,
             &body,
         ));
         events
     }
 
-    // ---- subagent 事件（任意深度，同构）----
+    // ---- subagent events (arbitrary depth, homogeneous) ----
 
-    /// 处理一个 subagent 子 turn 的**叶子**事件（`AgentEvent::Subagent` 解包后的 `inner`）。
+    /// Processes a **leaf** event of a subagent child turn (the `inner` after unwrapping
+    /// `AgentEvent::Subagent`).
     ///
-    /// `path` = 从顶层 `spawn_agent` 工具调用到当前层的 `ToolCallId` 链。trace_id 经
-    /// `anchors[path[0]]` 取回；scope 前缀与 subagent span 的父（发起它的 tool span）由
-    /// `path` 确定性派生。首次见到某 path 时懒创建其 subagent span + scope；之后把 inner
-    /// 投到该 scope（与顶层共用 step/gen/tool 逻辑）。
+    /// `path` is the chain of `ToolCallId`s from the top-level `spawn_agent` tool call
+    /// down to the current layer. The `trace_id` is retrieved via `anchors[path[0]]`; the
+    /// scope prefix and the parent of the subagent span (the tool span that spawned it)
+    /// are deterministically derived from `path`. On first encounter with a given `path`,
+    /// lazily create its subagent span and scope; subsequent `inner` events are
+    /// dispatched into that scope (reusing the same step/gen/tool logic as the top
+    /// level).
     ///
-    /// 找不到顶层 anchor（从未见过那个 spawn_agent 工具调用）时丢弃——不造孤儿。
+    /// If no top-level anchor is found (the `spawn_agent` tool call was never seen), the
+    /// event is dropped — no orphans are created.
     fn on_subagent(
         &mut self,
         path: &[String],
@@ -487,13 +522,15 @@ impl TraceProjector {
             return Vec::new();
         };
         let Some(trace_id) = self.anchors.get(first).cloned() else {
-            // 没有顶层锚点：从未见过这个 spawn_agent 工具调用——丢弃，不造孤儿。
+            // No top-level anchor: this `spawn_agent` tool call has never been seen
+            // before — drop it, don't create an orphan.
             return Vec::new();
         };
         let prefix = scope_prefix(&trace_id, path);
 
         let mut events = Vec::new();
-        // 首次见到该 path：懒创建独立 subagent span（父 = 发起它的 tool span，由 path 派生）。
+        // First time seeing this path: lazily create a dedicated subagent span (parent =
+        // the tool span that initiated it, derived from path).
         if !self.scopes.contains_key(&prefix) {
             let parent_tool = parent_tool_span_id(&trace_id, path);
             let mut meta = serde_json::Map::new();
@@ -514,7 +551,7 @@ impl TraceProjector {
                 EventKind::SpanCreate,
                 &body,
             ));
-            // subagent scope：step 挂在这个 subagent span（= prefix）下。
+            // Subagent scope: the step is attached under this subagent span (= prefix).
             self.scopes.insert(
                 prefix.clone(),
                 ScopeState::new(prefix.clone(), Some(prefix.clone())),
@@ -578,8 +615,9 @@ impl TraceProjector {
                     new_id,
                 ));
             }
-            // 子 turn 结束：收尾进行中的 generation + 关闭当前 step + 关闭 subagent span，
-            // 清掉 session 级 scope；顶层那一跳（path 长度 1）的 anchor 也清掉。
+            // Sub-turn ended: finalize the in-progress generation, close the current
+            // step, close the subagent span, and clear the session-level scope; also
+            // clear the anchor for the top-level hop (path length 1).
             AgentEvent::TurnEnded { .. } => {
                 events.extend(flush_generation(scope, &trace_id, now, new_id));
                 events.extend(close_current_step(scope, &trace_id, now, new_id));
@@ -601,16 +639,18 @@ impl TraceProjector {
                     self.anchors.remove(first);
                 }
             }
-            // 子 turn 的其余事件（TurnStarted / UserPromptCommitted / 进度 / 审计）不单独上报。
+            // Remaining sub-turn events (TurnStarted, UserPromptCommitted, progress,
+            // audit) are not reported individually.
             _ => {}
         }
         events
     }
 }
 
-// ---- scope 通用投影（顶层 turn 与 subagent 共用）----
+// ---- scope generic projection (shared by top-level turn and subagent) ----
 
-/// 一次 LLM 调用开始：收尾上一个 step（若有）→ 开新 step → 在新 step 下建 generation。
+/// LLM call started: finalize the previous step (if any) → open a new step → create a
+/// generation under the new step.
 fn scope_llm_started(
     scope: &mut ScopeState,
     trace_id: &str,
@@ -620,13 +660,15 @@ fn scope_llm_started(
     now: &str,
     new_id: &mut dyn FnMut() -> String,
 ) -> Vec<IngestionEvent> {
-    // 防御：上一个 generation 理应已在它的 LlmCallFinished 收尾（gen 时长 = 纯 LLM）；
-    // 若仍在则先 flush，保证 create 先于 update。
+    // Defensive: the previous generation should already have been finalized by its
+    // `LlmCallFinished` (generation duration = pure LLM time); if it is still active,
+    // flush it first to ensure `create` precedes `update`.
     let mut events = flush_generation(scope, trace_id, now, new_id);
-    // 收尾上一个 step（它含上一次 llm_call + 那轮触发的工具）。
+    // Close the previous step (which includes the last llm_call and the tools triggered
+    // in that round).
     events.extend(close_current_step(scope, trace_id, now, new_id));
 
-    // 开新 step。
+    // Start a new step.
     scope.step_seq += 1;
     let step_id = format!("{}-step-{}", scope.prefix, scope.step_seq);
     scope.current_step_id = Some(step_id.clone());
@@ -646,7 +688,7 @@ fn scope_llm_started(
         &step_body,
     ));
 
-    // generation 挂在新 step 下。
+    // Attach the generation under the new step.
     let gen_id = format!("{step_id}-gen");
     scope.current_gen = Some(PendingGeneration {
         id: gen_id.clone(),
@@ -666,7 +708,8 @@ fn scope_llm_started(
         name: Some(GENERATION_NAME.into()),
         model: Some(model),
         start_time: Some(now.to_string()),
-        // input = 标准 chat messages 数组（system 作为第一条 {role:"system"}）。
+        // input is the standard chat messages array, with system as the first entry
+        // {role:"system"}.
         input: Some(request_to_input(request)),
         metadata: Some(serde_json::Value::Object(meta)),
         environment: Some(DEFAULT_ENVIRONMENT.into()),
@@ -681,7 +724,8 @@ fn scope_llm_started(
     events
 }
 
-/// 记录 LlmCallFinished 的 usage / error 到当前 generation（收尾时写出）。
+/// Record usage/error from `LlmCallFinished` into the current generation (written out at
+/// finalization).
 fn note_llm_finished(scope: &mut ScopeState, usage: Usage, error: Option<String>) {
     if let Some(pg) = scope.current_gen.as_mut() {
         pg.usage = usage;
@@ -691,9 +735,11 @@ fn note_llm_finished(scope: &mut ScopeState, usage: Usage, error: Option<String>
     }
 }
 
-/// 收尾当前 generation：output / thinking / usage / endTime → generation-update。
-/// 无进行中 generation 时 no-op。在 `LlmCallFinished`（成功路径流已 drain，output/
-/// thinking 已到齐）调用——generation 时长 = 纯 LLM 调用，不含工具执行。
+/// Finalize the current generation: output, thinking, usage, and endTime are written into
+/// a generation-update event. No-op if there is no ongoing generation. Called from
+/// `LlmCallFinished` (on the success path, after the stream has been drained and
+/// output/thinking are fully collected) — the generation duration covers only the pure
+/// LLM call, excluding tool execution.
 fn flush_generation(
     scope: &mut ScopeState,
     trace_id: &str,
@@ -705,7 +751,8 @@ fn flush_generation(
     };
     let mut meta = serde_json::Map::new();
     if !pg.thinking.is_empty() {
-        // thinking/reasoning 没有 ingestion 专用字段——放 metadata，不污染 output。
+        // There is no dedicated ingestion field for thinking/reasoning; store it in
+        // metadata to avoid polluting output.
         meta.insert("reasoning".into(), serde_json::Value::String(pg.thinking));
     }
     let body = ObservationBody {
@@ -730,7 +777,7 @@ fn flush_generation(
     )]
 }
 
-/// 关闭当前 step span（写 end_time）。无进行中 step 时 no-op。
+/// Close the current step span (write `end_time`). No-op if no step is in progress.
 fn close_current_step(
     scope: &mut ScopeState,
     trace_id: &str,
@@ -754,7 +801,7 @@ fn close_current_step(
     )]
 }
 
-/// 工具调用开始 → span-create，挂在当前 step 下（与 llm_call 互为兄弟）。
+/// Tool call start → span-create, attached under the current step (sibling to llm_call).
 fn scope_tool_started(
     scope: &mut ScopeState,
     trace_id: &str,
@@ -771,8 +818,9 @@ fn scope_tool_started(
     let body = ObservationBody {
         id: span_id,
         trace_id: trace_id.to_string(),
-        // 工具挂在当前 step 下；理论上工具调用恒在某次 llm_call 之后，故 step 必存在。
-        // 防御性地允许 None（乱序 / 无 step）——退化为直接挂 trace。
+        // Tool calls are always attached to the current step; in theory, a tool call
+        // always follows an `llm_call`, so the step must exist. Defensively allow `None`
+        // (out-of-order / no step) — fall back to attaching directly to the trace.
         parent_observation_id: scope.current_step_id.clone(),
         name: Some(name),
         start_time: Some(now.to_string()),
@@ -788,7 +836,7 @@ fn scope_tool_started(
     )]
 }
 
-/// 工具调用结束 → span-update（endTime + output + level）。
+/// Tool call finished → span-update (endTime + output + level).
 fn scope_tool_finished(
     scope: &mut ScopeState,
     trace_id: &str,
@@ -797,7 +845,8 @@ fn scope_tool_finished(
     now: &str,
     new_id: &mut dyn FnMut() -> String,
 ) -> Vec<IngestionEvent> {
-    // 取回 Started 时分配的 span id；缺失（乱序）则现派生一个。
+    // Retrieve the span id assigned at Started; if missing (out of order), derive a new
+    // one.
     let span_id = scope
         .tool_spans
         .remove(tool_call_id)
@@ -819,10 +868,11 @@ fn scope_tool_finished(
     )]
 }
 
-// ---- id 派生 ----
+// ---- id derivation ----
 
-/// 某 scope 的 id 前缀：顶层（path 空）= `{trace}`；subagent 路径 `[A,B]` =
-/// `{trace}-sub-A-sub-B`。subagent scope 的前缀同时就是其 subagent span 的 id。
+/// The id prefix for a scope: top-level (empty path) = `{trace}`; subagent path `[A,B]` =
+/// `{trace}-sub-A-sub-B`. The subagent scope's prefix is also the id of its subagent
+/// span.
 fn scope_prefix(trace_id: &str, path: &[String]) -> String {
     let mut s = trace_id.to_string();
     for id in path {
@@ -832,16 +882,19 @@ fn scope_prefix(trace_id: &str, path: &[String]) -> String {
     s
 }
 
-/// 一个 subagent span 的父 observation（发起它的 `spawn_agent` 工具 span）id。
-/// = `{父 scope 前缀}-tool-{该 subagent 的发起 tool_call_id}`。`path` 非空。
+/// The parent observation id for a subagent span (the `spawn_agent` tool span that
+/// initiated it).
+/// Format: `{parent scope prefix}-tool-{subagent's initiating tool_call_id}`. `path` is
+/// non-empty.
 fn parent_tool_span_id(trace_id: &str, path: &[String]) -> String {
     let (last, parent_path) = path.split_last().expect("path is non-empty");
     format!("{}-tool-{}", scope_prefix(trace_id, parent_path), last)
 }
 
-// ---- 数据转换 helper ----
+// ---- data conversion helpers ----
 
-/// 把 [`Usage`] 转成 langfuse `usageDetails` map。全 None 时返回 None（不上报）。
+/// Converts a [`Usage`] into a langfuse `usageDetails` map. Returns `None` (no report)
+/// when all fields are `None`.
 fn usage_to_details(usage: &Usage) -> Option<serde_json::Map<String, serde_json::Value>> {
     let mut map = serde_json::Map::new();
     if let Some(v) = usage.input_tokens {
@@ -859,7 +912,7 @@ fn usage_to_details(usage: &Usage) -> Option<serde_json::Map<String, serde_json:
     (!map.is_empty()).then_some(map)
 }
 
-/// 拼接 ContentBlock 列表里的文本（忽略非文本块）。
+/// Concatenates text from `ContentBlock` items in a list, ignoring non-text blocks.
 fn content_text(content: &[ContentBlock]) -> String {
     let mut out = String::new();
     for block in content {
@@ -870,11 +923,13 @@ fn content_text(content: &[ContentBlock]) -> String {
     out
 }
 
-/// 把请求快照还原成 langfuse generation 的标准 `input`：chat messages 数组。
+/// Reconstruct the request snapshot into the standard `input` for a Langfuse generation:
+/// an array of chat messages.
 ///
-/// system prompt 作为第一条 `{role:"system"}`，随后是完整 messages 历史。
-/// 这是 Langfuse SDK 的标准格式（见 observation-types 文档）——UI 能渲染成
-/// 对话气泡、支持 playground 重放。
+/// The system prompt becomes the first entry `{role:"system"}`, followed by the full
+/// message history.
+/// This matches the Langfuse SDK's standard format (see observation-types docs) — the UI
+/// renders it as conversation bubbles and supports playground replay.
 fn request_to_input(request: &LlmRequestSnapshot) -> serde_json::Value {
     let mut messages: Vec<serde_json::Value> = Vec::new();
     if let Some(system) = &request.system {
@@ -886,15 +941,17 @@ fn request_to_input(request: &LlmRequestSnapshot) -> serde_json::Value {
     serde_json::Value::Array(messages)
 }
 
-/// 单条 [`Message`] → langfuse `{role, content}`。content 把多模态块降级成
-/// 文本 / 结构化片段（langfuse input 接受任意 JSON，UI 尽力渲染）。
+/// Converts a single [`Message`] to a langfuse `{role, content}` object. The content
+/// field collapses multimodal blocks into text or structured fragments (langfuse input
+/// accepts arbitrary JSON, and the UI renders it as best it can).
 fn message_to_value(msg: &Message) -> serde_json::Value {
     let role = match msg.role {
         Role::User => "user",
         Role::Assistant => "assistant",
     };
     let parts: Vec<serde_json::Value> = msg.content.iter().map(content_to_value).collect();
-    // 单条纯文本时直接用字符串 content（最常见、最易读）；否则用数组。
+    // Use a plain string for single text content (most common and readable); otherwise
+    // use an array.
     let content = match parts.as_slice() {
         [serde_json::Value::String(s)] => serde_json::Value::String(s.clone()),
         _ => serde_json::Value::Array(parts),
@@ -902,7 +959,7 @@ fn message_to_value(msg: &Message) -> serde_json::Value {
     serde_json::json!({ "role": role, "content": content })
 }
 
-/// [`MessageContent`] → langfuse content 片段。
+/// Converts [`MessageContent`] to a Langfuse content fragment.
 fn content_to_value(content: &MessageContent) -> serde_json::Value {
     match content {
         MessageContent::Text { text } => serde_json::Value::String(text.clone()),
@@ -931,7 +988,7 @@ fn content_to_value(content: &MessageContent) -> serde_json::Value {
             "provider_id": provider_id,
             "kind": format!("{kind:?}"),
         }),
-        // MessageContent 是 #[non_exhaustive]：未来新增的块降级成一个标记。
+        // `MessageContent` is `#[non_exhaustive]`; future variants degrade to a marker.
         _ => serde_json::json!({ "type": "unknown" }),
     }
 }

@@ -31,7 +31,7 @@ fn text(t: &str) -> MessageContent {
     }
 }
 
-/// 合法配对序列：原样返回（同一 Arc，不重建）。
+/// Valid paired sequence: returned as-is (same Arc, no rebuild).
 #[test]
 fn paired_sequence_unchanged() {
     let input = vec![
@@ -43,17 +43,18 @@ fn paired_sequence_unchanged() {
     assert_eq!(out, input);
 }
 
-/// 孤儿 tool_use（无对应 result）：在该 assistant 之后补一条 error tool_result。
+/// Orphan tool_use (no matching result): inject an error tool_result after the assistant
+/// message.
 #[test]
 fn orphan_tool_use_gets_synthetic_result() {
     let input = vec![
         msg(Role::User, vec![text("hi")]),
         msg(Role::Assistant, vec![tool_use("a")]),
-        // 没有 a 的 result —— turn 在工具执行中途被中断。
+        // No result for `a` — the turn was interrupted mid-tool-execution.
     ];
     let out = sanitize_tool_pairing(input);
     assert_eq!(out.len(), 3);
-    // 补的那条紧跟在 assistant 之后。
+    // The synthetic entry follows immediately after the assistant message.
     let MessageContent::ToolResult {
         tool_use_id,
         is_error,
@@ -67,7 +68,8 @@ fn orphan_tool_use_gets_synthetic_result() {
     assert_eq!(out[2].role, Role::User);
 }
 
-/// 多个孤儿在同一条 assistant 里：合并补一条含多个 result 的 user 消息。
+/// Multiple orphans in the same assistant message: merge into a single user message
+/// containing multiple results.
 #[test]
 fn multiple_orphans_in_one_assistant() {
     let input = vec![msg(Role::Assistant, vec![tool_use("a"), tool_use("b")])];
@@ -82,14 +84,14 @@ fn multiple_orphans_in_one_assistant() {
     }
 }
 
-/// 部分配对：只补缺的那个，已配对的不动。
+/// Partial pairing: only fill the missing one; leave already paired ones unchanged.
 #[test]
 fn only_missing_one_is_filled() {
     let input = vec![
         msg(Role::Assistant, vec![tool_use("a")]),
         msg(Role::User, vec![tool_result("a")]),
         msg(Role::Assistant, vec![tool_use("b")]),
-        // b 无 result。
+        // b has no result.
     ];
     let out = sanitize_tool_pairing(input);
     assert_eq!(out.len(), 4);
@@ -99,7 +101,8 @@ fn only_missing_one_is_filled() {
     assert_eq!(tool_use_id, "b");
 }
 
-/// result 在序列中"全局存在"（即便不严格紧邻）也算已满足，不重复补。
+/// A result is considered satisfied if it exists anywhere in the sequence (even if not
+/// strictly adjacent); no duplicate is inserted.
 #[test]
 fn globally_satisfied_not_duplicated() {
     let input = vec![
@@ -111,7 +114,7 @@ fn globally_satisfied_not_duplicated() {
     assert_eq!(out.len(), 2);
 }
 
-/// 空序列 / 无 tool_use：原样返回。
+/// Empty sequence / no tool_use: returned unchanged.
 #[test]
 fn no_tool_use_unchanged() {
     let input = vec![

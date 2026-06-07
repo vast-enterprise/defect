@@ -1,10 +1,11 @@
-//! 装配 `process_tools` registry。
+//! Assembles the `process_tools` registry.
 //!
-//! 这里组的工具（bash / fs / fetch / search / skill / spawn_agent 等）一次性挂在
-//! [`StaticToolRegistry`] 上，作为某个 `AgentCore` 实例的 `process_tools`、被该
-//! core 的各 session 共享一份——**不是进程全局单例**（把 defect 当库引用时一个
-//! 进程可装配多个 `AgentCore`，各持自己的一份）。MCP 工具走 session-level
-//! [`McpToolFactory`](defect_mcp::McpToolFactory) 在 `mcp_servers` 模块里组装。
+//! The tools grouped here (bash / fs / fetch / search / skill / spawn_agent, etc.) are
+//! mounted once on a [`StaticToolRegistry`] as the `process_tools` of an `AgentCore`
+//! instance, shared across all sessions of that core — **not a process-global singleton**
+//! (when using defect as a library, a single process may have multiple `AgentCore`
+//! instances, each with its own copy). MCP tools go through the session-level
+//! [`McpToolFactory`](defect_mcp::McpToolFactory) assembled in the `mcp_servers` module.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -23,11 +24,12 @@ use defect_tools::{BashTool, EditFileTool, FetchTool, ReadFileTool, SearchTool, 
 
 use crate::hooks::{HookEngineBuildError, HookEngineCtx, build_engine_arc};
 
-/// 按 `[tools]` 段装配 `process_tools` 工具集合（随 `AgentCore` 实例、跨该 core
-/// 的 session 共享）。
+/// Assembles the `process_tools` tool set from the `[tools]` section (shared across
+/// sessions for a given `AgentCore` instance).
 ///
-/// `fetch` / `search` 通过 `enabled` 字段单独控制；本地 `search` 工具
-/// 与 hosted `web_search` capability 完全独立——两者可同时启用。
+/// `fetch` / `search` are individually controlled via the `enabled` field; the local
+/// `search` tool is completely independent from the hosted `web_search` capability — both
+/// can be enabled simultaneously.
 pub fn build_process_tools(config: &LoadedConfig) -> Arc<dyn ToolRegistry> {
     let mut builder = StaticToolRegistry::builder()
         .insert(Arc::new(BashTool::from_config(
@@ -51,12 +53,14 @@ pub fn build_process_tools(config: &LoadedConfig) -> Arc<dyn ToolRegistry> {
     Arc::new(builder.build())
 }
 
-/// 按白名单从 base 工具集裁子集，用于顶层 `--profile`（把整个会话跑成某个
-/// profile）。unknown 工具名 hard error（fail loud）。`spawn_agent` 即便在
-/// 白名单里也会被排除——顶层 profile 是叶子 agent，不再派生子 agent。
+/// Filters the base tool set to a subset according to an allowlist, for use with the
+/// top-level `--profile` (which runs the entire session as a single profile). Unknown
+/// tool names are a hard error (fail loud). `spawn_agent` is excluded even if present in
+/// the allowlist — a top-level profile is a leaf agent and does not spawn child agents.
 ///
 /// # Errors
-/// profile 的 `allow` 含 base 工具集里不存在的名字时返回 `Err(name)`。
+/// Returns `Err(name)` if the profile's `allow` contains a name not present in the base
+/// tool set.
 pub fn filter_tools_by_allowlist(
     base: &Arc<dyn ToolRegistry>,
     allow: &[String],
@@ -74,18 +78,22 @@ pub fn filter_tools_by_allowlist(
     Ok(Arc::new(builder.build()))
 }
 
-/// 把 `defect-config` 的 [`ProfileSpec`] 投影成 agent 侧 [`SubagentProfile`]，
-/// 顺带把每个 profile 自己声明的 `[hooks]` 编译成 hook 引擎注入。
+/// Projects [`ProfileSpec`] from `defect-config` into the agent-side [`SubagentProfile`],
+/// and compiles each profile's declared `[hooks]` into a hook engine injection.
 ///
-/// 两边分开是因为 `defect-config` 依赖 `defect-agent`（不能反向依赖成环）；
-/// CLI 在装配边界做这一次投影。hook 引擎在此装配是因为它需要 builtin 注册表
-/// 与 provider registry（与主 session 的 hook 装配同源，见 [`crate::hooks`]）。
+/// The split exists because `defect-config` depends on `defect-agent` (a reverse
+/// dependency would create a cycle); the CLI performs this projection at the assembly
+/// boundary. The hook engine is assembled here because it needs the builtin registry and
+/// provider registry (same origin as the main session's hook assembly, see
+/// [`crate::hooks`]).
 ///
-/// profile 的 `[hooks]` 为空 ⇒ `hooks: None`（子 agent 无钩子，行为同改动前）。
+/// An empty `[hooks]` in a profile ⇒ `hooks: None` (the sub-agent has no hooks, matching
+/// pre-change behavior).
 ///
 /// # Errors
-/// 任一 profile 的 hook 引擎装配失败（未知 builtin / prompt hook 引用未注册
-/// model 等）即 hard fail，错误里带上 profile 名定位。
+/// Hard-fails if hook engine assembly fails for any profile (unknown builtin, prompt hook
+/// reference to an unregistered model, etc.). The error includes the profile name for
+/// identification.
 fn project_profiles(
     specs: &BTreeMap<String, ProfileSpec>,
     builtins: &BuiltinRegistry,
@@ -120,7 +128,8 @@ fn project_profiles(
         .collect()
 }
 
-/// 某个 subagent profile 的 hook 引擎装配失败。带上 profile 名定位。
+/// Hook engine build failed for a subagent profile; include the profile name for
+/// identification.
 #[derive(Debug, thiserror::Error)]
 #[error("subagent profile `{profile}` hook engine build failed: {source}")]
 pub struct ProfileHookBuildError {
@@ -129,8 +138,9 @@ pub struct ProfileHookBuildError {
     pub source: HookEngineBuildError,
 }
 
-/// 把 `defect-config` 的 [`SkillSpec`] 投影成 agent 侧 [`SkillEntry`]——与
-/// `project_profiles` 同款跨 crate 装配边界投影。
+/// Project [`SkillSpec`] from `defect-config` into the agent-side [`SkillEntry`],
+/// mirroring the cross-crate assembly-boundary projection pattern used in
+/// `project_profiles`.
 pub fn project_skills(specs: &BTreeMap<String, SkillSpec>) -> BTreeMap<String, SkillEntry> {
     specs
         .iter()
@@ -149,30 +159,36 @@ pub fn project_skills(specs: &BTreeMap<String, SkillSpec>) -> BTreeMap<String, S
         .collect()
 }
 
-/// 装配进程工具集，并在发现到 profile / skill 时分别叠上 `spawn_agent` /
-/// `skill` 工具。
+/// Assembles the process tool set, overlaying `spawn_agent` and `skill` tools when
+/// profiles or skills are present.
 ///
-/// 组合方式：先建 base 工具集（bash/fs/fetch/search），把 `spawn_agent`
-/// （发现到任意 profile 时）与 `skill`（发现到任意 skill 时）放进一份 overlay
-/// registry，用 [`CompositeRegistry`] 叠在 base 之上。
+/// Composition: first build the base tool set (bash/fs/fetch/search), then place
+/// `spawn_agent` (when any profile is found) and `skill` (when any skill is found) into
+/// an overlay registry, and combine them with [`CompositeRegistry`] on top of the base.
 ///
-/// - `spawn_agent` 持有的"裁子集来源"是 **base 工具集**（不含这些 overlay
-///   工具），所以子 agent 结构性拿不到 spawn_agent——禁递归；也拿不到 skill
-///   （skill 是顶层 agent 的能力，子 agent 走自己的 profile prompt）；同样拿不到
-///   `inspect_background_task` / `cancel_background_task`（后台任务表是顶层 session
-///   的，子 agent 嵌套 turn 的 `ToolContext::background` 为 `None`）。
-/// - profile 与 skill 都空时不叠 overlay，返回纯 base。
+/// - `spawn_agent`'s "child tool source" is the **base tool set** (without these overlay
+///   tools), so child agents structurally cannot access `spawn_agent`—preventing
+///   recursion; they also cannot access `skill` (skill is a top-level agent capability;
+///   child agents use their own profile prompt); similarly they cannot access
+///   `inspect_background_task` / `cancel_background_task` (the background task table
+///   belongs to the top-level session, and child agents' nested turns have
+///   `ToolContext::background` as `None`).
+/// - When both profiles and skills are empty, no overlay is applied and the pure base is
+///   returned.
 ///
-/// `base_prompt` 继承给子 agent（"你是会用工具的 agent"那段底座）；profile
-/// 的角色 prompt 另外叠在其后。
+/// `base_prompt` is inherited by child agents (the "you are an agent that uses tools"
+/// base prompt); the profile's role prompt is appended separately.
 ///
-/// `builtins` / `hook_rt` 供把每个 profile 自己的 `[hooks]` 编译成 hook 引擎
-/// （见 `project_profiles`）——子 agent 的钩子是它身份的一部分，不从父继承。
+/// `builtins` / `hook_rt` are used to compile each profile's `[hooks]` into a hook engine
+/// (see `project_profiles`)—a child agent's hooks are part of its identity and are not
+/// inherited from the parent.
 ///
 /// # Errors
-/// 任一 profile 的 hook 引擎装配失败即 hard fail（[`ProfileHookBuildError`]）。
-// 装配边界函数：参数都是 AgentCore 各独立组件，拆成 struct 反而割裂调用方
-// （cli.rs 那一处把它们逐个传入），故就地多带两个 hook 装配依赖。
+/// If any profile's hook engine fails to build, it is a hard failure
+/// ([`ProfileHookBuildError`]).
+// This is a boundary assembly function: its parameters are the individual components of
+// `AgentCore`; extracting them into a struct would fragment the call site (in `cli.rs`,
+// they are passed one by one), so two extra hook-assembly dependencies are kept inline.
 #[allow(clippy::too_many_arguments)]
 pub fn build_process_tools_with_subagents(
     config: &LoadedConfig,
@@ -202,9 +218,11 @@ pub fn build_process_tools_with_subagents(
             base_prompt,
         );
         overlay = overlay.insert(Arc::new(spawn));
-        // 后台任务控制面：查进度 / 提前中断。与 spawn_agent 同档——只有能派生后台
-        // subagent（has_profiles）时才有意义，且同样只叠进 overlay、不进子 agent 的
-        // 裁子集来源，故子 agent 结构性够不着（与禁递归同思路）。
+        // Background task control surface: query progress / early cancellation. Same tier
+        // as `spawn_agent` — only meaningful when the agent can spawn background
+        // subagents (`has_profiles`), and likewise only inserted into the overlay, not
+        // into the subagent's tool subset source, so subagents structurally cannot reach
+        // it (same reasoning as disabling recursion).
         overlay = overlay.insert(Arc::new(InspectBackgroundTaskTool::new()));
         overlay = overlay.insert(Arc::new(CancelBackgroundTaskTool::new()));
     }

@@ -84,13 +84,13 @@ fn ask_writes_remembers_allow_always() {
     let cwd = PathBuf::from("/");
     let args = json!({});
 
-    // 先来一次 Ask
+    // First, ask once
     assert!(matches!(
         policy.classify(ctx("bash", SafetyClass::Destructive, &args, &cwd)),
         PolicyDecision::Ask(_)
     ));
 
-    // 用户选了 AllowAlways
+    // User selected AllowAlways
     policy.record(
         ctx("bash", SafetyClass::Destructive, &args, &cwd),
         RecordedOutcome::Selected {
@@ -99,7 +99,7 @@ fn ask_writes_remembers_allow_always() {
         },
     );
 
-    // 再来一次 → 直接 Allow，不再 Ask
+    // Second attempt → directly Allow, no longer Ask
     assert!(matches!(
         policy.classify(ctx("bash", SafetyClass::Destructive, &args, &cwd)),
         PolicyDecision::Allow
@@ -120,7 +120,7 @@ fn ask_writes_does_not_remember_allow_once() {
         },
     );
 
-    // 仍然 Ask
+    // Still Ask
     assert!(matches!(
         policy.classify(ctx("bash", SafetyClass::Destructive, &args, &cwd)),
         PolicyDecision::Ask(_)
@@ -142,7 +142,8 @@ fn deny_all_denies() {
 fn non_interactive_maps_ask_to_deny_passes_allow_deny() {
     use std::sync::Arc;
 
-    // 包 AskWritesPolicy：ReadOnly 透传 Allow，写类被降级为 Deny（而非 Ask）。
+    // Wraps `AskWritesPolicy`: passes through `Allow` for `ReadOnly`, downgrades write
+    // classes to `Deny` (instead of `Ask`).
     let policy = NonInteractivePolicy::new(Arc::new(AskWritesPolicy::new()));
     let cwd = PathBuf::from("/");
     let args = json!({});
@@ -165,7 +166,7 @@ fn non_interactive_maps_ask_to_deny_passes_allow_deny() {
         );
     }
 
-    // 包 DenyAllPolicy：Deny 原样透传。
+    // DenyAllPolicy: Deny passes through unchanged.
     let deny = NonInteractivePolicy::new(Arc::new(DenyAllPolicy));
     assert!(matches!(
         deny.classify(ctx("fs.read", SafetyClass::ReadOnly, &args, &cwd)),
@@ -175,10 +176,10 @@ fn non_interactive_maps_ask_to_deny_passes_allow_deny() {
 
 #[test]
 fn mode_catalog_rejects_empty_or_unknown_current() {
-    // 空目录 → None。
+    // Empty catalog → None.
     assert!(ModeCatalog::new(vec![], "x").is_none());
 
-    // current 不命中任一条目 → None。
+    // current does not match any entry → None.
     let modes = vec![PolicyMode {
         id: "open".to_string(),
         name: "Open".to_string(),
@@ -187,7 +188,7 @@ fn mode_catalog_rejects_empty_or_unknown_current() {
     }];
     assert!(ModeCatalog::new(modes.clone(), "read-only").is_none());
 
-    // current 命中 → Some。
+    // Current hit → Some.
     assert!(ModeCatalog::new(modes, "open").is_some());
 }
 
@@ -223,7 +224,7 @@ fn mode_catalog_switches_active_policy() {
         PolicyDecision::Allow
     ));
 
-    // 切到 deny-all：active policy 随之变。
+    // Switch to deny-all: the active policy changes accordingly.
     assert!(catalog.set_current("deny-all"));
     assert_eq!(catalog.current_id(), "deny-all");
     assert!(matches!(
@@ -233,7 +234,7 @@ fn mode_catalog_switches_active_policy() {
         PolicyDecision::Deny
     ));
 
-    // 未知 id：set 失败，current 不变。
+    // Unknown id: set fails, current unchanged.
     assert!(!catalog.set_current("bogus"));
     assert_eq!(catalog.current_id(), "deny-all");
 }

@@ -1,7 +1,8 @@
-//! 权限请求的回写通道。
+//! Write-back channel for permission requests.
 //!
-//! `Session::resolve_permission` 把 ACP 反向 request `session/request_permission`
-//! 的客户端响应送回主循环；主循环用 [`PermissionGate::wait`] 等待。
+//! `Session::resolve_permission` sends the client response to the ACP reverse request
+//! `session/request_permission` back to the main loop, which waits using
+//! [`PermissionGate::wait`].
 //!
 //! Permission management — see session and turn-loop designs.
 
@@ -12,11 +13,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::event::PermissionResolution;
 
-/// 等待中的权限请求登记表。
+/// A registry of pending permission requests.
 ///
-/// 每个进行中的 turn 持有一个共享 `Arc<PermissionGate>`：
-/// - 主循环 [`Self::wait`] 注册等待并 await
-/// - acp 桥接层在拿到客户端响应后调用 [`Self::resolve`]
+/// Each in-flight turn holds a shared `Arc<PermissionGate>`:
+/// - The main loop registers a waiter and awaits via [`Self::wait`]
+/// - The ACP bridge layer calls [`Self::resolve`] after receiving the client response
 #[derive(Default)]
 pub struct PermissionGate {
     waiters: DashMap<ToolCallId, oneshot::Sender<PermissionResolution>>,
@@ -27,19 +28,20 @@ impl PermissionGate {
         Self::default()
     }
 
-    /// 注册一个等待，并 await 直到 [`Self::resolve`] 被调用或 cancel 触发。
+    /// Register a waiter and await until [`Self::resolve`] is called or `cancel` fires.
     ///
-    /// cancel 触发时返回 [`PermissionResolution::Cancelled`]——主循环按
-    /// "User cancelled" handling.
+    /// When `cancel` fires, returns [`PermissionResolution::Cancelled`] — the main loop
+    /// handles this as "User cancelled".
     ///
-    /// 如果同一 `id` 已经有等待者，旧 sender 被丢弃（旧 wait 会收到
-    /// [`PermissionResolution::Cancelled`]，避免悬挂）。这条路径理论上
-    /// 不应触发——主循环对每个 tool_use 只 wait 一次。
+    /// If a waiter already exists for the same `id`, the old sender is dropped (the old
+    /// wait receives [`PermissionResolution::Cancelled`], avoiding a hang). This path
+    /// should theoretically never be hit — the main loop only calls `wait` once per
+    /// tool_use.
     pub async fn wait(&self, id: ToolCallId, cancel: CancellationToken) -> PermissionResolution {
         let (tx, rx) = oneshot::channel();
         if let Some(prev) = self.waiters.insert(id.clone(), tx) {
-            // 不应该发生：同一 id 多次 wait。把旧 waiter 唤醒为 Cancelled，
-            // 避免旧 future 永远挂着。
+            // This should not happen: `wait` called twice for the same `id`. Wake the old
+            // waiter with `Cancelled` to prevent it from hanging forever.
             tracing::warn!(
                 tool_call_id = %id,
                 "PermissionGate::wait called twice for same id; cancelling previous waiter"
@@ -50,24 +52,27 @@ impl PermissionGate {
         tokio::select! {
             biased;
             () = cancel.cancelled() => {
-                // 摘掉自己的登记（如果还在）；resolve 可能正好与 cancel 竞速
+                // Remove our registration if it is still present; resolve may race with
+                // cancel.
                 self.waiters.remove(&id);
                 PermissionResolution::Cancelled
             }
             recv = rx => match recv {
                 Ok(outcome) => outcome,
-                // sender 被替换或 gate 被 drop；走取消语义
+                // Sender was replaced or gate was dropped; use cancellation semantics.
                 Err(_) => PermissionResolution::Cancelled,
             }
         }
     }
 
-    /// 把 outcome 投递给等待者。如果 `id` 没有等待者（已被 cancel 摘走、
-    /// 或主循环还没来得及 wait），静默 no-op——acp 桥接层不感知主循环
-    /// 时序，重复 / 迟到的 resolve 不应破坏 turn。
+    /// Deliver the outcome to the waiter. If `id` has no waiter (already removed by
+    /// cancel, or the main loop hasn't called wait yet), silently no-op — the ACP bridge
+    /// layer is unaware of main-loop timing, and duplicate or late resolves must not
+    /// corrupt the turn.
     pub fn resolve(&self, id: &ToolCallId, outcome: PermissionResolution) {
         if let Some((_, tx)) = self.waiters.remove(id) {
-            // receiver 已 drop 的话忽略——主循环可能已 cancel 路径返回
+            // Ignore if the receiver has been dropped — the main loop may have already
+            // returned via the cancel path.
             let _ = tx.send(outcome);
         }
     }

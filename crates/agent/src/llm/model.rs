@@ -1,21 +1,22 @@
-//! Provider and model metadata.
+//! Metadata for providers and models.
 
 use serde::{Deserialize, Serialize};
 
 use super::capability::ModelCapabilityOverrides;
 
-/// 厂商元信息（厂商名、API 风格、tracing 标签等）。
+/// Provider metadata (vendor name, API style, tracing labels, etc.).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderInfo {
-    /// 厂商标识（"anthropic" / "openai" / "bedrock" / ...）。
+    /// Vendor identifier (e.g. "anthropic", "openai", "bedrock", …).
     pub vendor: String,
-    /// 底层协议。
+    /// Underlying protocol.
     pub protocol: ProtocolId,
-    /// 用于 tracing 的人读名（"Anthropic Claude"）。
+    /// Human-readable name for tracing (e.g. "Anthropic Claude").
     pub display_name: String,
 }
 
-/// 底层协议标识。`defect-llm::protocol` 中的 codec 与此一一对应。
+/// Protocol identifier. Each variant corresponds one-to-one with a codec in
+/// `defect-llm::protocol`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -24,10 +25,10 @@ pub enum ProtocolId {
     OpenAiChat,
 }
 
-/// 单个模型的元信息。
+/// Metadata for a single model.
 ///
-/// `context_window` 与 `max_output_tokens` 用 `Option` 是因为部分
-/// provider 不公开这些字段；调用方按未知处理（不强制裁剪）。
+/// `context_window` and `max_output_tokens` are `Option` because some providers do not
+/// expose these fields; callers should treat them as unknown (no forced truncation).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
@@ -35,6 +36,6 @@ pub struct ModelInfo {
     pub context_window: Option<u64>,
     pub max_output_tokens: Option<u64>,
     pub deprecated: bool,
-    /// 此模型相对 provider 全局 [`super::Capabilities`] 的差异。
+    /// Differences from the provider-wide [`super::Capabilities`] for this model.
     pub capabilities_overrides: ModelCapabilityOverrides,
 }

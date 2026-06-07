@@ -72,8 +72,9 @@ fn completed_event_ignores_non_text_content() {
 
 #[test]
 fn registered_name_prefixes_server_and_tool() {
-    // 形态固定为 `mcp.<server>.<tool>`——既覆盖 search/fetch 撞名，也覆盖普通
-    // MCP 工具，且没有任何条件分支：所有 MCP 工具一律 namespace。
+    // The format is always `mcp.<server>.<tool>` — it covers both the search/fetch name
+    // collision and ordinary MCP tools, with no conditional branches: all MCP tools are
+    // unconditionally namespaced.
     assert_eq!(
         registered_mcp_tool_name("docs", "search"),
         "mcp.docs.search"

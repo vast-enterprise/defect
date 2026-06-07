@@ -1,9 +1,8 @@
 //! Builtin hook handlers.
 //!
-//! 进程内 Rust handler——零外部依赖，CLI 装配时按 [`BuiltinRegistry`] 按名查表
-//! 实例化，挂进 `DefaultHookEngine` 的 [`super::HandlerTable`]。
-//!
-//! Builtin handlers — in-process Rust handlers with zero external dependencies.
+//! In-process Rust handlers with zero external dependencies. During CLI assembly, they
+//! are looked up by name in [`BuiltinRegistry`], instantiated, and registered into
+//! [`super::HandlerTable`] of `DefaultHookEngine`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -14,22 +13,27 @@ use serde_json::{Map, Value};
 use super::{HookCtx, HookError, StepHandler};
 use crate::tool::SkillEntry;
 
-/// Builtin handler 的注册表：name → 工厂闭包。
+/// Registry mapping builtin handler names to factory closures.
 ///
-/// CLI 装配 `DefaultHookEngine` 时把 `HookHandlerSpec::Builtin { name }` 喂给
-/// [`Self::lookup_step`]，配置加载期未知名直接 fail-fast——避免用户在 turn 跑到
-/// 一半才发现拼错（见 hooks.md §4.1）。
+/// When the CLI assembles `DefaultHookEngine`, it feeds `HookHandlerSpec::Builtin { name
+/// }` to
+/// [`Self::lookup_step`]. Unknown names fail fast at config-load time, so users don't
+/// discover
+/// typos mid-turn (see hooks.md §4.1).
 ///
-/// 工厂签名是 `Fn() -> Arc<dyn HookHandler>`：handler 没有 per-config 参数，
-/// 多个 `[[hooks.*]]` 引用同名 builtin 共享同一份 `Arc`。后续若有 builtin 需要
-/// 配置参数，再把 `name` 升级成结构化 enum，registry 改成 `match` 分发。
+/// The factory signature is `Fn() -> Arc<dyn HookHandler>`: handlers have no per-config
+/// parameters, and multiple `[[hooks.*]]` entries referencing the same builtin share a
+/// single
+/// `Arc`. If a builtin later needs configuration parameters, upgrade `name` to a
+/// structured
+/// enum and switch the registry to `match` dispatch.
 pub struct BuiltinRegistry {
-    /// name → `Arc<dyn StepHandler>` 工厂。
+    /// A map from name to `Arc<dyn StepHandler>` factory.
     step_factories: BTreeMap<String, Box<dyn Fn() -> Arc<dyn StepHandler> + Send + Sync>>,
 }
 
 impl BuiltinRegistry {
-    /// v0 默认 registry：`tracing-audit` + `redact-secrets`。
+    /// Default v0 registry: `tracing-audit` + `redact-secrets`.
     pub fn defaults() -> Self {
         let mut reg = Self {
             step_factories: BTreeMap::new(),
@@ -39,7 +43,8 @@ impl BuiltinRegistry {
         reg
     }
 
-    /// 注册一条 builtin 的 step handler 工厂。重复 name 直接覆盖——测试可 stub 替换默认行为。
+    /// Register a builtin step handler factory. Duplicate names overwrite previous
+    /// entries, allowing tests to stub and replace default behavior.
     pub fn register_step<F>(&mut self, name: &str, factory: F)
     where
         F: Fn() -> Arc<dyn StepHandler> + Send + Sync + 'static,
@@ -48,12 +53,13 @@ impl BuiltinRegistry {
             .insert(name.to_string(), Box::new(factory));
     }
 
-    /// 按名查 step handler。`None` = 配置层应当 fail-fast 报错。
+    /// Look up a step handler by name. `None` means the configuration layer should
+    /// fail-fast with an error.
     pub fn lookup_step(&self, name: &str) -> Option<Arc<dyn StepHandler>> {
         self.step_factories.get(name).map(|f| f())
     }
 
-    /// 列出已注册的 builtin name——`defect hooks list` CLI 用。
+    /// Lists registered builtin names, used by the `defect hooks list` CLI.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.step_factories.keys().map(String::as_str)
     }
@@ -65,18 +71,18 @@ impl Default for BuiltinRegistry {
     }
 }
 
-// ---------------------------------------------------------------------------
 // tracing-audit
-// ---------------------------------------------------------------------------
 
-/// 把 `Post*ToolUse` 事件转成结构化 tracing 记录。
+/// Converts `Post*ToolUse` events into structured tracing records.
 ///
-/// 适合挂在 `[[hooks.post_tool_use]]` / `[[hooks.post_tool_use_failure]]` 上做
-/// 审计 trail；其他事件上挂会被 [`StepHandler::handle_step`] 直接 `Pass`。
+/// Intended to be attached to `[[hooks.post_tool_use]]` /
+/// `[[hooks.post_tool_use_failure]]` for an audit trail; attaching it to other events
+/// will cause [`StepHandler::handle_step`] to simply `Pass` through.
 pub struct TracingAuditHook;
 
 impl StepHandler for TracingAuditHook {
-    /// Step 模型：吃 `after_tool_apply` 信封 `{tool, is_error}`，记一条结构化审计日志，不产 verdict。
+    /// Step model: consumes an `after_tool_apply` envelope `{tool, is_error}`, writes a
+    /// structured audit log, and produces no verdict.
     fn handle_step<'a>(
         &'a self,
         envelope: &'a Value,
@@ -103,16 +109,18 @@ impl StepHandler for TracingAuditHook {
 // redact-secrets
 // ---------------------------------------------------------------------------
 
-/// `PreToolUse` 上对 args 里的疑似敏感字段做就地替换。
+/// On `PreToolUse`, performs in-place replacement of likely sensitive fields in `args`.
 ///
-/// 命中名（不区分大小写包含子串）：`password` / `secret` / `token` / `api_key`
-/// / `apikey` / `authorization`。命中后该字段值被替换为 `"***"`，patch 进 args。
+/// Matches (case-insensitive substring): `password` / `secret` / `token` / `api_key`
+/// / `apikey` / `authorization`. When matched, the field value is replaced with `"***"`
+/// and patched into `args`.
 ///
-/// 仅在 args 是 `Object` 时操作；其他形态（数组、字符串）不动——args 形态由
-/// 工具自身定义，深度递归改写有可能破坏工具语义。
+/// Only operates when `args` is an `Object`; other shapes (arrays, strings) are left
+/// untouched — the shape of `args` is defined by the tool itself, and deep recursive
+/// rewriting could break tool semantics.
 ///
-/// 不处理 `bash` 的 `command` 字符串里嵌入的 `password=xxx` 这类——那需要
-/// shell 词法分析，超出 builtin 的稳定承诺。
+/// Does not handle `password=xxx` embedded inside a `bash` `command` string — that would
+/// require shell lexing, which is beyond the stability guarantees of this builtin.
 pub struct RedactSecretsHook;
 
 const SECRET_KEY_NEEDLES: &[&str] = &[
@@ -125,8 +133,10 @@ const SECRET_KEY_NEEDLES: &[&str] = &[
 ];
 
 impl StepHandler for RedactSecretsHook {
-    /// Step 模型：吃 `before_tool_apply` 信封 `{tool, args}`，对 args 里疑似敏感字段就地脱敏，
-    /// 命中则返回 `{args: <redacted>}` verdict（引擎 apply 回 step → 改 args）。
+    /// Step model: consumes the `before_tool_apply` envelope `{tool, args}`, redacts
+    /// potentially sensitive fields in `args` in place, and returns a `{args:
+    /// <redacted>}` verdict if any were found (the engine applies it back to the step,
+    /// modifying `args`).
     fn handle_step<'a>(
         &'a self,
         envelope: &'a Value,
@@ -175,33 +185,35 @@ fn key_is_secret(key: &str) -> bool {
 // skill-manifest
 // ---------------------------------------------------------------------------
 
-/// `SessionStart` 上把可用 skill 的 L1 清单（`name + description`）拼进 system
-/// prompt suffix——让模型一开机就知道有哪些 skill 可按需用 `skill` 工具加载。
+/// On `SessionStart`, appends the L1 manifest of available skills (`name + description`)
+/// to the system prompt suffix, so the model is aware of which skills it can load on
+/// demand via the `skill` tool.
 ///
-/// This is the L1 injection point for progressive disclosure
-/// §6.1）。注意 `skill` 工具自身的 description 已经内嵌同一份 catalog（见
-/// [`crate::tool::SkillTool`]），所以本 hook 是**可选增强**：装配方挂上它能让
-/// 清单同时出现在 system prompt 里（对不把 tool description 计入注意力预算的
-/// 客户端更稳）。两条路径同源（同一个 skill 索引），不会发散。
+/// This is the L1 injection point for progressive disclosure (§6.1). Note that the
+/// `skill` tool's own description already embeds the same catalog (see
+/// [`crate::tool::SkillTool`]), so this hook is an **optional enhancement**: when
+/// installed, it also places the manifest in the system prompt (more robust for clients
+/// that do not count tool descriptions toward the attention budget). Both paths originate
+/// from the same skill index, so they will not diverge.
 ///
-/// 与其它 builtin 不同，本 handler 持有 skill 索引，**不能**用
-/// [`BuiltinRegistry::defaults`] 的无参工厂构造——CLI 装配期用捕获索引的闭包
-/// 注册（见 `defect_cli::hooks`）。
+/// Unlike other builtins, this handler holds a skill index and **cannot** be constructed
+/// via the parameterless factory [`BuiltinRegistry::defaults`]. Instead, it is registered
+/// during CLI assembly using a closure that captures the index (see `defect_cli::hooks`).
 pub struct SkillManifestHook {
     skills: Arc<BTreeMap<String, SkillEntry>>,
 }
 
 impl SkillManifestHook {
-    /// 用已加载的 skill 索引构造。`skills` 为空时调用方**不应**注册本 hook
-    /// （清单会是空段，徒增 token）。
+    /// Constructs from a loaded skill index. The caller **must not** register this hook
+    /// when `skills` is empty (the manifest would be an empty segment, wasting tokens).
     pub fn new(skills: Arc<BTreeMap<String, SkillEntry>>) -> Self {
         Self { skills }
     }
 }
 
-/// 渲染 session 启动注入：L1 清单（所有 skill 的 name+description）+ 每个
-/// `always` skill 的完整 body（always-on，直接进 system prompt）。空索引返回
-/// `None`（不注入空段）。
+/// Renders the session-start injection: a level-1 manifest (name + description for every
+/// skill) plus the full body of each `always` skill (always-on, injected directly into
+/// the system prompt). Returns `None` for an empty index (no empty segment injected).
 fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String> {
     if skills.is_empty() {
         return None;
@@ -213,8 +225,9 @@ fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String
     for (name, entry) in skills {
         out.push_str(&format!("- **{name}**: {}\n", entry.description));
     }
-    // always-on：把标了 `always: true` 的 skill body 直接拼进去——模型一开机
-    // 就带着这些说明，无需再调 `skill` 工具加载（设计 §5.1）。
+    // Always-on skills: inline the body of any skill marked `always: true` so the model
+    // has those instructions from the start, without needing to call the `skill` tool
+    // (design §5.1).
     for (name, entry) in skills {
         if entry.always {
             out.push_str(&format!("\n## Skill: {name}\n\n{}\n", entry.body));
@@ -224,8 +237,10 @@ fn render_skill_manifest(skills: &BTreeMap<String, SkillEntry>) -> Option<String
 }
 
 impl StepHandler for SkillManifestHook {
-    /// Step 模型：在 `after_session_enter` 把 L1 skill 清单作为 `additional_context` 注入
-    /// （引擎 apply 回 step → 拼进 system prompt 后缀）。
+    /// In the step model, inject the L1 skill manifest as `additional_context` during
+    /// `after_session_enter`
+    /// (the engine applies it back to the step, appending it to the system prompt
+    /// suffix).
     fn handle_step<'a>(
         &'a self,
         _envelope: &'a Value,
@@ -241,37 +256,42 @@ impl StepHandler for SkillManifestHook {
 // skill-triggers
 // ---------------------------------------------------------------------------
 
-/// `before_ingest` 上按用户 prompt 自动激活相关 skill——命中即在 prompt 前面
-/// 前插一条 **L1 提示**（"检测到 skill X 相关，需要时用 `skill` 工具加载"），
-/// 而非整段 body（progressive disclosure：把"是否真加载"留给模型）。
+/// On `before_ingest`, automatically activate relevant skills based on the user prompt.
+/// When a match is found, insert a **L1 hint** (e.g. "Detected skill X relevance; use the
+/// `skill` tool if needed") before the prompt, rather than injecting the full skill body.
+/// This follows progressive disclosure: the model decides whether to actually load the
+/// skill.
 ///
 /// Trigger conditions (any one triggers):
-/// - **keyword**：skill 的 `triggers.keywords` 任一是 prompt 文本的大小写不敏感
-///   子串；
-/// - **glob**：从 prompt 文本里抽出的"路径样 token"任一被 `triggers.globs`
-///   命中。
+/// - **keyword**: any of the skill's `triggers.keywords` is a case-insensitive substring
+///   of the prompt text.
+/// - **glob**: any "path-like token" extracted from the prompt text matches one of the
+///   skill's `triggers.globs`.
 ///
-/// `always` skill 已在 session 启动整段注入，这里跳过——不重复提示。
+/// Skills with `always` trigger are already injected in full at session start, so they
+/// are skipped here to avoid duplicate hints.
 ///
-/// 与 [`SkillManifestHook`] 一样持有 skill 索引，用捕获索引的闭包注册
-/// （见 `defect_cli::hooks`）。
+/// Like [`SkillManifestHook`], this hook holds a skill index and is registered via a
+/// closure that captures the index (see `defect_cli::hooks`).
 pub struct SkillTriggersHook {
     skills: Arc<BTreeMap<String, SkillEntry>>,
 }
 
 impl SkillTriggersHook {
-    /// 用已加载的 skill 索引构造。`skills` 为空时调用方**不应**注册本 hook。
+    /// Constructs from the already-loaded skill index. The caller **must not** register
+    /// this hook when `skills` is empty.
     pub fn new(skills: Arc<BTreeMap<String, SkillEntry>>) -> Self {
         Self { skills }
     }
 }
 
-/// 从 prompt 文本里抽"路径样 token"（best-effort，不做 NLP）。
+/// Extract path-like tokens from a prompt string (best-effort, no NLP).
 ///
-/// 按空白切分，剥两侧引号 / 反引号 / 括号与尾部标点；token 满足任一即算路径：
-/// (1) 含 `/`（如 `crates/agent/src/foo.rs`）；(2) 结尾是扩展名 `xxx.ext`
-/// （如 `Cargo.toml` / `main.rs`）。剥前导 `./`。纯词（无 `/` 无扩展名）不算
-/// 路径——交给 keyword 匹配。
+/// Split on whitespace, strip surrounding quotes/backticks/brackets and trailing
+/// punctuation. A token is considered a path if it either:
+/// (1) contains `/` (e.g. `crates/agent/src/foo.rs`); or (2) ends with an extension
+/// `xxx.ext` (e.g. `Cargo.toml` / `main.rs`). Strip leading `./`. Bare words (no `/` and
+/// no extension) are not paths — they are left for keyword matching.
 fn extract_path_tokens(prompt: &str) -> Vec<String> {
     prompt
         .split_whitespace()
@@ -293,12 +313,14 @@ fn extract_path_tokens(prompt: &str) -> Vec<String> {
         .collect()
 }
 
-/// token 是否"路径样"：含 `/`，或形如 `name.ext`（结尾点 + 1+ 字母数字）。
+/// Whether the token is "path-like": contains `/`, or matches `name.ext` (a dot followed
+/// by one or more alphanumeric characters at the end).
 fn is_path_like(token: &str) -> bool {
     if token.contains('/') {
         return true;
     }
-    // 结尾扩展名：最后一个 `.` 之后是 1+ 个字母数字，且点不在首位。
+    // Ending extension: at least one alphanumeric character after the last `.`, and the
+    // dot is not at the start.
     match token.rsplit_once('.') {
         Some((stem, ext)) => {
             !stem.is_empty() && !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric())
@@ -307,7 +329,8 @@ fn is_path_like(token: &str) -> bool {
     }
 }
 
-/// 对单个 skill 判断是否被 prompt 激活：keyword 子串 OR glob 命中路径 token。
+/// Returns whether a single skill is activated by the prompt: keyword substring OR glob
+/// matches a path token.
 fn skill_triggered(entry: &SkillEntry, prompt_lower: &str, path_tokens: &[String]) -> bool {
     let keyword_hit = entry
         .triggers
@@ -324,8 +347,8 @@ fn skill_triggered(entry: &SkillEntry, prompt_lower: &str, path_tokens: &[String
 }
 
 impl StepHandler for SkillTriggersHook {
-    /// Step 模型：在 `before_ingest` 读 prompt 文本，命中的 skill 各前插一条 L1
-    /// 提示（`prepend_input` verdict）。无命中返回 `None`。
+    /// In the `before_ingest` step, read the prompt text and, for each matched skill,
+    /// prepend an L1 hint (a `prepend_input` verdict). Return `None` if no skill matches.
     fn handle_step<'a>(
         &'a self,
         envelope: &'a Value,
@@ -357,20 +380,27 @@ impl StepHandler for SkillTriggersHook {
 // goal-gate
 // ---------------------------------------------------------------------------
 
-/// `--goal` 目标驱动循环的核心 hook，**同时挂两个事件**（据信封 `hook_event` 分流）：
+/// The core hook for the `--goal` goal-driven loop, **subscribing to two events**
+/// (dispatched via the `hook_event` envelope):
 ///
-/// - `after_session_enter`：把目标说明 + `goal_done` 使用契约作为 `additional_context`
-///   注入 system prompt 后缀——**turn 1 就生效**。这样模型一开机就知道目标是什么、
-///   完成后要主动调 `goal_done`，不必等第一次自愿停止才被告知（否则白白多耗一轮）。
-/// - `before_turn_end`：turn 自愿停止时读 [`GoalState::is_reached`](crate::session::GoalState::is_reached)：reached（模型调过
-///   `goal_done`）→ `proceed` 放行结束；否则 → `continue` 续命 + 注入英文催促反馈。
+/// - `after_session_enter`: Injects the goal description + `goal_done` usage contract as
+///   `additional_context` into the system prompt suffix — **effective from turn 1**. This
+///   lets the model know the goal and that it must actively call `goal_done` upon
+///   completion from the start, avoiding an extra wasted turn waiting for the first
+///   voluntary stop.
+/// - `before_turn_end`: On voluntary turn stop, reads
+///   [`GoalState::is_reached`](crate::session::GoalState::is_reached): if reached (model
+///   called `goal_done`) → `proceed` to end; otherwise → `continue` to extend the turn +
+///   inject an English prompt reminder.
 ///
-/// 续命硬上限由 turn loop 的 [`crate::session::TurnConfig::max_hook_continues`] 兜底
-/// （`--max-turns` 映射到它）——本 hook 只管"达成没"，不自己计数。
+/// The hard cap on extensions is enforced by the turn loop's
+/// [`crate::session::TurnConfig::max_hook_continues`] (mapped from `--max-turns`) — this
+/// hook only checks "is it done?", it does not count extensions itself.
 ///
-/// 与 [`SkillManifestHook`] 一样是有状态 builtin（持 `Arc<GoalState>`），不能用
-/// [`BuiltinRegistry::defaults`] 的无参工厂构造——CLI 装配期按 `--goal` 用捕获
-/// 状态的闭包注册到两个事件上（见 `defect_cli::hooks`）。
+/// Like [`SkillManifestHook`], this is a stateful builtin (holds `Arc<GoalState>`) and
+/// cannot be constructed via [`BuiltinRegistry::defaults`]'s parameterless factory —
+/// during CLI assembly, a closure capturing the state is registered for both events under
+/// `--goal` (see `defect_cli::hooks`).
 pub struct GoalGate {
     goal: Arc<crate::session::GoalState>,
 }
@@ -380,7 +410,8 @@ impl GoalGate {
         Self { goal }
     }
 
-    /// turn 1 起注入 system prompt 的目标说明 + `goal_done` 契约。
+    /// Injected into the system prompt from turn 1 onward: goal description + `goal_done`
+    /// contract.
     fn briefing(&self) -> String {
         format!(
             "## Goal\n\n\
@@ -395,9 +426,10 @@ impl GoalGate {
 }
 
 impl StepHandler for GoalGate {
-    /// Step 模型：按信封 `hook_event` 分流——
-    /// - `after_session_enter` → 注入目标说明 + 契约（`additional_context`）；
-    /// - `before_turn_end` → reached?proceed:continue+催促。
+    /// Dispatches on the envelope's `hook_event`:
+    /// - `after_session_enter` → injects goal description and contract
+    ///   (`additional_context`)
+    /// - `before_turn_end` → if reached, proceed; otherwise continue with a prompt
     fn handle_step<'a>(
         &'a self,
         envelope: &'a Value,
@@ -411,7 +443,7 @@ impl StepHandler for GoalGate {
             "after_session_enter" => {
                 serde_json::json!({ "additional_context": [self.briefing()] })
             }
-            // before_turn_end（及兜底）：检测达成。
+            // before_turn_end (and fallback): check if the goal is reached.
             _ if self.goal.is_reached() => serde_json::json!({ "control": "proceed" }),
             _ => serde_json::json!({
                 "control": "continue",
@@ -492,7 +524,8 @@ mod tests {
         assert!(verdict.is_none());
     }
 
-    /// 造一个 skill：description/body/always/keywords/globs 可定制。
+    /// Create a `SkillEntry` with customizable `description`, `body`, `always`,
+    /// `keywords`, and `globs`.
     fn skill(
         description: &str,
         body: &str,
@@ -554,7 +587,7 @@ mod tests {
             skill("deploy", "deploy body", false, &[], &[]),
         );
         let out = render_skill_manifest(&skills).expect("some");
-        // L1 清单含两者；always-on body 只拼 style 的。
+        // The L1 manifest contains both; the always-on body only includes style.
         assert!(out.contains("**style**"));
         assert!(out.contains("**deploy**"));
         assert!(out.contains("ALWAYS USE TABS"));
@@ -575,7 +608,7 @@ mod tests {
         let h = SkillTriggersHook::new(Arc::new(skills));
         let session_id = agent_client_protocol_schema::SessionId::new("s1");
         let cwd = std::path::Path::new("/");
-        // 大小写不敏感子串命中。
+        // Case-insensitive substring match.
         let verdict = h
             .handle_step(
                 &triggers_envelope("please run the MIGRATION now"),
@@ -633,7 +666,8 @@ mod tests {
     #[tokio::test]
     async fn triggers_excludes_always_on_skill() {
         let mut skills = BTreeMap::new();
-        // always 的 skill 即便 keyword 命中也不再提示（已整段注入）。
+        // Skills marked as always-on are not suggested even when keywords match (the
+        // entire segment has already been injected).
         skills.insert(
             "style".to_string(),
             skill("style", "body", true, &["rust"], &[]),
@@ -653,7 +687,7 @@ mod tests {
         let toks = extract_path_tokens("look at `crates/agent/src/foo.rs` and Cargo.toml please");
         assert!(toks.contains(&"crates/agent/src/foo.rs".to_string()));
         assert!(toks.contains(&"Cargo.toml".to_string()));
-        // 纯词不算路径。
+        // Plain words are not paths.
         assert!(!toks.contains(&"please".to_string()));
         assert!(!toks.contains(&"look".to_string()));
     }
@@ -672,7 +706,7 @@ mod tests {
             .await
             .expect("ok")
             .expect("verdict");
-        // 注入 system prompt 后缀，不带 control（不干预控制流）。
+        // Inject system prompt suffix without control (no control flow intervention).
         assert!(verdict.get("control").is_none());
         let ctxs = verdict["additional_context"].as_array().expect("array");
         let briefing = ctxs[0].as_str().expect("str");

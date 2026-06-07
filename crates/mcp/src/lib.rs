@@ -1,7 +1,7 @@
-//! MCP 客户端适配层。
+//! MCP client adapter layer.
 //!
-//! 把外部 MCP server 暴露的工具包装为 [`defect_agent`] 的 per-session
-//! 工具表。
+//! Wraps tools exposed by an external MCP server into a per-session tool table for
+//! [`defect_agent`].
 
 #![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 
@@ -36,7 +36,7 @@ mod streamable_http;
 use serde_json::Value;
 use thiserror::Error;
 
-/// MCP 适配错误。
+/// MCP adapter errors.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum McpAdapterError {
@@ -50,7 +50,7 @@ pub enum McpAdapterError {
     Request(#[source] io::Error),
 }
 
-/// 最小 MCP 工厂。
+/// Minimal MCP factory.
 #[derive(Debug, Default, Clone)]
 pub struct McpToolFactory {
     default_servers: Vec<McpServer>,
@@ -114,11 +114,12 @@ fn mcp_server_name(server: &McpServer) -> &str {
     }
 }
 
-/// 按 transport 配置加载 MCP 工具。
+/// Load MCP tools according to the transport configuration.
 ///
 /// # Errors
 ///
-/// 当 transport 不受支持、连接初始化失败、或远端工具列表拉取失败时返回错误。
+/// Returns an error if the transport is unsupported, connection initialization fails, or
+/// the remote tool list cannot be fetched.
 async fn load_server_tools(
     cwd: PathBuf,
     server: McpServer,
@@ -137,11 +138,12 @@ async fn load_server_tools(
     }
 }
 
-/// 拉起一个 stdio MCP server，并把其工具包装为本地工具。
+/// Spawns a stdio MCP server and wraps its tools as local tools.
 ///
 /// # Errors
 ///
-/// 当子进程启动失败、rmcp 初始化失败、或工具列表请求失败时返回错误。
+/// Returns an error if the child process fails to start, rmcp initialization fails, or
+/// the tool list request fails.
 async fn load_stdio_server_tools(
     cwd: PathBuf,
     server: McpServerStdio,
@@ -172,11 +174,12 @@ async fn load_stdio_server_tools(
         .collect())
 }
 
-/// 连接一个 HTTP/SSE MCP server，并把其工具包装为本地工具。
+/// Connects to an HTTP/SSE MCP server and wraps its tools as local tools.
 ///
 /// # Errors
 ///
-/// 当 header 非法、rmcp 初始化失败、或工具列表请求失败时返回错误。
+/// Returns an error if headers are invalid, rmcp initialization fails, or the tool list
+/// request fails.
 async fn load_streamable_http_server_tools(
     _cwd: PathBuf,
     server_name: String,
@@ -226,26 +229,27 @@ impl McpConnection {
 
 struct McpToolAdapter {
     connection: Arc<McpConnection>,
-    /// Wire 名：调用 `call_tool` 时发回 MCP server 用的原始工具名。
+    /// The raw tool name sent back to the MCP server when calling `call_tool`.
     upstream_name: String,
     schema: ToolSchema,
     safety: SafetyClass,
 }
 
-/// 把 MCP server 名与上游工具名拼成本地 ToolRegistry 中注册用的工具名。
+/// Concatenates the MCP server name and upstream tool name into the tool name used for
+/// registration in the local `ToolRegistry`.
 ///
-/// See capabilities for MCP tool classification. All MCP tools are
-/// 一律以 `mcp.<server>.<name>` 注册，避免和内置工具撞名 / 抢名。
-/// 这是一个无副作用的字符串拼接，单测见 `tests` 模块。
+/// See capabilities for MCP tool classification. All MCP tools are registered as
+/// `mcp.<server>.<name>` to avoid name collisions with built-in tools. This is a pure
+/// string concatenation; unit tests are in the `tests` module.
 #[must_use]
 pub fn registered_mcp_tool_name(server: &str, upstream_name: &str) -> String {
     format!("mcp.{server}.{upstream_name}")
 }
 
 impl McpToolAdapter {
-    /// 详见 [`registered_mcp_tool_name`]：所有 MCP 工具在本地以
-    /// `mcp.<server>.<name>` 注册。`upstream_name` 仍是原始名，发回 MCP
-    /// server 用。
+    /// See [`registered_mcp_tool_name`]: all MCP tools are registered locally as
+    /// `mcp.<server>.<name>`. `upstream_name` remains the original name, used when
+    /// sending back to the MCP server.
     fn new(connection: Arc<McpConnection>, server: &str, tool: McpTool) -> Self {
         let input_schema = match serde_json::to_value(tool.input_schema.as_ref()) {
             Ok(schema) => schema,

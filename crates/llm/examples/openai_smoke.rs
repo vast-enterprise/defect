@@ -1,22 +1,24 @@
-//! OpenAI 兼容 provider 真端点冒烟。
+//! Smoke test for OpenAI-compatible provider endpoints.
 //!
-//! 用法：
+//! Usage:
 //!
 //! ```bash
 //! OPENAI_API_KEY=sk-... \
 //!   cargo run -p defect-llm --example openai_smoke -- [scenario]
 //! ```
 //!
-//! `[scenario]` ∈ `list-models | text | tool | thinking | all`，默认 `all`。
+//! `[scenario]` ∈ `list-models | text | tool | thinking | all`, defaults to `all`.
 //!
-//! 可选 env：
-//! - `OPENAI_BASE_URL`：覆盖默认 `https://api.openai.com/v1`（也可指 DeepSeek 等兼容端点）
-//! - `OPENAI_MODEL`：覆盖默认模型 `gpt-4o-mini`
-//! - `OPENAI_ORG` / `OPENAI_PROJECT`：可选组织 / 项目标识
-//! - `RUST_LOG=defect_llm=debug` 打开协议层调试日志
+//! Optional env vars:
+//! - `OPENAI_BASE_URL`: override default `https://api.openai.com/v1` (also works with
+//!   DeepSeek and other compatible endpoints)
+//! - `OPENAI_MODEL`: override default model `gpt-4o-mini`
+//! - `OPENAI_ORG` / `OPENAI_PROJECT`: optional organization / project identifiers
+//! - `RUST_LOG=defect_llm=debug` enables protocol-level debug logging
 //!
-//! `thinking` 场景仅在模型 ID 看起来支持 reasoning（`o1*` / `o3*` / `o4*` /
-//! `*reasoner*` / `*reasoning*`）时跑，否则自动 skip。
+//! The `thinking` scenario only runs when the model ID appears to support reasoning
+//! (`o1*` / `o3*` / `o4*` /
+//! `*reasoner*` / `*reasoning*`), otherwise it is automatically skipped.
 
 mod common;
 
@@ -114,8 +116,9 @@ fn scenarios_for(name: &str) -> Vec<&'static str> {
     }
 }
 
-/// OpenAI 系：仅 reasoning-capable 模型才走 thinking 路径。
-/// gpt-4o / gpt-4 / gpt-3.5 等纯 chat 模型不支持，跑了只会 400。
+/// OpenAI family: only reasoning-capable models use the thinking path.
+/// Pure chat models like gpt-4o / gpt-4 / gpt-3.5 do not support it; attempting to do so
+/// will result in a 400 error.
 fn model_supports_thinking(model: &str) -> bool {
     let m = model.to_ascii_lowercase();
     m.starts_with("o1")
@@ -221,6 +224,7 @@ async fn scenario_thinking(
     if text.trim().is_empty() {
         return Err("empty assistant text".to_string());
     }
-    // OpenAI o-系列默认不外露 reasoning content，所以不强制要求 thought_text。
+    // OpenAI o-series models do not expose reasoning content by default, so
+    // `thought_text` is not required.
     Ok(None)
 }

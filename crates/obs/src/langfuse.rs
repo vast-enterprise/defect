@@ -1,12 +1,13 @@
-//! Langfuse 接入：把 `AgentEvent` 流上报为 Langfuse trace / generation / span。
+//! Langfuse integration — uploads an `AgentEvent` stream as Langfuse traces, generations,
+//! and spans.
 //!
-//! Langfuse integration — LLM tracing and usage analytics.
-//!
-//! 模块划分：
-//! - [`model`]：ingestion API 的 wire 结构体。
-//! - [`ingest`]：批量缓冲 + 后台上报（可丢弃降级）。
-//! - [`projector`]：`AgentEvent` → ingestion 事件的翻译。
-//! - [`observer`]：`SessionObserver` 实现，每 session 订阅事件流。
+//! Module layout:
+//! - [`model`]: wire types for the ingestion API.
+//! - [`ingest`]: buffered batching + background reporting (with optional drop
+//!   degradation).
+//! - [`projector`]: translates `AgentEvent` into ingestion events.
+//! - [`observer`]: `SessionObserver` implementation that subscribes to the event stream
+//!   per session.
 
 use std::time::Duration;
 
@@ -21,16 +22,17 @@ pub use ingest::{IngestConfig, LangfuseIngest};
 pub use observer::LangfuseObserver;
 pub use projector::TraceProjector;
 
-/// 缺省 Langfuse host。
+/// Default Langfuse host.
 pub const DEFAULT_HOST: &str = "https://cloud.langfuse.com";
-/// 缺省周期冲刷间隔。
+/// Default periodic flush interval.
 pub const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
-/// 缺省单批最大事件数。
+/// Default maximum number of events per batch.
 pub const DEFAULT_MAX_BATCH: usize = 100;
-/// 入队 channel 容量（背压边界；满了丢弃，不反压主循环）。
+/// Inbound channel capacity (backpressure boundary; drops when full, does not
+/// backpressure the main loop).
 pub const DEFAULT_QUEUE_CAPACITY: usize = 1024;
 
-/// 解析好的 Langfuse 上报参数（凭据已校验非空）。
+/// Parsed Langfuse upload parameters (credentials already validated as non-empty).
 pub struct LangfuseSetup {
     pub host: String,
     pub public_key: String,
@@ -39,10 +41,11 @@ pub struct LangfuseSetup {
     pub max_batch: usize,
 }
 
-/// 用一份 [`LangfuseSetup`] + 已建好的 [`HttpStack`] 启动上报器，返回观察器。
+/// Starts the reporter with a [`LangfuseSetup`] and an already-built [`HttpStack`],
+/// returning an observer.
 ///
-/// 上报器的后台 flush 任务在此启动；返回的 [`LangfuseObserver`] 交给
-/// `AgentCore` 的 `observe_session`。
+/// The reporter's background flush task is started here; the returned
+/// [`LangfuseObserver`] is passed to `AgentCore::observe_session`.
 #[must_use]
 pub fn build_observer(setup: LangfuseSetup, http: HttpStack) -> LangfuseObserver {
     let ingest = LangfuseIngest::spawn(IngestConfig {
@@ -57,9 +60,10 @@ pub fn build_observer(setup: LangfuseSetup, http: HttpStack) -> LangfuseObserver
     LangfuseObserver::new(ingest)
 }
 
-// 测试里大量 `value["body"]["x"]` 链式索引 + `.unwrap()` 断言——比
-// `.get().expect()` 可读得多，且 panic 即测试失败正是想要的，故在测试模块
-// 豁免 indexing_slicing / unwrap_used。
+// Tests heavily use chained indexing like `value["body"]["x"]` plus `.unwrap()`
+// assertions — these are far more readable than `.get().expect()`, and panicking on test
+// failure is exactly the desired behavior. Therefore, `indexing_slicing` and
+// `unwrap_used` are suppressed for the test module.
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests;

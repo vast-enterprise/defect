@@ -1,4 +1,4 @@
-//! `mode = files`：按 glob 匹配文件名，按 mtime desc 排序后渲染。
+//! `mode = files`: match filenames by glob, sort by mtime descending, then render.
 
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
@@ -46,9 +46,9 @@ pub(super) fn run(
             continue;
         }
 
-        // glob 既匹配相对工作区的路径，也匹配文件名——LLM 经常用 `**/*.rs`
-        // 期望按工作区相对路径匹配，也可能给个 `Cargo.toml` 期望按 basename
-        // 匹配。两条都试一下，命中即收。
+        // The glob pattern may match either a workspace-relative path or just a filename
+        // — LLMs often use `**/*.rs` expecting workspace-relative matching, or give
+        // `Cargo.toml` expecting basename matching. Try both; accept if either matches.
         let rel = path.strip_prefix(cwd).unwrap_or(path);
         let basename = path.file_name();
         let matched = glob.is_match(rel)

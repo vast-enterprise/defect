@@ -1,7 +1,8 @@
-//! v0 内嵌的占位 LLM provider：把用户最近一条消息原样回送。
+//! v0 built-in placeholder LLM provider: echoes the user's most recent message back
+//! verbatim.
 //!
-//! 仅用于让 stdio ACP 链路能在无外部 LLM 凭据的环境下跑通；真实
-//! provider 在 `defect-llm` 里。
+//! Only used to let the stdio ACP link function without external LLM credentials; the
+//! real provider lives in `defect-llm`.
 
 use std::pin::Pin;
 
@@ -13,7 +14,7 @@ use futures::future::BoxFuture;
 use futures::stream;
 use tokio_util::sync::CancellationToken;
 
-/// 把最近一条 `MessageContent::Text` 原样回送的 stub。
+/// A stub that echoes back the most recent `MessageContent::Text` unchanged.
 pub struct EchoProvider;
 
 impl EchoProvider {
@@ -31,8 +32,8 @@ impl Default for EchoProvider {
 impl LlmProvider for EchoProvider {
     fn info(&self) -> ProviderInfo {
         ProviderInfo {
-            // provider 身份是 `defect`（内置兜底）；model id 仍是 `echo`——回送是它的
-            // 功能。选择对即 `defect::echo`。
+            // The provider identity is `defect` (built-in fallback); the model id remains
+            // `echo`—echoing is its function. The selection pair is `defect::echo`.
             vendor: "defect".to_string(),
             protocol: ProtocolId::AnthropicMessages,
             display_name: "Defect built-in echo".to_string(),

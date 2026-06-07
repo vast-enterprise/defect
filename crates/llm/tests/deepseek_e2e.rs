@@ -1,5 +1,6 @@
-//! DeepSeek provider 集测：复用 OpenAI-compatible transport，但把
-//! DeepSeek 特有的 `/models` 兼容差异收敛在 wrapper 自己。
+//! Integration tests for the DeepSeek provider: reuses the OpenAI-compatible transport,
+//! but keeps DeepSeek-specific `/models` compatibility differences contained within the
+//! wrapper itself.
 
 use std::sync::Arc;
 

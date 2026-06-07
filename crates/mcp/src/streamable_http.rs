@@ -1,19 +1,20 @@
-//! 基于 [`defect_http::ProxyAwareConnector`] + `hyper-util` 的
-//! [`rmcp::transport::streamable_http_client::StreamableHttpClient`] 实现。
+//! An implementation of [`rmcp::transport::streamable_http_client::StreamableHttpClient`]
+//! based on [`defect_http::ProxyAwareConnector`] + `hyper-util`.
 //!
-//! 用来替换 rmcp 自带的 reqwest 后端，避免在二进制里再链一份 reqwest +
-//! 重复的 TLS 栈——MCP 客户端共享 LLM/fetch 同一份连接器（含代理 / NO_PROXY
-//! / 默认 UA / 系统根证书），由 [`defect_http::build_proxy_connector`] 提供。
+//! Replaces rmcp's built-in reqwest backend to avoid pulling in a second copy of
+//! reqwest and a duplicate TLS stack. The MCP client shares the same connector
+//! (proxy / NO_PROXY / default UA / system root certs) used by LLM/fetch, provided
+//! by [`defect_http::build_proxy_connector`].
 //!
-//! 仅实现 v0 必需的子集：
-//! - JSON-RPC POST + Accepted / JSON / SSE 三种返回；
-//! - GET SSE 流；
-//! - DELETE 会话；
-//! - Bearer 认证 header（透明转发）；
-//! - WWW-Authenticate 401 / 403 解析为 [`AuthRequiredError`] /
-//!   [`InsufficientScopeError`]。
+//! Implements only the subset required by v0:
+//! - JSON-RPC POST with Accepted / JSON / SSE responses;
+//! - GET SSE stream;
+//! - DELETE session;
+//! - Bearer auth header (transparent passthrough);
+//! - WWW-Authenticate 401 / 403 parsed into [`AuthRequiredError`] /
+//!   [`InsufficientScopeError`].
 //!
-//! 不实现：OAuth flow（rmcp `auth` feature），那个 v0 不开。
+//! Not implemented: OAuth flow (rmcp `auth` feature) — that is not enabled in v0.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,9 +40,9 @@ const HEADER_MCP_PROTOCOL_VERSION: &str = "MCP-Protocol-Version";
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const JSON_MIME_TYPE: &str = "application/json";
 
-/// 与 rmcp 内部 `RESERVED_HEADERS` 对齐——禁止用户用自定义 header 覆盖
-/// 这些控制语义的字段（`MCP-Protocol-Version` 例外，由 worker 在 init
-/// 之后自己注入，所以放行）。
+/// Aligns with rmcp's internal `RESERVED_HEADERS` — prevents users from overriding these
+/// control-semantic fields with custom headers (`MCP-Protocol-Version` is exempt because
+/// the worker injects it after init, so it is allowed).
 const RESERVED_HEADERS: &[&str] = &[
     "accept",
     HEADER_SESSION_ID,
@@ -49,14 +50,14 @@ const RESERVED_HEADERS: &[&str] = &[
     HEADER_LAST_EVENT_ID,
 ];
 
-/// 共享 [`ProxyAwareConnector`] 的 hyper-util Client 类型——MCP POST 体只发
-/// 已知大小的 JSON，所以 body 用 [`Full<Bytes>`]。
+/// Shared hyper-util client type for [`ProxyAwareConnector`] — MCP POST bodies only send
+/// known-size JSON, so the body uses [`Full<Bytes>`].
 type StreamableHttpHyperClient = HyperClient<ProxyAwareConnector, Full<Bytes>>;
 
-/// hyper-based [`StreamableHttpClient`] 实现。
+/// A hyper-based [`StreamableHttpClient`] implementation.
 ///
-/// `Clone + Send + 'static` 由 trait 要求，[`HyperClient`] 自身已经
-/// `Clone + Send + Sync`，把 user-agent 也放进 [`Arc`]，clone 廉价。
+/// `Clone + Send + 'static` are required by the trait. [`HyperClient`] is already
+/// `Clone + Send + Sync`, and wrapping the user-agent in an [`Arc`] makes cloning cheap.
 #[derive(Clone)]
 pub struct HyperStreamableHttpClient {
     inner: StreamableHttpHyperClient,
@@ -72,12 +73,13 @@ impl std::fmt::Debug for HyperStreamableHttpClient {
 }
 
 impl HyperStreamableHttpClient {
-    /// 便利入口：用 [`defect_http::HttpStackConfig`] 构造一个共享同款连接器/
-    /// UA 的客户端。
+    /// Convenience constructor: builds a client that shares the same connector and
+    /// user-agent from a [`defect_http::HttpStackConfig`].
     ///
     /// # Errors
     ///
-    /// 连接器构造失败（TLS roots 加载、代理 URL 解析）或 UA 非法时返回。
+    /// Returns an error if the connector fails to build (e.g., TLS root loading, proxy
+    /// URL parsing) or if the user-agent is invalid.
     pub fn from_stack_config(
         config: &defect_http::HttpStackConfig,
     ) -> Result<Self, defect_http::HttpStackError> {
@@ -333,8 +335,8 @@ impl StreamableHttpClient for HyperStreamableHttpClient {
     }
 }
 
-/// hyper-util / hyper 在底层产生的错误统一收口为这一种 client error，
-/// rmcp 的 `StreamableHttpError::Client(_)` 内层。
+/// All low-level errors from hyper-util / hyper are unified into this single client
+/// error, which wraps the inner `StreamableHttpError::Client(_)`.
 #[derive(Debug, thiserror::Error)]
 pub enum HyperClientError {
     #[error("failed to build HTTP request: {0}")]
@@ -379,8 +381,8 @@ fn apply_custom_headers(
     Ok(builder)
 }
 
-/// 与 rmcp 内部一致的保留 header 校验：除 `MCP-Protocol-Version`
-/// 外，其他保留字段不允许用户覆盖。
+/// Validates reserved headers consistently with rmcp internals: users may not override
+/// any reserved header except `MCP-Protocol-Version`.
 fn validate_custom_header(name: &HeaderName) -> Result<(), String> {
     if RESERVED_HEADERS
         .iter()
@@ -397,9 +399,9 @@ fn validate_custom_header(name: &HeaderName) -> Result<(), String> {
     Ok(())
 }
 
-/// 与 rmcp 内部 `extract_scope_from_header` 行为一致：从
-/// `WWW-Authenticate` 中抽出 `scope=` 值（含/不含引号皆可），抽不到返回
-/// `None`。逻辑直译自 rmcp 1.7.0。
+/// Matches the behavior of rmcp's internal `extract_scope_from_header`: extracts the
+/// `scope=` value from `WWW-Authenticate` (with or without quotes), returning `None` if
+/// not found. Logic directly ported from rmcp 1.7.0.
 fn extract_scope_from_header(header: &str) -> Option<String> {
     let lower = header.to_ascii_lowercase();
     let key = "scope=";
@@ -435,8 +437,8 @@ async fn read_body(body: Incoming) -> Result<Bytes, StreamableHttpError<HyperCli
     Ok(collected.to_bytes())
 }
 
-/// 把 hyper [`Incoming`] 直接喂进 [`SseStream`]——比 reqwest 那条
-/// `bytes_stream → from_byte_stream` 路径少一次 frame 包装。
+/// Feeds a hyper [`Incoming`] directly into [`SseStream`] — avoids one layer of frame
+/// wrapping compared to the reqwest `bytes_stream → from_byte_stream` path.
 fn sse_body_stream(body: Incoming) -> BoxStream<'static, Result<sse_stream::Sse, SseError>> {
     SseStream::new(body).boxed()
 }

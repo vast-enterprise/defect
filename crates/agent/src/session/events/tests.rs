@@ -17,22 +17,22 @@ async fn emits_to_all_subscribers() {
 
 #[tokio::test]
 async fn slow_consumer_backpressures_emit() {
-    // capacity = 1：填满后下次 emit 必须阻塞到消费者读取
+    // capacity = 1: once full, the next emit must block until a consumer reads
     let bus = EventEmitter::with_capacity(1);
     let mut sub = bus.subscribe();
 
-    bus.emit(AgentEvent::TurnStarted).await; // 填满
+    bus.emit(AgentEvent::TurnStarted).await; // Fills the capacity
     let emit_fut = bus.emit(AgentEvent::TurnStarted);
     tokio::pin!(emit_fut);
 
-    // 不消费时 emit 应当 pending
+    // emit should be pending when not consumed
     tokio::select! {
         biased;
         () = &mut emit_fut => panic!("emit must block when channel full"),
         () = tokio::task::yield_now() => {}
     }
 
-    // 一旦消费，emit 完成
+    // Once consumed, emit completes
     let _ = sub.next().await;
     emit_fut.await;
 }
@@ -47,7 +47,7 @@ async fn dropped_subscriber_is_pruned() {
 
     bus.emit(AgentEvent::TurnStarted).await;
     let count = bus.senders.lock().expect("mutex poisoned").len();
-    // 第一次 emit 后死链已被清掉，只剩 alive
+    // After the first emit, dead subscriptions are cleaned up, leaving only `alive`.
     assert_eq!(count, 1);
     let _ = alive.next().await;
 }

@@ -1,5 +1,5 @@
 //! Fetch tool unit tests.
-//! #20（真 LLM e2e）在 example 里跑。
+//! #20 (real LLM e2e) runs inside the example.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +21,7 @@ use defect_agent::shell::{NoopShellBackend, ShellBackend};
 use super::FetchTool;
 use crate::fs::LocalFsBackend;
 
-/// 构造一份指向真实 wiremock 的 fetch http client。
+/// Build a fetch HTTP client pointed at a real wiremock.
 async fn fixture(config: FetchToolConfig) -> (MockServer, FetchTool, Arc<dyn HttpClient>) {
     let server = MockServer::start().await;
     let stack = HttpStackConfig {
@@ -137,7 +137,7 @@ async fn case2_html_to_markdown_rendered() {
     assert!(!text.contains("<h1>"));
 }
 
-// ─── §10 #3 ────────────────────────────────────────────────────────────────
+// §10 #3
 #[tokio::test]
 async fn case3_format_html_with_markdown_content_type_fails() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -164,7 +164,7 @@ async fn case3_format_html_with_markdown_content_type_fails() {
     assert!(msg.contains("not HTML"), "got: {msg}");
 }
 
-// ─── §10 #4 ────────────────────────────────────────────────────────────────
+// §10 #4
 #[tokio::test]
 async fn case4_format_text_strips_html_tags() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -189,7 +189,7 @@ async fn case4_format_text_strips_html_tags() {
     assert!(text.contains("plain"), "got: {text}");
 }
 
-// ─── §10 #5 ────────────────────────────────────────────────────────────────
+// Test case 5: 404 response includes status marker.
 #[tokio::test]
 async fn case5_404_is_completed_with_status_marker() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -210,7 +210,7 @@ async fn case5_404_is_completed_with_status_marker() {
     assert_eq!(raw["status"], 404);
 }
 
-// ─── §10 #6 ────────────────────────────────────────────────────────────────
+// §10 #6
 #[tokio::test]
 async fn case6_500_is_completed_with_status_marker() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -246,7 +246,7 @@ async fn case7_file_scheme_rejected() {
     );
 }
 
-// ─── §10 #9 ────────────────────────────────────────────────────────────────
+// §10 #9
 #[tokio::test]
 async fn case9_timeout_yields_failed_execution() {
     let mut config = FetchToolConfig::default();
@@ -274,7 +274,7 @@ async fn case9_timeout_yields_failed_execution() {
     assert!(msg.contains("timed out"), "got: {msg}");
 }
 
-// ─── §10 #10 ───────────────────────────────────────────────────────────────
+// §10 #10
 #[tokio::test]
 async fn case10_response_truncation() {
     let mut config = FetchToolConfig::default();
@@ -297,7 +297,7 @@ async fn case10_response_truncation() {
     assert_eq!(raw["truncated"], true);
 }
 
-// ─── §10 #11 ───────────────────────────────────────────────────────────────
+// §10 #11
 #[tokio::test]
 async fn case11_redirect_followed() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -325,7 +325,7 @@ async fn case11_redirect_followed() {
     assert!(text.contains("arrived"), "got: {text}");
 }
 
-// ─── §10 #13 ───────────────────────────────────────────────────────────────
+// §10 #13
 #[tokio::test]
 async fn case13_no_follow_returns_3xx() {
     let mut config = FetchToolConfig::default();
@@ -347,7 +347,7 @@ async fn case13_no_follow_returns_3xx() {
     assert_eq!(raw["redirects"], 0);
 }
 
-// ─── §10 #14 ───────────────────────────────────────────────────────────────
+// §10 #14
 #[tokio::test]
 async fn case14_html_to_markdown_disabled_returns_raw_html() {
     let mut config = FetchToolConfig::default();
@@ -403,7 +403,7 @@ async fn case16_cancel_yields_failed_canceled() {
     );
 }
 
-// ─── §10 #18 ───────────────────────────────────────────────────────────────
+// §10 #18
 #[tokio::test]
 async fn case18_clamp_timeout_records_clamped_from() {
     let mut config = FetchToolConfig::default();
@@ -429,7 +429,7 @@ async fn case18_clamp_timeout_records_clamped_from() {
     assert_eq!(raw["timeout_clamped_from"], 999);
 }
 
-// ─── §10 #19 ───────────────────────────────────────────────────────────────
+// §10 #19
 #[tokio::test]
 async fn case19_binary_content_type_rejected() {
     let (server, tool, http) = fixture(FetchToolConfig::default()).await;
@@ -461,7 +461,7 @@ fn default_format_baked_into_schema() {
     config.default_format = FetchFormat::Html;
     let tool = FetchTool::from_config(&config);
     let schema = tool.schema();
-    // The format property's description mentions the configured default.
+    // The format property's description references the configured default.
     let format_prop = &schema.input_schema["properties"]["format"]["description"];
     let desc = format_prop.as_str().unwrap_or("");
     assert!(desc.contains("html"), "got: {desc}");

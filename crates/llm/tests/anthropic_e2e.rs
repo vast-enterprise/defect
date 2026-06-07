@@ -1,8 +1,10 @@
-//! Anthropic provider end-to-end integration tests: uses wiremock as Anthropic API,
-//! running `AnthropicProvider` as a real backend through a full agent turn.
+//! Anthropic provider end-to-end integration tests: uses wiremock as a stand-in for the
+//! Anthropic API, running `AnthropicProvider` as a real backend through a full agent
+//! turn.
 //!
 //! No real API calls — all routes are intercepted by the mock server, covering
-//! round-trip, auth, cancel scenarios plus single tool_use full loop and list_models.
+//! round-trip, auth, and cancel scenarios, plus a single tool_use full loop and
+//! list_models.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +25,7 @@ const TEST_API_KEY: &str = "test-anthropic-key";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MODEL_ID: &str = "claude-test-001";
 
-// ---- SSE event payloads（与协议层 tests 用的同一份 wire 字节）----------
+// ---- SSE event payloads (same wire bytes used by protocol-layer tests) ----------
 
 const MODEL_START: &str = r#"{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-test-001","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":42,"output_tokens":1}}}"#;
 const TEXT_START_0: &str = r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"","citations":[]}}"#;
@@ -87,7 +89,7 @@ async fn list_models_round_trip() {
     assert_eq!(models[0].display_name.as_deref(), Some("Claude Test"));
 }
 
-// ---------- text-only turn ----------------------------------------------
+// --- text-only turn ---
 
 #[tokio::test]
 async fn turn_with_text_only_response() {
@@ -133,11 +135,12 @@ async fn turn_with_text_only_response() {
 
 // ---------- tool-use turn (two LLM rounds) -------------------------------
 
-/// 两轮 LLM：第 1 轮发 tool_use，第 2 轮发 EndTurn 文本。
+/// Two LLM rounds: round 1 sends a tool_use, round 2 sends an EndTurn text.
 ///
-/// wiremock 的 `expect(1)` + `respond_with` 不支持"按调用次数返回不同 body"，
-/// 这里用一条 `Mock` 注册两个独立路由不行（同一条 path），所以走
-/// "Mock 上挂 stateful matcher：拿请求体 messages 长度判断轮次"。
+/// wiremock's `expect(1)` + `respond_with` does not support returning different bodies
+/// based on call count. Registering two separate routes on a single `Mock` is not
+/// possible (same path), so we use a stateful matcher on the `Mock` that inspects the
+/// `messages` length in the request body to determine the round.
 #[tokio::test]
 async fn turn_with_tool_use_two_rounds() {
     let server = start_mock_server().await;
@@ -171,8 +174,9 @@ async fn turn_with_tool_use_two_rounds() {
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(move |req: &Request| {
-            // 用请求体 messages.len 判断轮次：第 1 轮只有 1 条 user，
-            // 第 2 轮有 user + assistant(tool_use) + user(tool_result) = 3 条。
+            // Use `messages.len` from the request body to determine the round: round 1
+            // has only 1 user message, round 2 has 3 messages (user + assistant(tool_use)
+            // + user(tool_result)).
             let body: Value = serde_json::from_slice(&req.body).expect("body json");
             let n = body
                 .get("messages")
@@ -221,8 +225,9 @@ async fn turn_with_tool_use_two_rounds() {
 async fn missing_api_key_header_is_rejected_by_server() {
     let server = start_mock_server().await;
 
-    // 故意要求一个不存在的 key——provider 必然不带这个 header，
-    // 导致匹配落到默认 404 上，验证"provider 把 x-api-key 真的发出去了"。
+    // Intentionally request a non-existent key — the provider will not include this
+    // header, so the match falls through to the default 404, confirming that the provider
+    // actually sends the `x-api-key` header.
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .and(header("x-api-key", "wrong-key"))
@@ -245,7 +250,8 @@ async fn missing_api_key_header_is_rejected_by_server() {
         hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
     };
     let res = provider.complete(req, cancel).await;
-    // wiremock 在没有 mock 命中时返回 404，provider 应映射到 ServerError。
+    // wiremock returns 404 when no mock matches; the provider should map this to
+    // `ServerError`.
     assert!(res.is_err(), "expected error when auth header didn't match");
 }
 
@@ -255,9 +261,11 @@ async fn missing_api_key_header_is_rejected_by_server() {
 async fn cancel_during_stream_terminates_turn_silently() {
     let server = start_mock_server().await;
 
-    // 给一个慢响应：每 10ms 一帧的小流，足够让 cancel 在中途生效。
-    // wiremock 不直接支持 chunked SSE delay；这里用 set_delay 让响应在
-    // 100ms 后才发回——cancel 在这之前先触发。
+    // Provide a slow response: a small stream of frames every 10ms, enough for cancel to
+    // take effect mid-stream.
+    // wiremock does not directly support chunked SSE delay; here we use `set_delay` to
+    // delay the response by
+    // 100ms — cancel fires before that.
     let events = [
         ("message_start", MODEL_START),
         ("content_block_start", TEXT_START_0),
@@ -282,15 +290,17 @@ async fn cancel_during_stream_terminates_turn_silently() {
     let s = session.clone();
     let h = tokio::spawn(async move { s.run_turn(user_prompt("hi")).await });
 
-    // 给请求一点时间 in-flight，再取消。
+    // Give the request a little time to be in-flight before cancelling.
     tokio::time::sleep(Duration::from_millis(50)).await;
     session.cancel_turn();
 
     let outcome = h.await.expect("join");
-    // cancel 在 HTTP 阶段触发：provider 立即返回 `ProviderErrorKind::Canceled`，
-    // turn loop 当前把它当作 `TurnError::Provider`（Canceled 在 retry_hint
-    // 里是 No，所以不重试）。也允许"cancel 落在 SSE 拉取阶段 → 主循环把它
-    // 翻成 `StopReason::Cancelled`"或"响应在取消之前已经全部到达"两种边界。
+    // Cancel can fire during the HTTP phase: the provider returns
+    // `ProviderErrorKind::Canceled` immediately, and the turn loop currently maps that to
+    // `TurnError::Provider` (since `Canceled` has `retry_hint = No`, no retry occurs).
+    // Also allow two edge cases: cancel arriving during SSE streaming, which the main
+    // loop converts to `StopReason::Cancelled`, or the response completing fully before
+    // the cancel takes effect.
     use defect_agent::llm::ProviderErrorKind;
     use defect_agent::session::TurnError;
     match outcome {

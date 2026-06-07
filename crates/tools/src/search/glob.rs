@@ -1,6 +1,7 @@
-//! 把 glob 字符串编译成 [`globset::GlobSet`]。
+//! Compiles a glob pattern into a [`globset::GlobSet`].
 //!
-//! [`globset::Glob::new`] 不展开大括号 `{a,b}`——P1 自己拆。详见
+//! [`globset::Glob::new`] does not expand brace groups like `{a,b}` — P1 handles that
+//! itself. See
 //! Glob pattern matching for file name search.
 
 use globset::{Error, Glob, GlobSetBuilder};
@@ -13,10 +14,10 @@ pub(super) fn build_globset(pattern: &str) -> Result<globset::GlobSet, Error> {
     builder.build()
 }
 
-/// 展开 `src/foo.{ts,tsx}` → `["src/foo.ts", "src/foo.tsx"]`。
+/// Expands `src/foo.{ts,tsx}` → `["src/foo.ts", "src/foo.tsx"]`.
 ///
-/// 不支持嵌套大括号——遇到嵌套时按字面量处理（让 globset 自己抱怨），
-/// 与 claw-code 的 `expand_braces` 同款简化策略。
+/// Does not support nested braces — nested braces are treated as literals (let `globset`
+/// complain), matching the simplified strategy of claw-code's `expand_braces`.
 fn expand_braces(pattern: &str) -> Vec<String> {
     let bytes = pattern.as_bytes();
     let mut depth = 0u32;

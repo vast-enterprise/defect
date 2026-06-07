@@ -1,8 +1,10 @@
-//! `inspect_background_task` / `cancel_background_task` 工具单测。
+//! Unit tests for `inspect_background_task` / `cancel_background_task`.
 //!
-//! 直接构造 [`BackgroundTasks`]、spawn 几个可控任务，再用工具的 `execute` 跑出 tool 事件
-//! 断言渲染文本与控制效果。子 agent 那条进度链路（spawn_agent → ProgressSink）由
-//! spawn_agent 自己的测试覆盖；这里只验工具对任务表的读/控。
+//! Constructs a [`BackgroundTasks`] directly, spawns a few controllable tasks, then runs
+//! the tools' `execute` to produce tool events and asserts the rendered text and control
+//! effects. The sub-agent progress path (`spawn_agent` → `ProgressSink`) is covered by
+//! `spawn_agent`'s own tests; here we only verify the tools' read/control over the task
+//! table.
 
 use super::*;
 
@@ -18,7 +20,8 @@ use crate::session::{BackgroundResult, BackgroundTasks};
 use crate::shell::ShellBackend;
 use crate::tool::ToolContext;
 
-/// 跑一个工具，注入指定的 background 句柄（或 `None`），收集全部 tool 事件。
+/// Runs a tool, injecting the given background handle (or `None`), and collects all tool
+/// events.
 fn run(
     tool: &dyn Tool,
     args: serde_json::Value,
@@ -46,7 +49,8 @@ fn run(
     })
 }
 
-/// 取一个 `Completed` 事件里的文本（raw_output 字符串）。非 Completed 直接 panic。
+/// Extract the text from a `Completed` event's `raw_output` string. Panics if the event
+/// is not `Completed`.
 fn completed_text_of(ev: &ToolEvent) -> &str {
     match ev {
         ToolEvent::Completed(fields) => fields
@@ -84,18 +88,18 @@ fn inspect_empty_lists_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inspect_lists_running_and_finished() {
     let bg = BackgroundTasks::new(CancellationToken::new(), Default::default());
-    // 一个立刻完成的任务。
+    // A task that completes immediately.
     let done_id = bg.spawn("reviewer".to_string(), |_c, _p| async {
         BackgroundResult::Completed("ok".to_string())
     });
-    // 一个阻塞着的任务（保持 running）。
+    // A blocking task (keeps running).
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     let running_id = bg.spawn("builder".to_string(), |_c, _p| async move {
         let _ = rx.await;
         BackgroundResult::Completed("late".to_string())
     });
 
-    // 等完成任务入表终态。
+    // Wait for the task to reach its final state in the table.
     for _ in 0..200 {
         if bg.peek(&done_id, Some(1)).map(|s| s.status)
             == Some(crate::session::TaskStatus::Completed)
@@ -148,7 +152,7 @@ async fn cancel_running_task_then_it_ends_canceled() {
     .unwrap();
     assert!(completed_text_of(&out[0]).contains("cancellation"));
 
-    // 任务实际结束后状态应为 Canceled。
+    // After the task actually finishes, its status should be `Canceled`.
     let mut status = None;
     for _ in 0..200 {
         status = bg.peek(&id, Some(1)).map(|s| s.status);

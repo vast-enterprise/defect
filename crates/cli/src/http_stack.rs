@@ -1,20 +1,22 @@
-//! 把 `defect-config` 的 typed HTTP 配置翻译成 `defect_http::HttpStackConfig`。
+//! Translates the typed HTTP configuration from `defect-config` into a
+//! [`defect_http::HttpStackConfig`].
 //!
-//! `defect-config` 不直接依赖 `defect-http` 是为了保持 crate 单向依赖
-//! （详见 [`defect_config::HttpClientConfig`] 注释）。翻译动作放 CLI
-//! 装配期最自然——同一份 stack config 三家 provider 共用，proxy URI
-//! 解析失败在这里集中报错。
+//! `defect-config` avoids a direct dependency on `defect-http` to keep the crate
+//! dependency one-way (see the comment on [`defect_config::HttpClientConfig`]).
+//! Performing this translation during CLI assembly is the most natural place — the same
+//! stack config is shared by three providers, and any proxy URI parsing failures are
+//! reported centrally here.
 
 use std::time::Duration;
 
 use defect_config::{HttpClientConfig, HttpProxyMode, HttpProxySettings};
 
-/// 按 typed config 构造一份 [`defect_http::HttpStackConfig`]。
+/// Construct a [`defect_http::HttpStackConfig`] from the typed config.
 ///
 /// # Errors
 ///
-/// 当 `proxy.mode = Explicit` 且 `http_proxy` / `https_proxy` URI 无法
-/// 解析时返回错误，避免后续 provider 装配时再触发同一错误。
+/// Returns an error when `proxy.mode = Explicit` and the `http_proxy` / `https_proxy` URI
+/// cannot be parsed, to avoid triggering the same error later during provider assembly.
 pub fn build_http_stack_config(
     config: &HttpClientConfig,
 ) -> anyhow::Result<defect_http::HttpStackConfig> {

@@ -1,15 +1,16 @@
-//! 把 `defect-config` 的 hook 配置翻译成 agent 的 [`DefaultHookEngine`]。
+//! Translates `defect-config` hook configuration into the agent's [`DefaultHookEngine`].
 //!
-//! Hook assembly — the agent crate does not depend on the config crate,
-//! 翻译动作放 CLI 装配期；这里也是 fail-fast 报"未知 builtin 名"的位置。
+//! Hook assembly — the agent crate does not depend on the config crate, so translation
+//! happens during CLI assembly; this is also where we fail-fast with "unknown builtin
+//! name".
 //!
-//! 三种 handler 形态在 v0 全部接通：
-//! - `Builtin { name }` → 按名查 [`BuiltinRegistry`]，未知 name 走
+//! All three handler variants are wired up in v0:
+//! - `Builtin { name }` → looks up [`BuiltinRegistry`] by name; unknown name triggers
 //!   [`HookEngineBuildError::UnknownBuiltin`] fail-fast
-//! - `Command(_)` → [`CommandHandler::new`]（argv 直 spawn / 显式 shell 二选一）
-//! - `Prompt(_)` → [`PromptHandler::new`]，CLI 装配期把当前 default
-//!   provider/model 喂进去（`HookPromptSpec.model = None` 时回退到 session
-//!   默认 model）
+//! - `Command(_)` → [`CommandHandler::new`] (either direct argv spawn or explicit shell)
+//! - `Prompt(_)` → [`PromptHandler::new`]; during CLI assembly the current default
+//!   provider/model is injected (when `HookPromptSpec.model = None`, falls back to the
+//!   session default model)
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,10 +27,10 @@ use defect_config::{
     HookPromptSpec, HookShellKind, HooksConfig,
 };
 
-/// 装配错误。
+/// Build errors.
 ///
-/// `Configuration` 兜底仅出现在配置层未捕获的非法组合（理论上 config
-/// loader 已经 fail-fast 过一轮）。
+/// `Configuration` is a fallback for invalid combinations not caught by the configuration
+/// layer (in theory the config loader has already fail-fast once).
 #[derive(Debug, thiserror::Error)]
 pub enum HookEngineBuildError {
     #[error("unknown builtin hook handler `{name}` (available: {available})")]
@@ -39,16 +40,17 @@ pub enum HookEngineBuildError {
     Configuration(String),
 }
 
-/// 装配 hook engine 时还需要的运行期上下文。
+/// Runtime context needed when assembling the hook engine.
 ///
-/// `Prompt` handler 要 LLM provider；`registry` 提供"按 model id 选 provider"
-/// 与"如果 hook 没指定 model 用哪个 fallback"。
+/// `Prompt` handlers need an LLM provider; `registry` provides model-id-based provider
+/// selection and a fallback model when the hook does not specify one.
 pub struct HookEngineCtx<'a> {
     pub registry: &'a Arc<ProviderRegistry>,
     pub default_model: &'a str,
 }
 
-/// 从 `[hooks]` 段构造 [`HandlerTable`]（不含自动挂载的 builtin）。
+/// Constructs a [`HandlerTable`] from the `[hooks]` section (excluding auto-mounted
+/// builtins).
 fn build_handler_table(
     hooks: &HooksConfig,
     builtins: &BuiltinRegistry,
@@ -56,11 +58,14 @@ fn build_handler_table(
 ) -> Result<HandlerTable, HookEngineBuildError> {
     let mut table = HandlerTable::empty();
 
-    // config 的事件桶键就是 step 的 `event_name`（1:1，config 层已校验过合法性）。
-    // `event_name` 须为 `&'static str`（HandlerTable 的桶键）——从 step::ALL_EVENT_NAMES 取静态串。
+    // The event bucket keys in config are the step's `event_name` (1:1, already validated
+    // by the config layer).
+    // `event_name` must be `&'static str` (the bucket key of `HandlerTable`) — taken from
+    // `step::ALL_EVENT_NAMES` as a static string.
     for (event_name, entries) in &hooks.buckets {
         let Some(static_name) = static_event_name(event_name) else {
-            // config 层已 fail-fast 掉未知事件名；这里兜底跳过。
+            // The config layer already fail-fasts on unknown event names; skip here as a
+            // safety net.
             continue;
         };
         for entry in entries {
@@ -76,7 +81,7 @@ fn build_handler_table(
     Ok(table)
 }
 
-/// 用 `[hooks]` 段 + builtin 注册表构造一个 [`DefaultHookEngine`]。
+/// Build a [`DefaultHookEngine`] from the `[hooks]` section and the builtin registry.
 pub fn build_hook_engine(
     hooks: &HooksConfig,
     builtins: &BuiltinRegistry,
@@ -88,7 +93,8 @@ pub fn build_hook_engine(
     Ok(engine)
 }
 
-/// 把 config 的事件名（owned String）换成 step 模型用的 `&'static str`。
+/// Converts the config's event name (owned `String`) to the `&'static str` used by the
+/// step model.
 fn static_event_name(name: &str) -> Option<&'static str> {
     defect_agent::hooks::step::ALL_EVENT_NAMES
         .iter()
@@ -125,8 +131,8 @@ fn build_handler(
             let timeout = handler.timeout();
             Ok((Arc::new(handler) as Arc<dyn StepHandler>, timeout))
         }
-        // `HookHandlerSpec` 是 non_exhaustive 的——出现新形态时强制 CLI 显式
-        // 加一条分支，避免默默 noop。
+        // `HookHandlerSpec` is non_exhaustive — new variants force the CLI to add an
+        // explicit branch, preventing silent no-ops.
         other => Err(HookEngineBuildError::Configuration(format!(
             "unrecognized hook handler form: {other:?}"
         ))),
@@ -138,7 +144,8 @@ fn resolve_prompt_provider(
     rt: &HookEngineCtx<'_>,
 ) -> Result<Arc<dyn LlmProvider>, HookEngineBuildError> {
     let model_id = spec.model.as_deref().unwrap_or(rt.default_model);
-    // prompt hook 的 `model` 字段没有 provider 维度——按裸 id 取首个声明它的 entry。
+    // The `model` field of a prompt hook has no provider dimension — take the first entry
+    // that declares it by bare id.
     let entry = rt.registry.first_entry_for_model(model_id).ok_or_else(|| {
         HookEngineBuildError::Configuration(format!(
             "prompt hook references unknown model `{model_id}` (no provider registered for it)"
@@ -183,7 +190,8 @@ fn translate_command(spec: &HookCommandSpec) -> CommandSpec {
             env: env.clone(),
             timeout_sec: *timeout_sec,
         },
-        // non_exhaustive 兜底——遇到新形态保守翻成空 argv 让 agent 层报错。
+        // Fallback for `non_exhaustive` – conservatively produce an empty argv on unknown
+        // variants, letting the agent layer report the error.
         other => {
             let _ = other;
             CommandSpec::Argv {
@@ -207,7 +215,7 @@ fn translate_shell(shell: &HookShellKind) -> AgentShellKind {
             program: program.clone(),
             args: args.clone(),
         },
-        // non_exhaustive 兜底
+        // Fallback for non_exhaustive variant
         other => {
             let _ = other;
             AgentShellKind::Sh
@@ -231,7 +239,7 @@ fn translate_prompt(
                 template: template.clone(),
             },
             other => {
-                // non_exhaustive 兜底——按 Json 兜底。
+                // Fallback for non_exhaustive — default to Json.
                 let _ = other;
                 AgentPromptRender::Json
             }
@@ -240,9 +248,9 @@ fn translate_prompt(
     }
 }
 
-/// 在 [`Arc`] 里封装一份 hook engine——session/turn 主循环统一拿
-/// `Arc<dyn HookEngine>`。`HooksConfig::is_empty` 时用
-/// [`defect_agent::hooks::NoopHookEngine`] 走零开销路径。
+/// Wraps a hook engine in an [`Arc`] so that the session/turn main loop can uniformly
+/// hold an `Arc<dyn HookEngine>`. When `HooksConfig::is_empty`, uses
+/// [`defect_agent::hooks::NoopHookEngine`] for a zero-overhead path.
 pub fn build_engine_arc(
     hooks: &HooksConfig,
     builtins: &BuiltinRegistry,
@@ -255,15 +263,19 @@ pub fn build_engine_arc(
     Ok(Arc::new(engine))
 }
 
-/// 主 session 的 hook 引擎：在用户 `[hooks]` 配置之上**自动挂载**两个 skill
-/// builtin（发现到任意 skill 时）——
-/// - `skill-manifest` → `after_session_enter`：注入 L1 清单 + always-on body；
-/// - `skill-triggers` → `before_ingest`：按 prompt 自动激活相关 skill。
+/// Hook engine for the main session: automatically mounts two skill builtins on top of
+/// the user's `[hooks]` configuration (when any skill is discovered) —
+/// - `skill-manifest` → `after_session_enter`: injects the L1 manifest + always-on body;
+/// - `skill-triggers` → `before_ingest`: auto-activates relevant skills based on the
+///   prompt.
 ///
-/// 这让"自动激活"开箱即用、不要求用户手写 `[[hooks.*]]`。两个 hook 的 matcher
-/// 全空（命中该事件下所有触发）。skill 索引为空时不挂（保持零开销），且当用户
-/// 也没配 `[hooks]` 时直接走 [`NoopHookEngine`](defect_agent::hooks::NoopHookEngine)。子 agent profile 不走这条路径
-/// （仍用 [`build_engine_arc`]），故 skill hook 不会渗进子 agent。
+/// This makes "auto-activation" work out of the box without requiring users to write
+/// `[[hooks.*]]` manually. Both hooks have empty matchers (they match all triggers under
+/// that event). When the skill index is empty, nothing is mounted (keeping zero
+/// overhead), and when the user also has no `[hooks]` configured, it falls through to
+/// [`NoopHookEngine`](defect_agent::hooks::NoopHookEngine). Sub-agent profiles do not
+/// take this path (they still use [`build_engine_arc`]), so skill hooks do not leak into
+/// sub-agents.
 pub fn build_main_session_engine(
     hooks: &HooksConfig,
     builtins: &BuiltinRegistry,
@@ -296,9 +308,11 @@ pub fn build_main_session_engine(
             .with_name(Some("skill-triggers".to_string())),
         );
     }
-    // `--goal` 模式：挂 goal-gate 到两个事件——after_session_enter 注入目标说明 +
-    // goal_done 契约（turn 1 起生效，模型一开机就知道完成后要调 goal_done），
-    // before_turn_end 驱动"达成才退出"的循环。两个挂载点共用同一份 GoalState。
+    // `--goal` mode: attach a `GoalGate` to two events — `after_session_enter` injects
+    // the goal description and the `goal_done` contract (active from turn 1, so the model
+    // knows from startup that it must call `goal_done` upon completion), and
+    // `before_turn_end` drives the "exit only when achieved" loop. Both mount points
+    // share the same `GoalState`.
     if let Some(goal) = goal {
         use defect_agent::hooks::builtin::GoalGate;
         table.push_step(
@@ -412,7 +426,7 @@ mod tests {
         let session_id = agent_client_protocol_schema::SessionId::new("s");
         let cwd = std::path::Path::new("/");
         let hctx = defect_agent::hooks::HookCtx::new(&session_id, cwd, CancellationToken::new());
-        // 空配置 → NoopHookEngine：dispatch 返回 Proceed，step 不被改动。
+        // Empty config → NoopHookEngine: dispatch returns Proceed, step is unchanged.
         let mut step = defect_agent::hooks::step::AfterSessionEnter {
             cwd: "/".to_string(),
             source: defect_agent::hooks::step::SessionSource::New,

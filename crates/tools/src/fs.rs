@@ -1,6 +1,4 @@
-//! `fs` 内置工具家族：`read_file` / `write_file` / `edit_file`。
-//!
-//! Filesystem tool family: read, write, edit.
+//! Built-in `fs` tool family: `read_file`, `write_file`, `edit_file`.
 
 mod edit;
 mod local_backend;

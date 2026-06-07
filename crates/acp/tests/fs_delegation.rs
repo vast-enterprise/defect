@@ -1,14 +1,14 @@
 //! ACP filesystem delegation e2e tests.
 //!
-//! 形态：在进程内用 `Channel::duplex` 把 ACP server / client 对接，
-//! server 跑 `defect_acp::serve_on`（注入 `ScriptedProvider` + 三个 fs 工具
-//! 的 [`StaticToolRegistry`]），client 用一个声明 fs capabilities 的 builder
-//! 注册 `fs/read_text_file` / `fs/write_text_file` 反向请求 handler。
+//! Architecture: within the process, `Channel::duplex` connects the ACP server and
+//! client. The server runs `defect_acp::serve_on` (injecting a `ScriptedProvider` plus a
+//! [`StaticToolRegistry`] of three fs tools). The client uses a builder that declares fs
+//! capabilities to register reverse-request handlers for `fs/read_text_file` and
+//! `fs/write_text_file`.
 //!
-//! LLM provider 的脚本由测试 case 自行配 [`Round`]：
-//! - 第 1 轮：emit tool_use（指定工具名 + args JSON），Stop=ToolUse
-//! - 第 2 轮：emit "done" 文本，Stop=EndTurn
-//!
+//! The LLM provider script is configured per test case via [`Round`]:
+//! - Round 1: emit `tool_use` (specifying tool name + args JSON), `Stop=ToolUse`
+//! - Round 2: emit `"done"` text, `Stop=EndTurn`
 
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -37,7 +37,7 @@ use futures::stream;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-// ---------- transport wrapper ----------
+// Transport wrapper
 
 struct ChannelTransport<R: Role> {
     inner: Channel,
@@ -205,8 +205,8 @@ struct ClientObservations {
 
 type SharedObs = Arc<Mutex<ClientObservations>>;
 
-/// fake-client 反向请求 handler 的可选执行体；返回 None 表示该 case 期望不会
-/// 被调到（一旦真的被调用就 panic）。
+/// Optional body for a fake-client reverse-request handler; returning `None` means the
+/// case is expected never to be invoked (and will panic if it is).
 type ReadFn = dyn Fn(
         &ReadTextFileRequest,
         &SharedObs,
@@ -241,7 +241,8 @@ fn build_server(rounds: Vec<Round>) -> Arc<dyn AgentCore> {
     Arc::new(core)
 }
 
-/// 跑一个 init→session/new→prompt 路径，返回 stop reason 与 client 端观察记录。
+/// Run an init → session/new → prompt flow, returning the stop reason and client-side
+/// observations.
 async fn run_e2e(
     cwd: PathBuf,
     rounds: Vec<Round>,
@@ -352,7 +353,7 @@ fn read_only_fs_caps() -> ClientCapabilities {
 
 // ---------- cases ----------
 
-/// #1 委托模式 + read_file → fs/read_text_file 反向请求被命中
+/// #1 Delegation pattern + read_file → fs/read_text_file reverse request is hit
 #[tokio::test]
 async fn case1_delegated_read_file_round_trips() {
     let dir = tempfile::tempdir().unwrap();
@@ -387,7 +388,7 @@ async fn case1_delegated_read_file_round_trips() {
     );
 }
 
-/// #2 委托模式 + write_file → fs/write_text_file 反向请求被命中
+/// #2 delegated write_file → fs/write_text_file round-trip hit
 #[tokio::test]
 async fn case2_delegated_write_file_round_trips() {
     let dir = tempfile::tempdir().unwrap();
@@ -406,7 +407,8 @@ async fn case2_delegated_write_file_round_trips() {
         },
     ];
 
-    // write_file 工具 best-effort 先 read 旧内容；client 回 ResourceNotFound 表示新文件。
+    // The `write_file` tool best-effort reads old content first; the client returns
+    // `ResourceNotFound` for a new file.
     let read: Arc<ReadFn> = Arc::new(|_req, _obs| {
         Err(agent_client_protocol::Error::resource_not_found(Some(
             "not found".to_string(),
@@ -422,7 +424,7 @@ async fn case2_delegated_write_file_round_trips() {
     assert_eq!(obs.writes[0].1, "hi");
 }
 
-/// #3 委托模式 + edit_file → 先 read 再 write 顺序正确
+/// #3 delegated edit_file: read before write order is correct
 #[tokio::test]
 async fn case3_delegated_edit_file_reads_then_writes() {
     let dir = tempfile::tempdir().unwrap();
@@ -460,7 +462,8 @@ async fn case3_delegated_edit_file_reads_then_writes() {
     assert!(!obs.writes.is_empty(), "expected at least one fs/write");
 }
 
-/// #4 client 只声明 read（write=false）→ 整组退回本地，**不**发反向请求
+/// #4 client declares read only (write=false) → entire group falls back to local, **no**
+/// reverse request sent
 #[tokio::test]
 async fn case4_partial_caps_falls_back_to_local() {
     let dir = tempfile::tempdir().unwrap();
@@ -490,7 +493,8 @@ async fn case4_partial_caps_falls_back_to_local() {
     );
 }
 
-/// #5 client 不声明 fs → 退回本地（同 #4，但 caps 完全缺失而非半声明）
+/// #5 client does not declare fs → falls back to local (same as #4, but caps are
+/// completely missing rather than half-declared)
 #[tokio::test]
 async fn case5_no_caps_falls_back_to_local() {
     let dir = tempfile::tempdir().unwrap();
@@ -517,7 +521,7 @@ async fn case5_no_caps_falls_back_to_local() {
     assert!(obs.writes.is_empty());
 }
 
-/// #6 委托模式 client 返回错误 → 工具 Failed，但 turn 继续到 EndTurn
+/// #6 delegated client error → tool Failed, but turn continues to EndTurn
 #[tokio::test]
 async fn case6_delegated_client_error_marks_tool_failed() {
     let dir = tempfile::tempdir().unwrap();
@@ -551,7 +555,7 @@ async fn case6_delegated_client_error_marks_tool_failed() {
     );
 }
 
-/// #7 委托模式下 turn 中途 cancel → CancelNotification 把 turn 切断（不 hang）
+/// #7 delegated cancel mid-turn → CancelNotification cuts the turn (no hang)
 #[tokio::test]
 async fn case7_delegated_cancel_short_circuits() {
     use agent_client_protocol::schema::CancelNotification;
@@ -572,8 +576,9 @@ async fn case7_delegated_cancel_short_circuits() {
         },
     ];
 
-    // client 立即把 read 失败掉——避免 reverse-request 永远 pending；本 case 主要
-    // 验证：委托模式下伴随 cancel 不 hang。真正的 cancel 路径见 e2e_turn 套件。
+    // Make the client's `read` fail immediately, so the reverse-request does not stay
+    // pending forever. This case mainly verifies that delegation mode with a concurrent
+    // cancel does not hang. The real cancel path is covered by the `e2e_turn` test suite.
     let read: Arc<ReadFn> = Arc::new(|_req, _obs| {
         Err(agent_client_protocol::Error::resource_not_found(Some(
             "missing".to_string(),
@@ -655,7 +660,8 @@ async fn case7_delegated_cancel_short_circuits() {
     );
 }
 
-/// #8 委托模式下 path 越界 → agent 自己拦下，**不**发反向请求
+/// #8 In delegated mode, path escape is blocked by the agent itself, **without** sending
+/// a reverse request
 #[tokio::test]
 async fn case8_path_escape_blocked_before_reverse_request() {
     let dir = tempfile::tempdir().unwrap();

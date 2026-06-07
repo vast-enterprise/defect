@@ -7,11 +7,13 @@ use crate::session::turn::{BasePromptConfig, PromptConfig};
 
 const DEFAULT_PROMPT_FILE: &str = "AGENTS.md";
 
-/// 一段带标题的 system prompt 片段。最终各段套一级标题（`#`）、以 markdown
-/// 水平分割线（`---`）相隔拼接，让模型把每段当作独立文档理解。
+/// A system prompt section with a title. Each section is wrapped in a level-1 heading
+/// (`#`) and separated by a markdown horizontal rule (`---`), so the model treats each
+/// section as an independent document.
 ///
-/// 约定：注入的标题占用一级（`#`），片段正文（base_prompt / AGENTS.md 等）
-/// 建议从二级标题（`##`）起步，自然嵌套在其下。
+/// Convention: the injected title uses level-1 (`#`); the section body (e.g.
+/// `base_prompt` / `AGENTS.md`) should start at level-2 (`##`) and nest naturally
+/// underneath.
 struct Section {
     title: String,
     body: String,
@@ -30,7 +32,7 @@ impl Section {
     }
 }
 
-/// 把各片段套一级标题、以 `\n\n---\n\n` 相隔拼接。
+/// Wrap each section in a level-1 heading and join them separated by `\n\n---\n\n`.
 fn render_sections(sections: &[Section]) -> Option<String> {
     (!sections.is_empty()).then(|| {
         sections
@@ -43,7 +45,8 @@ fn render_sections(sections: &[Section]) -> Option<String> {
 
 /// # Errors
 ///
-/// 读取 prompt 文件失败，或 prompt 文件所在路径不存在时返回错误。
+/// Returns an error if reading the prompt file fails or the prompt file path does not
+/// exist.
 pub fn resolve_system_prompt(
     ctx: &RunningContext,
     provider: &str,
@@ -58,8 +61,8 @@ pub fn resolve_system_prompt(
         sections.push(Section::new("Base Prompt", body));
     }
 
-    // 运行环境信息：紧跟 base prompt（身份）之后、project 约定之前，作为稳定
-    // 的事实层。
+    // Environment info: placed immediately after the base prompt (identity) and before
+    // project conventions, serving as a stable fact layer.
     sections.push(Section::new("Environment", ctx.render()));
 
     if let Some(text) = prompt.text.as_deref() {
@@ -113,9 +116,11 @@ fn load_base_prompt(base_prompt: &BasePromptConfig) -> Result<Vec<String>, io::E
     Ok(sections)
 }
 
-/// 加载 project prompt 文件。返回每段 `(相对来源路径, 正文)`——来源路径用于
-/// 标进片段标题（`# Project Instructions (...)`），相对 `cwd` 计算，失败时回退
-/// 为文件名本身。非默认文件名只读单个位置；默认 `AGENTS.md` 沿目录树向上收集。
+/// Loads the project prompt file. Returns a list of `(relative source path, text)` pairs
+/// — the source path is used in the section heading (`# Project Instructions (...)`),
+/// computed relative to `cwd`, falling back to the bare filename on failure. For
+/// non-default filenames, only a single location is read; for the default `AGENTS.md`,
+/// files are collected by walking up the directory tree.
 fn load_prompt_file(cwd: &Path, file: &str) -> Result<Vec<(Option<String>, String)>, io::Error> {
     if file != DEFAULT_PROMPT_FILE {
         let path = resolve_prompt_path(cwd, file);
@@ -126,8 +131,9 @@ fn load_prompt_file(cwd: &Path, file: &str) -> Result<Vec<(Option<String>, Strin
         };
     }
 
-    // AGENTS.md 沿目录树自 repo root 向下收集，故来源标签相对 repo root 计算
-    // （如 `AGENTS.md`、`apps/web/AGENTS.md`）。
+    // AGENTS.md is collected downward from the repo root along the directory tree, so
+    // source labels are computed relative to the repo root (e.g. `AGENTS.md`,
+    // `apps/web/AGENTS.md`).
     let base = find_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
     let mut sections = Vec::new();
     for dir in prompt_dirs(cwd) {
@@ -141,7 +147,8 @@ fn load_prompt_file(cwd: &Path, file: &str) -> Result<Vec<(Option<String>, Strin
     Ok(sections)
 }
 
-/// 来源路径标签：优先相对 `base`，无法相对化时回退到文件名，再回退到全路径。
+/// Label for the source path: prefer a path relative to `base`, fall back to the file
+/// name, then to the full path.
 fn rel_label(base: &Path, path: &Path) -> String {
     path.strip_prefix(base)
         .ok()

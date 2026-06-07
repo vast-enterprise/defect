@@ -1,27 +1,32 @@
-//! Hook step-context：typestate + 信封。
-//!
+//! Hook step-context: typestate + envelope.
 
+//! ## One-liner
 //!
-//! ## 一句话
+//! Each mount point gets its own dedicated **step type** (typestate). The same step state
+//! is consumed by two kinds of hooks — internal Rust hooks work directly with the strong
+//! type and mutate fields; user-configured hooks observe the world through the JSON
+//! envelope produced by [`HookStep::to_envelope`] and apply output back via
+//! [`HookStep::apply_verdict`]. **Equal capability, identical surface** — only the medium
+//! of expression differs.
 //!
-//! 每个挂载点对应一个独立的 **step 类型**（typestate）。同一份 step state 被两种 hook 消费——
-//! 内部 Rust hook 直接拿强类型 + 改字段；用户配置 hook 经 [`HookStep::to_envelope`] 的 JSON 信封
-//! 看世界、经 [`HookStep::apply_verdict`] 把输出 JSON 应用回来。**能力对等、可见面一致**，只是表达
-//! 媒介不同。
+//! ## Two axioms
 //!
-//! ## 两条公理
+//! 1. **Typestate**: Instead of one large enum with a variant field, each mount point is
+//!    a concrete struct. The surface is locked at compile time; `Option` presence/absence
+//!    encodes "already produced / will produce" — filling a "will produce" `Option` means
+//!    short-circuit.
+//! 2. **Call vs mutation asymmetry**: Call-type steps (Generate / ToolApply / Permission)
+//!    fill an `Option` to skip; mutation-type steps (Compact / Ingest) degrade to
+//!    veto/rewrite, without the "fill Option" path.
 //!
-//! 1. **typestate**：不用一个带 variant 字段的大 enum，每个挂载点一个具体 struct。可见面编译期锁死；
-//!    `Option` 的有/无编码"已产出 / 将产出"——将产出的 `Option` 被填上 = short-circuit。
-//! 2. **调用型 vs 变更型不对称**：调用型（Generate / ToolApply / Permission）填 `Option` 跳过；
-//!    变更型（Compact / Ingest）退化成 veto / rewrite，不走"填 Option"。
+//! ## Scope (Step 1)
 //!
-//! ## 落地范围（第 1 步）
-//!
-//! 本模块交付**类型 + 信封 + 单测**，**不接任何挂载点**（call site 接入是后续 PR）。当前实现了基础
-//! 设施（[`HookControl`] / [`HookStep`] / 信封通用约定）+ 3 个代表性 step：[`BeforeTurnEnd`]（控制
-//! 分叉）、[`BeforeToolApply`]（调用型 short-circuit）、[`AfterGenerate`]（观察型）。其余 10 个 step
-//! 是同形态的机械填充。
+//! This module delivers **types + envelope + unit tests**, with **no mount points wired
+//! in** (call-site integration is a follow-up PR). Currently implements the base
+//! infrastructure ([`HookControl`] / [`HookStep`] / envelope conventions) plus 3
+//! representative steps: [`BeforeTurnEnd`] (fork control), [`BeforeToolApply`] (call-type
+//! short-circuit), [`AfterGenerate`] (observation). The remaining 10 steps are mechanical
+//! fill-ins of the same shape.
 
 use agent_client_protocol_schema::{ContentBlock, StopReason as AcpStopReason};
 use serde_json::{Value, json};
@@ -29,9 +34,12 @@ use serde_json::{Value, json};
 use crate::llm::{ToolResultBody, Usage};
 use crate::tool::SafetyClass;
 
-/// 全部挂载点的 `event_name`（snake_case）——配置层校验事件名、CLI 装配分桶的唯一真相源。
+/// The single source of truth for all mount-point `event_name`s (snake_case) — used by
+/// the config layer for event-name validation and by the CLI for bucket assembly.
 ///
-/// 顺序无意义；新增 step 时在此追加一行，配置层即自动认这个新事件名（无需改 config crate）。
+/// Order is irrelevant; to add a new step, append a line here and the config layer will
+/// automatically recognize the new event name (no changes to the config crate are
+/// needed).
 pub const ALL_EVENT_NAMES: &[&str] = &[
     "after_session_enter",
     "after_turn_enter",
@@ -49,35 +57,41 @@ pub const ALL_EVENT_NAMES: &[&str] = &[
     "before_turn_end",
 ];
 
-/// 某个事件名是否是已知挂载点。配置层用它 fail-fast 掉拼错的事件键。
+/// Whether an event name is a known mount point. The config layer uses this to fail-fast
+/// on misspelled event keys.
 #[must_use]
 pub fn is_known_event(name: &str) -> bool {
     ALL_EVENT_NAMES.contains(&name)
 }
 
-// ---------------------------------------------------------------------------
-// 控制流
-// ---------------------------------------------------------------------------
+// Control Flow
 
-/// 一个 hook 对**控制流**的指示（轴二）。数据注入（轴一）走 step 的 `&mut` 字段，不在这里。
+/// A hook's instruction for **control flow** (axis two). Data injection (axis one) goes
+/// through the step's `&mut` fields, not here.
 ///
-/// 位置决定哪些变体有意义：`Break` 任何 step 可用；`Continue` 仅 [`BeforeTurnEnd`]；`Skip` 仅
-/// `before Compact`。引擎对越权变体降级 + warn（见 `apply_verdict` 的校验）。
+/// Which variants are meaningful depends on the hook point: `Break` is available at any
+/// step; `Continue` only at [`BeforeTurnEnd`]; `Skip` only at `before Compact`. The
+/// engine downgrades out-of-place variants with a warning (see the validation in
+/// `apply_verdict`).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum HookControl {
-    /// 不干预控制流——step 带着 ctx 上已发生的数据改动正常往下走。对应信封 `control: null`。
+    /// No intervention in control flow — the step proceeds normally with any data changes
+    /// already made on `ctx`. Corresponds to envelope `control: null`.
     #[default]
     Proceed,
-    /// 结束当前 turn，带最终停止原因。任何 step 可用。
+    /// End the current turn with a final stop reason. Usable from any step.
     Break { reason: AcpStopReason },
-    /// 不结束、回循环顶再转一轮。仅 [`BeforeTurnEnd`] 有意义（且须先注入，见设计 §4）。
+    /// Does not end the turn; instead, loops back to the top of the cycle for another
+    /// round. Only meaningful in [`BeforeTurnEnd`] (and must be injected beforehand; see
+    /// design §4).
     Continue,
-    /// 跳过本 step 的真实调用。仅 `before Compact`（veto 压缩）有意义。
+    /// Skip the actual call for this step. Only meaningful for `before Compact` (veto
+    /// compaction).
     Skip,
 }
 
-/// 解析信封 verdict 时的错误。
+/// Errors when parsing an envelope verdict.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum VerdictError {
@@ -92,36 +106,42 @@ pub enum VerdictError {
 // HookStep trait
 // ---------------------------------------------------------------------------
 
-/// 一个挂载点的 step state。两种 hook 共同消费：
-/// - 内部 Rust hook：直接拿 `&mut Self`，改字段 = 注入，自行返回 [`HookControl`]。
-/// - 用户配置 hook：[`Self::to_envelope`] → JSON 喂 stdin/模板；handler 输出 JSON →
-///   [`Self::apply_verdict`] 应用回 step（数据改动）并解析出 [`HookControl`]。
+/// The step state for a mount point. Consumed by two kinds of hooks:
+/// - Internal Rust hook: takes `&mut Self` directly, mutates fields to inject data, and
+///   returns a [`HookControl`] on its own.
+/// - User-configured hook: [`Self::to_envelope`] produces JSON fed to stdin/templates;
+///   the handler outputs JSON, which [`Self::apply_verdict`] applies back to the step
+///   (mutating data) and parses into a [`HookControl`].
 pub trait HookStep: Send {
-    /// 事件名（snake_case）。信封头与 matcher 用。
+    /// Event name (snake_case). Used in envelope headers and matchers.
     fn event_name(&self) -> &'static str;
 
-    /// 投影成**输入信封**——喂 command stdin / prompt 模板。含通用头 + step 专属字段。
+    /// Projects the step into an **input envelope** — fed to command stdin / prompt
+    /// templates. Contains a common header plus step-specific fields.
     fn to_envelope(&self) -> Value;
 
-    /// 把 handler 的**输出 verdict**（JSON）应用回本 step：解析通用 `control` /
-    /// `additional_context`，再处理 step 专属的"填产出"字段。返回控制指示。
+    /// Apply the handler's output verdict (JSON) back to this step: parse the common
+    /// `control` / `additional_context` fields, then handle the step-specific "fill
+    /// output" fields. Returns a control directive.
     ///
     /// # Errors
     ///
-    /// verdict 的 `control` 是未知值、或专属字段形态错误时返回 [`VerdictError`]。
+    /// Returns [`VerdictError`] if the verdict's `control` is an unknown value or the
+    /// step-specific fields are malformed.
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError>;
 }
 
-// ---------------------------------------------------------------------------
-// 信封通用约定
-// ---------------------------------------------------------------------------
+// Common envelope conventions
 
-/// 解析 verdict 里的通用 `control` 字段。`null` / 缺省 → [`HookControl::Proceed`]。
+/// Parse the generic `control` field from a verdict. `null` / absent →
+/// [`HookControl::Proceed`].
 ///
-/// `break` 可带 `stop_reason`（缺省 `end_turn`）。校验在调用方做（哪个 step 允许哪个 control）。
+/// `break` may carry a `stop_reason` (default `end_turn`). Validation is the caller's
+/// responsibility (which step allows which control).
 fn parse_control(verdict: &Value) -> Result<HookControl, VerdictError> {
-    // 默认：`veto` 解读为 `Break`（多数 step 的否决语义）。turn-end / compact 用
-    // `parse_control_veto` 覆盖成自己的语义。
+    // By default, `veto` is interpreted as `Break` (the veto semantics for most steps).
+    // Turn-end and compact steps override this by calling `parse_control_veto` with their
+    // own semantics.
     parse_control_veto(
         verdict,
         HookControl::Break {
@@ -130,8 +150,9 @@ fn parse_control(verdict: &Value) -> Result<HookControl, VerdictError> {
     )
 }
 
-/// 同 [`parse_control`]，但把抽象的 `"veto"` 控制（command hook exit 2 产生）解读为 `veto_as`——
-/// 让每个 step 按自己的否决语义翻译（turn-end→Continue、compact→Skip、其余→Break）。
+/// Like [`parse_control`], but interprets the abstract `"veto"` control (produced by
+/// command hook exit 2) as `veto_as` — letting each step translate the veto according to
+/// its own semantics (turn-end → Continue, compact → Skip, everything else → Break).
 fn parse_control_veto(verdict: &Value, veto_as: HookControl) -> Result<HookControl, VerdictError> {
     let Some(ctrl) = verdict.get("control") else {
         return Ok(HookControl::Proceed);
@@ -156,8 +177,9 @@ fn parse_control_veto(verdict: &Value, veto_as: HookControl) -> Result<HookContr
     }
 }
 
-/// 解析 verdict 里的 `additional_context`：接受字符串数组（用户 hook 最自然的形态），
-/// 每条转成一个文本 [`ContentBlock`]。缺省 → 空。
+/// Parse the `additional_context` field of a verdict: accepts an array of strings (the
+/// most natural form for a user hook), each converted into a text [`ContentBlock`].
+/// Defaults to empty.
 fn parse_additional_context(verdict: &Value) -> Result<Vec<ContentBlock>, VerdictError> {
     let Some(v) = verdict.get("additional_context") else {
         return Ok(Vec::new());
@@ -182,7 +204,7 @@ fn parse_additional_context(verdict: &Value) -> Result<Vec<ContentBlock>, Verdic
     }
 }
 
-/// [`AcpStopReason`] → snake_case 字符串（信封用）。
+/// Returns the snake_case string representation of [`AcpStopReason`] for the envelope.
 fn stop_reason_str(reason: AcpStopReason) -> &'static str {
     match reason {
         AcpStopReason::EndTurn => "end_turn",
@@ -194,8 +216,9 @@ fn stop_reason_str(reason: AcpStopReason) -> &'static str {
     }
 }
 
-/// [`ToolResultBody`] → 信封 JSON。Text/Json 直接放；多模态 Content 退化成文本摘要
-/// （图片块标注占位），让 hook 信封保持紧凑可读。
+/// [`ToolResultBody`] → envelope JSON. Text/Json are passed through directly; multimodal
+/// Content degrades to a text summary (image blocks are marked as placeholders) to keep
+/// the hook envelope compact and readable.
 fn tool_result_body_to_json(body: &ToolResultBody) -> Value {
     match body {
         ToolResultBody::Text { text } => Value::String(text.clone()),
@@ -215,7 +238,8 @@ fn tool_result_body_to_json(body: &ToolResultBody) -> Value {
     }
 }
 
-/// [`SafetyClass`] → snake_case 字符串（信封用，与引擎侧 `parse_safety` 对称）。
+/// Converts [`SafetyClass`] to a snake_case string for envelopes, symmetric with the
+/// engine-side `parse_safety`.
 fn safety_str(s: SafetyClass) -> &'static str {
     match s {
         SafetyClass::ReadOnly => "read_only",
@@ -225,7 +249,8 @@ fn safety_str(s: SafetyClass) -> &'static str {
     }
 }
 
-/// snake_case 字符串 → [`AcpStopReason`]。未知值回退 `EndTurn`。
+/// Parses a snake_case string into an [`AcpStopReason`]; unknown values fall back to
+/// `EndTurn`.
 fn parse_stop_reason(s: &str) -> AcpStopReason {
     match s {
         "max_tokens" => AcpStopReason::MaxTokens,
@@ -236,26 +261,30 @@ fn parse_stop_reason(s: &str) -> AcpStopReason {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 代表 step 1：before turn-end（控制分叉点，默认 Break）
-// ---------------------------------------------------------------------------
+// Step 1: before turn-end (control branch point, default Break)
 
-/// `before turn-end`：turn 唯一的自愿出口判定。**默认 `Break`**——"什么都不干预"= 放它停。
+/// `before turn-end`: the turn's only voluntary exit point. **Defaults to `Break`** — "do
+/// nothing" = let it stop.
 ///
-/// hook 返回 [`HookControl::Continue`] = 续命：把 [`Self::feedback`] 注入 history（落地时作为
-/// user 消息 append），不结束、回循环顶再转一轮。`continue` 仅在 [`Self::voluntary`] 时生效——
-/// 被动停止（Refusal / MaxTokens / Cancelled / MaxTurnRequests）忽略 continue，否则 hook 能绕过
-/// request cap 无限续命。
+/// A hook returning [`HookControl::Continue`] extends the turn: it injects
+/// [`Self::feedback`] into history (appended as a user message when committed), does not
+/// end the turn, and loops back to the top for another round. `Continue` only takes
+/// effect when [`Self::voluntary`] is true — involuntary stops (Refusal / MaxTokens /
+/// Cancelled / MaxTurnRequests) ignore it; otherwise the hook could bypass the request
+/// cap and extend indefinitely.
 #[derive(Debug, Clone)]
 pub struct BeforeTurnEnd {
-    /// 到达本判定的停止原因。
+    /// The reason this turn stopped.
     pub stop_reason: AcpStopReason,
-    /// 本 turn 已被 hook 续命几次（hook 自行判断收手；循环内另有硬上限兜底）。
+    /// How many times this turn has been extended by a hook (the hook decides when to
+    /// stop; a hard cap in the loop provides a safety net).
     pub continues_so_far: u32,
-    /// 是否自愿停止（LLM 说 EndTurn / 空 tool_use）。仅自愿时 `Continue` 生效。
+    /// Whether the stop is voluntary (LLM said EndTurn or returned empty tool_use).
+    /// `Continue` only takes effect when voluntary.
     pub voluntary: bool,
-    /// 续命时要注入 history 的反馈。`apply_verdict` 把 verdict 的 `additional_context` 填进来；
-    /// 内部 Rust hook 直接 push。落地时由循环作为 user 消息 append。
+    /// Feedback to inject into history when continuing the turn. `apply_verdict` fills
+    /// this from the verdict's `additional_context`; internal Rust hooks push directly.
+    /// On finalization, the loop appends it as a user message.
     pub feedback: Vec<ContentBlock>,
 }
 
@@ -273,40 +302,46 @@ impl HookStep for BeforeTurnEnd {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        // turn-end 的"否决（veto）"= 续命（Continue）：command hook exit 2 在这里意味着"别停"。
+        // At turn-end, "veto" means Continue: command hook exit 2 here means "don't
+        // stop".
         let control = parse_control_veto(verdict, HookControl::Continue)?;
         let ctx = parse_additional_context(verdict)?;
-        // 在 turn-end，additional_context 即续命反馈。
+        // At turn-end, `additional_context` is the keep-alive feedback.
         self.feedback.extend(ctx);
         Ok(control)
     }
 }
 
-// ---------------------------------------------------------------------------
-// 代表 step 2：before ToolApply（调用型，short-circuit = 填 result）
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Represents step 2: before ToolApply (call-type, short-circuit = fill result)
+// ----------------------------------------------------------------------------
 
-/// 一个被 hook 合成的工具结果——填上 [`BeforeToolApply::result`] 即"拦掉这个工具"。
+/// A synthetic tool result produced by a hook — setting [`BeforeToolApply::result`]
+/// effectively "intercepts" the tool.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyntheticToolResult {
     pub body: ToolResultBody,
     pub is_error: bool,
 }
 
-/// `before ToolApply`（每工具）：调用型变换的入口。
+/// Entry point for call-type transformations, invoked before each `ToolApply`.
 ///
-/// 两种干预正交：
-/// - **改 args**（数据轴）：改写传给工具的参数。
-/// - **填 result**（short-circuit）：`Some` = 不真跑工具、用这个合成输出当结果，**turn 继续**。
-///   这与 `Break`（结束整个 turn）控制流完全不同——别把"拦一个工具"和"结束 turn"混为一谈。
+/// Two orthogonal intervention axes:
+/// - **Modify args** (data axis): rewrite the parameters passed to the tool.
+/// - **Fill result** (short-circuit): `Some` = skip the actual tool invocation and use
+///   this synthetic output as the result; **the turn continues**.
+///   This is fundamentally different from `Break` (which ends the entire turn) — do not
+///   confuse "intercepting a single tool" with "ending the turn".
 #[derive(Debug, Clone)]
 pub struct BeforeToolApply {
     pub tool_name: String,
-    /// 工具的 safety 等级——进信封供 matcher 的 safety 过滤用。
+    /// The tool's safety level, placed in the envelope for the matcher's safety
+    /// filtering.
     pub safety: SafetyClass,
-    /// 可改的工具参数。
+    /// Modifiable tool arguments.
     pub args: Value,
-    /// 将产出的结果。`None` = 真去跑工具；`Some` = short-circuit。
+    /// The result that will be produced. `None` = actually run the tool; `Some` =
+    /// short-circuit.
     pub result: Option<SyntheticToolResult>,
 }
 
@@ -326,12 +361,13 @@ impl HookStep for BeforeToolApply {
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
         let control = parse_control(verdict)?;
 
-        // 数据轴：改 args。
+        // Data plane: update args.
         if let Some(new_args) = verdict.get("args") {
             self.args = new_args.clone();
         }
 
-        // short-circuit：填 result。verdict `result` 形如 ToolResultBody + 可选 is_error。
+        // Short-circuit: fill `result`. The verdict's `result` field is a
+        // `ToolResultBody` plus an optional `is_error`.
         if let Some(r) = verdict.get("result").filter(|r| !r.is_null()) {
             let body: ToolResultBody =
                 serde_json::from_value(r.clone()).map_err(|e| VerdictError::Malformed {
@@ -349,12 +385,11 @@ impl HookStep for BeforeToolApply {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 代表 step 3：after Generate（观察型，已产出非 Option）
-// ---------------------------------------------------------------------------
+// Step 3: after Generate (observational, outputs are non-Option)
 
-/// `after Generate`：LLM 调用已返回。**观察型**——usage / stop / error 都已产出（非 Option），
-/// 没有"填产出"的余地；要影响下一轮走 [`BeforeTurnEnd`]。仅 `Break` 与观察有意义。
+/// `after Generate`: the LLM call has returned. **Observational** — usage / stop / error
+/// are all present (non-`Option`), with no room to "fill in" outputs; to influence the
+/// next round, use [`BeforeTurnEnd`]. Only `Break` and observation are meaningful.
 #[derive(Debug, Clone)]
 pub struct AfterGenerate {
     pub model: String,
@@ -378,16 +413,15 @@ impl HookStep for AfterGenerate {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        // 观察型：无可填产出，只接受控制（通常仅 break）；additional_context 此处无落点，忽略。
+        // Observation-only: no output to fill, only control accepted (typically just
+        // break); `additional_context` has no landing point here, so it is ignored.
         parse_control(verdict)
     }
 }
 
-// ---------------------------------------------------------------------------
-// 作用域 step：after session enter / after turn enter（无产出，可注入 / 可 break）
-// ---------------------------------------------------------------------------
+// Scope step: after session enter / after turn enter (no output, injectable / breakable)
 
-/// session 来源：新建 or resume。
+/// The source of the session: new or resumed.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionSource {
@@ -395,12 +429,14 @@ pub enum SessionSource {
     Resume,
 }
 
-/// `after session enter`：session 作用域已进入。可注入 system 后缀 / `Break` 拒开。
+/// `after session enter`: the session scope has been entered. Allows injecting a system
+/// suffix or rejecting with `Break`.
 #[derive(Debug, Clone)]
 pub struct AfterSessionEnter {
     pub cwd: String,
     pub source: SessionSource,
-    /// 注入到 system prompt 的后缀（`apply_verdict` 从 additional_context 填）。
+    /// Suffix appended to the system prompt (`apply_verdict` fills this from
+    /// `additional_context`).
     pub additional_context: Vec<ContentBlock>,
 }
 
@@ -423,7 +459,8 @@ impl HookStep for AfterSessionEnter {
     }
 }
 
-/// `after turn enter`：turn 作用域已进入、但本轮输入尚未摄入。可注入 / `Break` 拒该 turn。
+/// `after turn enter`: the turn scope has been entered, but input for this round has not
+/// yet been consumed. Injection or `Break` can reject this turn.
 #[derive(Debug, Clone)]
 pub struct AfterTurnEnter {
     pub is_subagent: bool,
@@ -451,35 +488,39 @@ impl HookStep for AfterTurnEnter {
 }
 
 // ---------------------------------------------------------------------------
-// Ingest step：before / after（变更型：rewrite 输入 / veto）
+// Ingest step: before / after (mutation type: rewrite input / veto)
 // ---------------------------------------------------------------------------
 
-/// 本轮待摄入输入的来源。
+/// The source of the input to be ingested in the current turn.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestSource {
-    /// 首轮：用户 prompt。
+    /// First round: user prompt.
     User,
-    /// 续命轮：before turn-end 注入的反馈。
+    /// Continuation turn: feedback injected before the turn ends.
     Continuation,
-    /// 后台任务回流：`run_in_background` 子任务完成后由 session driver 起的自主续转 turn，
-    /// Its input is a deferred tool result rather than a user utterance.
+    /// Background task backflow: an autonomous continuation turn initiated by the session
+    /// driver after a `run_in_background` subtask completes. Its input is a deferred tool
+    /// result rather than a user utterance.
     Background,
 }
 
-/// `before Ingest`：摄入本轮输入之前。可改写整条待摄入输入 / `Break` 拒该 turn。
+/// `before Ingest`: called before ingesting the current turn's input. Can rewrite the
+/// entire pending input or `Break` to reject the turn.
 ///
-/// 变更型——short-circuit 是 `Break`（拒掉），不是"填结果"（无可分离产出）。空摄入轮 `input` 为空。
+/// This is a mutation hook — the short-circuit is `Break` (reject), not "fill a result"
+/// (there is no separable output). On an empty ingestion turn, `input` is empty.
 ///
-/// verdict 两种改写方式（互不冲突，可同时给）：
-/// - `input`（String / 字符串数组）：**整体替换**待摄入输入。
-/// - `prepend_input`（String / 字符串数组）：把文本块**前插**到现有 input 之前，
-///   保留原有块（含图片等非文本块）。用于在用户 prompt 前注入上下文（如 skill
-///   自动激活的 L1 提示），不丢原始多模态内容。
+/// The verdict supports two rewriting modes (not mutually exclusive; both can be given):
+/// - `input` (`String` / array of `String`): **fully replace** the pending input.
+/// - `prepend_input` (`String` / array of `String`): **prepend** text blocks before the
+///   existing input, preserving original blocks (including non-text blocks like images).
+///   Used to inject context (e.g., a skill's auto-activated L1 prompt) before the user's
+///   prompt without losing the original multimodal content.
 #[derive(Debug, Clone)]
 pub struct BeforeIngest {
     pub source: IngestSource,
-    /// 可改写的待摄入输入。
+    /// The input to be ingested, which can be rewritten.
     pub input: Vec<ContentBlock>,
 }
 
@@ -489,7 +530,9 @@ impl HookStep for BeforeIngest {
     }
 
     fn to_envelope(&self) -> Value {
-        // 暴露输入文本（拼接 Text 块）让 hook 能看到/据此改写；非文本块不进信封但仍在 step 上。
+        // Expose the input text (concatenated `Text` blocks) so the hook can inspect or
+        // rewrite it; non-text blocks are excluded from the envelope but remain in the
+        // step.
         let text: String = self
             .input
             .iter()
@@ -511,15 +554,18 @@ impl HookStep for BeforeIngest {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        // rewrite：verdict 的 `input` 可为字符串（整条替换成一个文本块）或字符串数组。
+        // The `input` field of the verdict can be a string (replacing the entire input
+        // with a single text block) or an array of strings.
         if let Some(v) = verdict.get("input").filter(|v| !v.is_null()) {
             self.input = match v {
                 Value::String(s) => vec![ContentBlock::from(s.as_str())],
                 _ => parse_block_array(v, "input")?,
             };
         }
-        // prepend：把文本块前插到现有 input 之前，保留原有块（含非文本）。在
-        // `input` 整体替换之后应用——若两者同给，前插落在替换结果之前。
+        // Prepend: insert text blocks before the existing `input`, preserving the
+        // original blocks (including non-text ones). Applied after the full `input`
+        // replacement — if both are given, the prepended content comes before the
+        // replacement result.
         if let Some(v) = verdict.get("prepend_input").filter(|v| !v.is_null()) {
             let mut prefix = match v {
                 Value::String(s) => vec![ContentBlock::from(s.as_str())],
@@ -532,7 +578,7 @@ impl HookStep for BeforeIngest {
     }
 }
 
-/// `after Ingest`：输入已并入 history。仅可注入。
+/// `after Ingest`: input has been merged into history. Injection only.
 #[derive(Debug, Clone)]
 pub struct AfterIngest {
     pub committed_len: usize,
@@ -556,10 +602,11 @@ impl HookStep for AfterIngest {
 }
 
 // ---------------------------------------------------------------------------
-// Compact step：before（veto only）/ after（观察）
+// Compact step: before (veto only) / after (observation)
 // ---------------------------------------------------------------------------
 
-/// `before Compact`：压缩之前。变更型——short-circuit = `Skip`（veto 本次压缩），无"填结果"。
+/// `before Compact`: runs before compaction. Mutation type — short-circuit = `Skip`
+/// (vetoes this compaction), no "fill result".
 #[derive(Debug, Clone)]
 pub struct BeforeCompact {
     pub token_estimate: u64,
@@ -576,12 +623,12 @@ impl HookStep for BeforeCompact {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        // compact 的"否决（veto）"= 跳过本次压缩（Skip）。
+        // A "veto" in compact means skip this compression (Skip).
         parse_control_veto(verdict, HookControl::Skip)
     }
 }
 
-/// `after Compact`：压缩完成。仅可注入 / 观察。
+/// `after Compact`: compression is complete. Injection / observation only.
 #[derive(Debug, Clone)]
 pub struct AfterCompact {
     pub tokens_before: u64,
@@ -605,18 +652,20 @@ impl HookStep for AfterCompact {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Generate step：before（改 request / short-circuit）
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Generate step: before (modify request / short-circuit)
+// ----------------------------------------------------------------------------
 
-/// `before Generate`：LLM 调用之前。调用型——可改 request 字段、或填 `assistant_text` short-circuit
-/// （用一条合成回复跳过真实 LLM 调用）。
+/// `before Generate`: runs before the LLM call. Call-site hook — can modify request
+/// fields, or set `assistant_text` to short-circuit (skip the real LLM call with a
+/// synthetic reply).
 #[derive(Debug, Clone)]
 pub struct BeforeGenerate {
     pub model: String,
     pub message_count: usize,
     pub attempt: u32,
-    /// short-circuit：`Some` = 不调 LLM、用这段合成 assistant 文本当回复。落地时建成 Message。
+    /// Short-circuit: `Some` = skip the LLM call and use this synthetic assistant text as
+    /// the reply. On commit, it is built into a `Message`.
     pub assistant_text: Option<String>,
 }
 
@@ -645,17 +694,18 @@ impl HookStep for BeforeGenerate {
 }
 
 // ---------------------------------------------------------------------------
-// Permission step：before（代答；v0 仅打桩）/ after（观察）
+// Permission step: before (delegate; v0 only stubs) / after (observe)
 // ---------------------------------------------------------------------------
 
-/// `before Permission`：向用户请求授权之前。v0 仅打桩 observe——`resolved` 代答能力先不接
-/// （policy 仍是放行权威，见 hooks.md §7.3）。桩留好，未来开。
+/// `before Permission`: invoked before requesting user authorization. v0 only stubs
+/// observe — the `resolved` fallback is not yet wired (policy remains the authority for
+/// allow/deny; see hooks.md §7.3). Stub is in place for future use.
 #[derive(Debug, Clone)]
 pub struct BeforePermission {
     pub tool: String,
-    /// 当前 policy 决策（"allow" / "deny" / "ask"）。
+    /// The current policy decision (`"allow"`, `"deny"`, or `"ask"`).
     pub decision: String,
-    /// 代答结果。v0 不消费。
+    /// Resolved result; not consumed in v0.
     pub resolved: Option<bool>,
 }
 
@@ -669,7 +719,8 @@ impl HookStep for BeforePermission {
     }
 
     fn apply_verdict(&mut self, verdict: &Value) -> Result<HookControl, VerdictError> {
-        // v0：仅接受 control（通常 break）；resolved 代答桩留着但不在此消费。
+        // v0: only accepts `control` (typically `break`); `resolved` is kept as a
+        // placeholder but not consumed here.
         if let Some(r) = verdict.get("resolved").and_then(Value::as_bool) {
             self.resolved = Some(r);
         }
@@ -677,7 +728,7 @@ impl HookStep for BeforePermission {
     }
 }
 
-/// `after Permission`：授权结果已定。观察型。
+/// `after Permission`: authorization result is determined. Observation only.
 #[derive(Debug, Clone)]
 pub struct AfterPermission {
     pub tool: String,
@@ -699,15 +750,17 @@ impl HookStep for AfterPermission {
 }
 
 // ---------------------------------------------------------------------------
-// ToolApply step：after（每工具）/ after ToolBatch（整批）
+// ToolApply step: after (per-tool) / after ToolBatch (whole batch)
 // ---------------------------------------------------------------------------
 
-/// `after ToolApply`（每工具）：工具已产出结果。可注入（拼进 tool_result）/ `Break`。
+/// `after ToolApply` (per-tool): the tool has produced a result. Supports injection
+/// (appending to `tool_result`) or `Break`.
 #[derive(Debug, Clone)]
 pub struct AfterToolApply {
     pub tool_name: String,
     pub is_error: bool,
-    /// 工具产出的结果体（已产出，非 Option）——进信封供 hook 看到工具输出内容。
+    /// The result body produced by the tool (always present, not an `Option`) — placed
+    /// into the envelope so the hook can see the tool's output.
     pub output: ToolResultBody,
     pub additional_context: Vec<ContentBlock>,
 }
@@ -732,14 +785,15 @@ impl HookStep for AfterToolApply {
     }
 }
 
-/// 一批并行工具结果的摘要项（信封用）。
+/// A summary entry for a batch of parallel tool results (for envelope use).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolBatchEntry {
     pub tool_name: String,
     pub is_error: bool,
 }
 
-/// `after ToolBatch`：一整批并行工具结束。可注入 / `Break`（graceful，见 proposal §7）。
+/// `after ToolBatch`: a full batch of parallel tools has finished. Can inject / `Break`
+/// (graceful, see proposal §7).
 #[derive(Debug, Clone)]
 pub struct AfterToolBatch {
     pub results: Vec<ToolBatchEntry>,
@@ -767,19 +821,25 @@ impl HookStep for AfterToolBatch {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline：多个 verdict 在一个 step 上的合并语义
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Pipeline: merging multiple verdicts on a single step
+// ----------------------------------------------------------------------------
 
-/// 把一串 handler verdict 按声明顺序应用到同一个 step 上，合并出最终 [`HookControl`]。
+/// Applies a sequence of handler verdicts to the same step in declaration order,
+/// producing the final [`HookControl`].
 ///
-/// 这是 step 层面的 pipeline 语义（对齐现有 `merge_outcome`）：
-/// - **数据轴累积**：每个 verdict 的字段改动（改 args / 注入 / 填 result…）依次落到同一个 `&mut step`，
-///   后一个 handler 看到的是前者改写后的状态。
-/// - **控制轴早退**：任一 verdict 给出非 [`HookControl::Proceed`] 的指示即**停止 pipeline**并返回它
-///   ——`Break` / `Continue` / `Skip` 都意味着"走向已定"，后续 handler 不应再覆盖。
-/// - **错误处理**：某个 verdict 解析失败时由 `on_error` 决定降级（返回 `Some(control)` 早退 / `None`
-///   跳过该 verdict 继续）——把"允许 block 的事件错误等价 block"这类策略留给调用方，本函数不写死。
+/// This is the step-level pipeline semantics (aligned with the existing `merge_outcome`):
+/// - **Data accumulation**: each verdict's field mutations (changing args, injecting,
+///   filling result, etc.) are applied sequentially to the same `&mut step`; later
+///   handlers see the state modified by earlier ones.
+/// - **Control short-circuit**: any verdict that returns something other than
+///   [`HookControl::Proceed`] **stops the pipeline** and returns it — `Break` /
+///   `Continue` / `Skip` all mean "the outcome is decided", and subsequent handlers
+///   should not override it.
+/// - **Error handling**: when a verdict fails to parse, `on_error` decides how to degrade
+///   (returning `Some(control)` to short-circuit, or `None` to skip that verdict and
+///   continue) — strategies like "treat a block event error as equivalent to block" are
+///   left to the caller; this function does not hardcode them.
 pub fn run_step_pipeline<S, I, F>(step: &mut S, verdicts: I, mut on_error: F) -> HookControl
 where
     S: HookStep + ?Sized,
@@ -800,7 +860,7 @@ where
     HookControl::Proceed
 }
 
-/// 解析 verdict 里的 ContentBlock 数组（字符串数组 → 文本块）。
+/// Parse the `ContentBlock` array from the verdict (string array to text blocks).
 fn parse_block_array(v: &Value, field: &'static str) -> Result<Vec<ContentBlock>, VerdictError> {
     match v {
         Value::Array(items) => items

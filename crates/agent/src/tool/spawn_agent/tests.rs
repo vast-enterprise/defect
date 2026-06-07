@@ -18,7 +18,7 @@ use crate::policy::AskWritesPolicy;
 use crate::shell::ShellBackend;
 use crate::tool::{Tool, ToolContext};
 
-// --- 测试用 provider ----------------------------------------------------
+// --- test provider ----------------------------------------------------
 
 fn fake_caps() -> Capabilities {
     Capabilities {
@@ -50,7 +50,7 @@ fn model(id: &str) -> ModelInfo {
     }
 }
 
-/// 固定回一条文本 + EndTurn。
+/// Always returns a single text message followed by EndTurn.
 struct TextProvider {
     text: String,
 }
@@ -90,9 +90,11 @@ impl LlmProvider for TextProvider {
     }
 }
 
-/// 第一轮请求工具调用，之后（历史里出现 tool_result）回文本结束。
-/// 用来验证：子 agent 命中写工具时，NonInteractivePolicy 把 Ask 降级为 Deny，
-/// 子 turn 不挂在 PermissionGate 上、能正常结束。
+/// First round requests a tool call, then returns text after a `tool_result` appears in
+/// history.
+/// Used to verify that when a sub-agent hits a write tool, `NonInteractivePolicy`
+/// downgrades `Ask` to `Deny`,
+/// and the sub-turn does not hang on `PermissionGate` and finishes normally.
 struct ToolThenTextProvider {
     tool_name: String,
 }
@@ -115,7 +117,7 @@ impl LlmProvider for ToolThenTextProvider {
         req: CompletionRequest,
         _cancel: CancellationToken,
     ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
-        // 历史里已有 tool_result ⇒ 第二轮，结束。
+        // Tool result already present in history → second round, done.
         let has_tool_result = req.messages.iter().any(|m| {
             m.content
                 .iter()
@@ -159,7 +161,7 @@ impl LlmProvider for ToolThenTextProvider {
     }
 }
 
-// --- 测试用写工具（Mutating）-------------------------------------------
+// --- Test write tool (Mutating) -------------------------------------------
 
 struct DummyWriteTool {
     schema: ToolSchema,
@@ -196,7 +198,7 @@ impl Tool for DummyWriteTool {
         })
     }
     fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
-        // 不该被调用（policy 应 Deny）；真被调用也无副作用。
+        // Should not be called (policy should Deny); calling it has no side effects.
         let ev = ToolEvent::Completed(ToolCallUpdateFields::default());
         Box::pin(stream::once(async move { ev }))
     }
@@ -226,7 +228,7 @@ fn run_tool(tool: &SpawnAgentTool, args: serde_json::Value, cwd: &Path) -> Vec<T
     let fs: Arc<dyn FsBackend> = Arc::new(NoopFsBackend);
     let shell: Arc<dyn ShellBackend> = Arc::new(crate::shell::NoopShellBackend);
     let http = Arc::new(NoopHttpClient);
-    // 非零深度，避免新深度闸门在派发前 fail loud。
+    // Non-zero depth to avoid the new depth gate failing loudly before dispatch.
     let ctx = ToolContext::new(cwd, CancellationToken::new(), fs, shell, http, "fake-1")
         .with_subagent_depth(4);
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -243,9 +245,10 @@ fn run_tool(tool: &SpawnAgentTool, args: serde_json::Value, cwd: &Path) -> Vec<T
     })
 }
 
-/// 跑工具，但注入一个指向 `parent_events` 的 subagent 桥，并在跑之前订阅父
-/// emitter；返回 (工具事件, 父 emitter 收到的事件)。用于验证子 turn 事件被包成
-/// `AgentEvent::Subagent` 桥接回父。
+/// Run the tool, but inject a subagent bridge pointing to `parent_events` and subscribe
+/// to the parent emitter before running; returns (tool events, events received by the
+/// parent emitter). Used to verify that child turn events are wrapped as
+/// `AgentEvent::Subagent` and bridged back to the parent.
 fn run_tool_with_bridge(
     tool: &SpawnAgentTool,
     args: serde_json::Value,
@@ -260,7 +263,8 @@ fn run_tool_with_bridge(
         parent_events: parent_events.clone(),
         parent_tool_call_id: agent_client_protocol_schema::ToolCallId::new(parent_tool_call_id),
     };
-    // 给个非零深度，否则新加的深度闸门会在派发前 fail loud。
+    // Use a non-zero depth, otherwise the newly added depth gate will fail loud before
+    // dispatch.
     let ctx = ToolContext::new(cwd, CancellationToken::new(), fs, shell, http, "fake-1")
         .with_subagent_bridge(bridge)
         .with_subagent_depth(4);
@@ -275,8 +279,9 @@ fn run_tool_with_bridge(
         while let Some(ev) = stream.next().await {
             tool_events.push(ev);
         }
-        // 工具返回前已 await 桥接 task（drop events + task.await），父 emitter 的
-        // 事件此刻都已 send 完毕——逐条排空（不会阻塞，缓冲里就这些）。
+        // By the time the tool returns, the bridging task has already been awaited (drop
+        // events + task.await), so all events from the parent emitter have been sent.
+        // Drain them one by one (non-blocking; only the buffered events remain).
         drop(parent_events);
         let mut bridged = Vec::new();
         while let Some(ev) = parent_sub.next().await {
@@ -301,7 +306,7 @@ fn completed_text(events: &[ToolEvent]) -> Option<String> {
     })
 }
 
-// --- tests --------------------------------------------------------------
+// --- tests ---
 
 #[test]
 fn schema_has_profile_enum_and_catalog() {
@@ -322,10 +327,10 @@ fn schema_has_profile_enum_and_catalog() {
     );
     let schema = tool.schema();
     assert_eq!(schema.name, "spawn_agent");
-    // catalog 进 description。
+    // The catalog is included in the description.
     assert!(schema.description.contains("review diffs for races"));
     assert!(schema.description.contains("- reviewer:"));
-    // profile enum 含发现到的名字。
+    // profile enum contains the discovered names.
     let enum_vals = schema.input_schema["properties"]["profile"]["enum"]
         .as_array()
         .expect("enum array");
@@ -363,9 +368,10 @@ fn returns_subagent_final_text() {
 
 #[test]
 fn subagent_events_bridged_to_parent() {
-    // 子 turn 跑一个回文本的 provider。注入 subagent 桥后，父 emitter 应收到
-    // 一串 AgentEvent::Subagent（带正确的 parent_tool_call_id / agent_type），
-    // 内含子 turn 的 TurnStarted / LlmCall / AssistantText / TurnEnded。
+    // The child turn runs a text-returning provider. After injecting the subagent bridge,
+    // the parent emitter should receive a sequence of `AgentEvent::Subagent` (with
+    // correct `parent_tool_call_id` / `agent_type`), containing the child turn's
+    // `TurnStarted`, `LlmCall`, `AssistantText`, and `TurnEnded`.
     let tmp = tempfile::TempDir::new().expect("tmp");
     let profile = SubagentProfile {
         description: "d".to_string(),
@@ -390,11 +396,11 @@ fn subagent_events_bridged_to_parent() {
         tmp.path(),
         "parent-call-1",
     );
-    // 工具本身仍正常返回最终文本。
+    // The tool itself still returns the final text normally.
     assert_eq!(completed_text(&tool_events).as_deref(), Some("the answer"));
 
-    // 父 emitter 收到的全是 Subagent 包裹。单层场景下 ancestor_path 恰为 [本次调用 id]，
-    // agent_type 正确。
+    // The parent emitter receives only `Subagent` wrappers. In the single-layer case,
+    // `ancestor_path` is exactly `[this call's id]`, and `agent_type` is correct.
     assert!(!bridged.is_empty(), "expected bridged subagent events");
     for ev in &bridged {
         match ev {
@@ -415,7 +421,7 @@ fn subagent_events_bridged_to_parent() {
             other => panic!("expected Subagent wrapper, got {other:?}"),
         }
     }
-    // 至少应包含子 turn 的边界与一段助手文本。
+    // Must contain at least one sub-turn boundary and one assistant text segment.
     let has_turn_started = bridged.iter().any(|ev| {
         matches!(ev, AgentEvent::Subagent { inner, .. } if matches!(**inner, AgentEvent::TurnStarted))
     });
@@ -485,9 +491,10 @@ fn unknown_allowed_tool_fails_loud() {
 
 #[test]
 fn deadlock_guard_mutating_tool_is_denied_and_turn_completes() {
-    // 子 agent 第一轮请求调 write_file（Mutating）。父 policy 是 AskWrites，
-    // 会对 Mutating 返回 Ask；NonInteractivePolicy 必须把它降级为 Deny，
-    // 子 turn 不挂在 PermissionGate 上，第二轮回文本正常结束。
+    // The sub-agent requests `write_file` (Mutating) in its first turn. The parent policy
+    // is `AskWrites`, which returns `Ask` for Mutating; `NonInteractivePolicy` must
+    // downgrade it to `Deny`. The sub-turn does not hang on the `PermissionGate`, and the
+    // second turn completes normally with text.
     let tmp = tempfile::TempDir::new().expect("tmp");
     let profile = SubagentProfile {
         description: "d".to_string(),
@@ -507,9 +514,9 @@ fn deadlock_guard_mutating_tool_is_denied_and_turn_completes() {
         None,
     );
 
-    // 整个 run_tool 必须在合理时间内返回（不死锁）。current_thread runtime
-    // 上若 PermissionGate 永久 await，这个调用永不返回——测试会挂死而非通过，
-    // 即等价于 fail。
+    // `run_tool` must return within a reasonable time (no deadlock). On a
+    // `current_thread` runtime, if `PermissionGate` awaits forever, this call never
+    // returns — the test hangs instead of passing, which is equivalent to a failure.
     let events = run_tool(
         &tool,
         json!({"profile": "reviewer", "task": "t"}),
@@ -521,9 +528,10 @@ fn deadlock_guard_mutating_tool_is_denied_and_turn_completes() {
     );
 }
 
-/// 一个最小 HookEngine：在 `before_generate` 上 short-circuit，填合成 assistant
-/// 文本，从而完全跳过真实 LLM 调用。用来证明 profile 自带的 hook 引擎确实在子
-/// agent 的 turn 里被调度——否则子 agent 会回 provider 的文本而非这条。
+/// A minimal `HookEngine` that short-circuits on `before_generate`, synthesizing
+/// assistant text to completely skip the real LLM call. Used to prove that the profile's
+/// built-in hook engine is indeed dispatched during the sub-agent's turn — otherwise the
+/// sub-agent would return the provider's text instead.
 struct ShortCircuitHooks {
     text: String,
 }
@@ -537,7 +545,8 @@ impl crate::hooks::HookEngine for ShortCircuitHooks {
         let text = self.text.clone();
         Box::pin(async move {
             if step.event_name() == "before_generate" {
-                // apply_verdict 走 BeforeGenerate 的 `assistant` 字段 → assistant_text。
+                // apply_verdict uses the `assistant` field of BeforeGenerate to set
+                // assistant_text.
                 let _ = step.apply_verdict(&json!({ "assistant": text }));
             }
             crate::hooks::step::HookControl::Proceed
@@ -560,7 +569,8 @@ fn profile_hook_engine_runs_in_subagent_turn() {
     };
     let tool = SpawnAgentTool::new(
         profiles_with(profile),
-        // provider 会回 "from provider"——若 hook 没跑，结果就是它。
+        // The provider returns "from provider" — this is the result if the hook does not
+        // run.
         registry_with(Arc::new(TextProvider {
             text: "from provider".into(),
         })),
@@ -573,6 +583,7 @@ fn profile_hook_engine_runs_in_subagent_turn() {
         json!({"profile": "reviewer", "task": "do it"}),
         tmp.path(),
     );
-    // hook short-circuit 生效 ⇒ 最终文本来自 hook，而非 provider。
+    // The hook short-circuit takes effect, so the final text comes from the hook, not the
+    // provider.
     assert_eq!(completed_text(&events).as_deref(), Some("from hook"));
 }

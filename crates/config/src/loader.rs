@@ -25,14 +25,15 @@ use crate::types::{
 };
 use defect_agent::session::{BackgroundProgressConfig, WebSearchCapabilityConfig};
 
-/// 加载并合并 `defect` 的有效配置。
+/// Loads and merges the effective configuration for `defect`.
 ///
-/// precedence 为：`default < user < project < project-local < CLI`。
+/// Precedence is: `default < user < project < project-local < CLI`.
 ///
 /// # Errors
 ///
-/// 当用户配置路径无法解析、任一配置文件读盘失败、TOML 解析失败，或合并后的
-/// 配置无法反序列化为强类型结构时返回 [`ConfigError`]。
+/// Returns [`ConfigError`] when the user config path cannot be resolved, any config file
+/// fails to read from disk, TOML parsing fails, or the merged configuration cannot be
+/// deserialized into a strongly-typed structure.
 pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError> {
     let cwd = canonicalize_or_original(&opts.cwd);
     let user_path = resolve_user_config_path(&opts);
@@ -57,8 +58,9 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
 
     let mut merged = defaults;
     let mut base_prompt: Option<BasePromptConfigFile> = None;
-    // hooks 不能走"先合并再 decode"——数组合并语义是 append+dedupe，详见
-    // `crates/config/src/hooks.rs` 顶部注释。每层先单独抽取，最后 merge_layer_hooks。
+    // Hooks cannot use "merge then decode" — array merge semantics are append+dedupe; see
+    // the comment at the top of `crates/config/src/hooks.rs`. Extract each layer
+    // separately, then call `merge_layer_hooks` at the end.
     let mut hook_layers: Vec<LayerHooks> = Vec::new();
 
     if let Some((user_layer, layer_warnings)) =
@@ -124,9 +126,9 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
         if let Some(candidate) = extract_base_prompt(&cli_layer.value, cli_layer.path.as_ref()) {
             base_prompt = Some(candidate);
         }
-        // CLI override 走 dotted-key 形态，无法表达 [[hooks.*]] 数组——hook 不
-        // 能从命令行拼出来。这里不调 parse_layer_hooks，避免误以为 cli 层会有
-        // hook 进入。
+        // CLI overrides use dotted-key syntax, which cannot express `[[hooks.*]]` arrays
+        // — hooks cannot be constructed from the command line. `parse_layer_hooks` is not
+        // called here to avoid implying that the CLI layer could contain hooks.
         merge_toml_values(&mut merged, &cli_layer.value);
         layers.push(cli_layer);
     }
@@ -153,11 +155,11 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
     })
 }
 
-/// 兼容读取 `cwd/.env`，仅为缺失的环境变量补值。
+/// Reads `cwd/.env` compatibly, only filling in missing environment variables.
 ///
 /// # Errors
 ///
-/// 当 `.env` 文件存在但读取失败时返回 [`ConfigError::Io`]。
+/// Returns [`ConfigError::Io`] if the `.env` file exists but cannot be read.
 pub fn load_dotenv_compat(cwd: &Path) -> Result<(), ConfigError> {
     let path = cwd.join(".env");
     let raw = match fs::read_to_string(&path) {
@@ -173,7 +175,8 @@ pub fn load_dotenv_compat(cwd: &Path) -> Result<(), ConfigError> {
 
     let existing = raw_env_keys();
     for (key, value) in dotenv_updates_from_str(&raw, &existing) {
-        // SAFETY: CLI 在任何并发任务启动前调用；这里仅做进程启动阶段的 env 补值。
+        // SAFETY: called before any concurrent tasks are spawned; this only sets env vars
+        // during process startup.
         unsafe {
             env::set_var(key, value);
         }
@@ -187,8 +190,9 @@ fn build_effective_config(
     base_prompt: BasePromptConfigFile,
     hooks: HooksConfig,
 ) -> Result<EffectiveConfig, ConfigError> {
-    // `base_prompt` 的最终选择在 `load_config()` 中完成，这里只保留 typed decode
-    // 对 schema 的约束，并显式消费字段避免它与 raw-layer 解析脱节。
+    // The final selection of `base_prompt` is done in `load_config()`; here we only keep
+    // the typed decode constraint on the schema and explicitly consume the fields to
+    // avoid them falling out of sync with the raw-layer parsing.
     let _ = config.base_prompt.file.as_deref();
     let _ = config.base_prompt.text.as_deref();
     let provider = config.default.provider.unwrap_or_default();
@@ -202,7 +206,8 @@ fn build_effective_config(
         });
     }
     let provider_model = provider_default_model(&provider, provider_config);
-    // allowed_models 白名单只需 id——展示名在 entry_models 那条链路另取。
+    // The allowed_models allowlist only needs the id; the display name is taken
+    // separately in the entry_models path.
     let provider_allowed_models: Option<Vec<String>> = provider_config.and_then(|cfg| {
         cfg.models
             .as_ref()
@@ -239,9 +244,9 @@ fn build_effective_config(
     };
 
     let mut turn = TurnConfig {
-        // `ProviderKind::as_str()` 即运行时的 vendor 字符串（与
-        // `cli/providers.rs` 给每个 provider 装的 `ProviderInfo.vendor` 一致），
-        // 故它就是选择对的 provider 半边。
+        // `ProviderKind::as_str()` returns the runtime vendor string (matching
+        // `ProviderInfo.vendor` set for each provider in `cli/providers.rs`),
+        // so it selects the correct provider half.
         provider: provider.as_str().to_string(),
         model: model.clone(),
         allowed_models,
@@ -296,7 +301,8 @@ fn build_effective_config(
     }
     validate_compact_ratios(path, &turn)?;
     if turn.sampling == SamplingParams::default() {
-        // 保持 default sampling 显式落在 effective config 中，方便后续扩字段。
+        // Keep the default sampling explicitly in the effective config so that adding
+        // fields later is easier.
     }
 
     let capabilities = CapabilitiesConfig::with_web_search(WebSearchCapabilityConfig::new(
@@ -467,15 +473,16 @@ fn build_effective_config(
     })
 }
 
-/// 校验三档压缩水位比例：各 ratio 须落在 `(0, 1]`，且 `micro ≤ soft < hard`
-/// （只在实际设置了的档之间约束）。倒挂 / 越界一律 [`ConfigError::Invalid`] hard
-/// fail——不静默纠偏，避免"配出别扭水位却照跑"。详见 turn-loop.md §4。
+/// Validate the three-tier compaction watermark ratios: each ratio must be in `(0, 1]`,
+/// and `micro ≤ soft < hard` (only enforced between tiers that are actually set). Any
+/// inversion or out-of-bounds value is a hard [`ConfigError::Invalid`] fail — no silent
+/// correction, to avoid "running with awkward watermarks". See turn-loop.md §4.
 fn validate_compact_ratios(path: &Path, turn: &TurnConfig) -> Result<(), ConfigError> {
     let invalid = |message: String| ConfigError::Invalid {
         path: path.to_path_buf(),
         message,
     };
-    // 各 ratio 的取值域。
+    // Validate the domain of each ratio.
     for (name, ratio) in [
         ("microcompact_ratio", turn.microcompact_ratio),
         ("compact_soft_ratio", turn.compact_soft_ratio),
@@ -487,7 +494,7 @@ fn validate_compact_ratios(path: &Path, turn: &TurnConfig) -> Result<(), ConfigE
             return Err(invalid(format!("[turn].{name} must be in (0, 1], got {r}")));
         }
     }
-    // 仅对开启的档做排序约束：micro ≤ soft < hard。
+    // Only enforce ordering constraints for enabled tiers: micro ≤ soft < hard.
     let micro = turn
         .microcompact_enabled
         .then_some(turn.microcompact_ratio)
@@ -502,7 +509,7 @@ fn validate_compact_ratios(path: &Path, turn: &TurnConfig) -> Result<(), ConfigE
     {
         return Err(invalid(format!(
             "[turn].compact_soft_ratio ({soft}) must be < compact_ratio ({hard}); \
-             soft 水位须严格低于 hard，才能留出后台压缩窗口"
+             the soft watermark must be strictly below the hard one to leave room for background compaction"
         )));
     }
     if let (Some(micro), Some(soft)) = (micro, soft)
@@ -577,7 +584,8 @@ fn provider_declared_models(section: &ProviderSection) -> Vec<String> {
         models.push(default_model.clone());
     }
     if let Some(section_models) = &section.models {
-        // allowed_models 白名单只关心 id——丢掉展示名。
+        // The allowed_models allowlist only cares about the id — discard the display
+        // name.
         append_unique_models(
             &mut models,
             section_models.iter().map(|m| m.id().to_string()).collect(),
@@ -664,9 +672,9 @@ fn load_optional_layer_opt(
         path: path.clone(),
         source: BoxError::new(err),
     })?;
-    // 未知 key 校验在此逐层单独跑：`deny_unknown_fields` 由 serde 在 decode 时
-    // 报错，错误能带上该层文件路径（合并后再 decode 只能报 `<merged>`）。详见
-    // Config merge behavior.
+    // Unknown key validation runs per-layer here: `deny_unknown_fields` errors from serde
+    // during decoding include the file path for that layer (decoding after merging would
+    // only report `<merged>`). See Config merge behavior.
     reject_unknown_keys(&path, &value)?;
     let warnings = Vec::new();
     Ok(Some((
@@ -680,9 +688,10 @@ fn load_optional_layer_opt(
     )))
 }
 
-/// 逐层 typed-decode 校验：撞到未知 key 时 serde 直接报错，转成
-/// [`ConfigError::Invalid`] 并带上该层文件路径。`[hooks]` 段由
-/// `ConfigToml::hooks` 吸收字段放过，自有解析器做 schema 校验。
+/// Performs layer-by-layer typed-decode validation: when an unknown key is encountered,
+/// serde immediately errors, which is converted to [`ConfigError::Invalid`] with the file
+/// path for that layer. The `[hooks]` section is absorbed by `ConfigToml::hooks` to allow
+/// unknown fields through, as its own parser handles schema validation.
 fn reject_unknown_keys(path: &Path, value: &TomlValue) -> Result<(), ConfigError> {
     value
         .clone()
@@ -736,11 +745,13 @@ fn strip_quotes(s: &str) -> &str {
     s
 }
 
-/// 解析用户层 `config.toml` 路径。与 [`crate::profiles`] 的
-/// `resolve_user_agents_dir`、[`crate::skills`] 同源优先级，**找不到时返回
-/// `None`**：用户没设 XDG/HOME 时用户层配置直接缺席，不该让整个程序跑不起来。
+/// Resolve the user-level `config.toml` path. Shares the same priority logic as
+/// [`crate::profiles`]'s `resolve_user_agents_dir` and [`crate::skills`]; returns
+/// `None` when not found — if the user has no XDG or HOME set, the user-level
+/// configuration is simply absent and should not prevent the program from starting.
 fn resolve_user_config_path(opts: &LoadConfigOptions) -> Option<PathBuf> {
-    // `--local`：忽略全局/用户层配置——沙盒只认项目根 `.defect/`。
+    // `--local`: ignore global/user-level config — sandbox only recognizes the project
+    // root `.defect/`.
     if opts.local {
         return None;
     }

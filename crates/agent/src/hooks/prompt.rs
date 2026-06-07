@@ -1,26 +1,28 @@
-//! Prompt hook handler — 把 step 信封喂给一次 LLM 调用。
-//!
+//! Prompt hook handler — feeds a step envelope into a single LLM call.
 
+//! ## Not counted in the main loop's LLM call count
 //!
-//! ## 不在主循环 LLM 调用计数
+//! The handler directly uses an [`Arc<dyn LlmProvider>`] to call
+//! [`LlmProvider::complete`],
+//! **without entering the history or counting toward `turn_request_count`** — this
+//! prevents
+//! a `SessionStart` hook from consuming one of the user's `max_turn_requests`.
 //!
-//! handler 直接拿一份 [`Arc<dyn LlmProvider>`] 跑 [`LlmProvider::complete`]，
-//! **不进 history、不计 `turn_request_count`**——避免一个 SessionStart hook
-//! 把用户的 `max_turn_requests` 消耗一次。
+//! ## No nested Prompt handlers
 //!
-//! ## 不允许 Prompt handler 套 Prompt handler
+//! Design doc §4.3.1, rule 3: internal LLM calls must not emit hook events, to avoid
+//! infinite recursion. This is guaranteed by the caller (the hook engine) — events
+//! entered via `fire` will not trigger hooks again due to LLM calls made inside the
+//! handler (there is no back-channel between the hook engine and the LLM provider;
+//! `provider.complete` is unaware of the hook system). No additional protection is
+//! needed on the handler side.
 //!
-//! 设计文档 §4.3.1 第三条：内部 LLM 调用不再 emit hook 事件，避免无限递归。
-//! 这条由调用方（hook engine）保证——`fire` 入口的事件不会因为 handler 内
-//! 产生的 LLM 调用再次触发 hook（hook engine 与 LLM provider 之间没有反向
-//! 通道；provider.complete 不感知 hook 系统）。本 handler 实现侧无需额外
-//! 防护。
+//! ## Cold-start degradation
 //!
-//! ## 冷启动降级
-//!
-//! `SessionStart` 上 LLM 失败按 §3.5 表降级——`SessionStart` 不允许 block，
-//! 错误降为 warning，pipeline 继续。这条不变量由 [`super::DefaultHookEngine`]
-//! 实现，handler 端只负责把错误如实抛上去。
+//! If the LLM call on `SessionStart` fails, degrade per §3.5's table — `SessionStart`
+//! must not block; errors are downgraded to warnings and the pipeline continues. This
+//! invariant is enforced by [`super::DefaultHookEngine`]; the handler only needs to
+//! propagate the error faithfully.
 //!
 //! [`LlmProvider::complete`]: crate::llm::LlmProvider::complete
 
@@ -40,30 +42,31 @@ use super::{HookCtx, HookError, StepHandler};
 
 /// Template rendering strategy.
 ///
-/// `Template` 形态用极简 `{{key}}` 字符串替换——不引入 handlebars/tera
-/// 这类重型依赖。可识别的 key 见 `render_envelope` 的实现：
-/// - 全部事件：`{{event}}` / `{{cwd}}` / `{{session_id}}`
-/// - PreToolUse / Post*：`{{tool}}` / `{{tool_input}}` / `{{tool_error}}`
-/// - UserPromptSubmit：`{{prompt}}`
-/// - SessionStart：`{{session_source}}`
+/// The `Template` variant performs simple `{{key}}` string substitution without
+/// introducing heavy dependencies like handlebars or tera. Recognized keys are
+/// documented in the `render_envelope` implementation:
+/// - All events: `{{event}}` / `{{cwd}}` / `{{session_id}}`
+/// - PreToolUse / Post*: `{{tool}}` / `{{tool_input}}` / `{{tool_error}}`
+/// - UserPromptSubmit: `{{prompt}}`
+/// - SessionStart: `{{session_source}}`
 ///
-/// 未识别的 key 替换成空串（保守语义，避免模板写错时把 `{{...}}` 原样发
-/// 给模型）。
+/// Unrecognized keys are replaced with an empty string (conservative semantics to
+/// avoid sending raw `{{...}}` to the model when the template is misconfigured).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptRender {
-    /// 直接喂 step 信封的 JSON 序列化结果。
+    /// Feeds the JSON-serialized step envelope directly.
     Json,
-    /// 用 `{{key}}` 字符串替换从 event 字段取值。
+    /// Replaces `{{key}}` placeholders with values from the event fields.
     Template { template: String },
 }
 
-/// Prompt handler 的配置。
+/// Configuration for the prompt handler.
 #[derive(Clone)]
 pub struct PromptSpec {
     pub provider: Arc<dyn LlmProvider>,
-    /// `None` = 用 [`Self::fallback_model`]（session 默认 model）。
+    /// `None` = use [`Self::fallback_model`] (the session default model).
     pub model: Option<String>,
-    /// `model` 为 `None` 时用这个——CLI 装配期把 `TurnConfig::model` 喂进来。
+    /// Used when `model` is `None` — the CLI assembly phase feeds in `TurnConfig::model`.
     pub fallback_model: String,
     pub system: String,
     pub render: PromptRender,
@@ -83,7 +86,7 @@ impl std::fmt::Debug for PromptSpec {
     }
 }
 
-/// `Prompt` handler 实现。
+/// Implementation of the `Prompt` handler.
 pub struct PromptHandler {
     spec: PromptSpec,
 }
@@ -101,8 +104,9 @@ impl PromptHandler {
 }
 
 impl StepHandler for PromptHandler {
-    /// Step 模型：把 step 信封渲染成 user 文本（JSON 形态直接序列化信封；Template 形态按
-    /// `{{key}}` 取信封顶层字段），跑一次 LLM，输出文本作为 `additional_context` verdict。
+    /// Renders the step envelope into user text (for JSON mode, serializes the envelope
+    /// directly; for Template mode, extracts top-level fields using `{{key}}`), runs one
+    /// LLM call, and uses the output text as the `additional_context` verdict.
     fn handle_step<'a>(
         &'a self,
         envelope: &'a serde_json::Value,
@@ -141,7 +145,8 @@ impl StepHandler for PromptHandler {
     }
 }
 
-/// Step 信封渲染：JSON = 序列化信封；Template = `{{key}}` 取信封顶层字段（字符串/数字直接转文本）。
+/// Renders the envelope: `Json` serializes it; `Template` replaces `{{key}}` with the
+/// top-level field value (strings and numbers are converted to text directly).
 fn render_envelope(envelope: &serde_json::Value, render: &PromptRender) -> String {
     match render {
         PromptRender::Json => serde_json::to_string(envelope).unwrap_or_default(),
@@ -185,7 +190,7 @@ async fn collect_text(mut stream: crate::llm::ProviderStream) -> Result<String, 
         match chunk {
             Ok(ProviderChunk::TextDelta { text }) => out.push_str(&text),
             Ok(ProviderChunk::Stop { .. }) => break,
-            Ok(_) => {} // 忽略 thinking / tool_use / usage 等
+            Ok(_) => {} // Ignore thinking, tool_use, usage, etc.
             Err(err) => {
                 return Err(HookError::HandlerFailed(BoxError::new(err)));
             }
@@ -210,7 +215,7 @@ mod tests {
         HookCtx::new(session_id, cwd, CancellationToken::new())
     }
 
-    /// fake provider：固定返回一条 TextDelta + Stop。
+    /// Fake provider that always returns a single `TextDelta` followed by `Stop`.
     struct FakeProvider {
         text: String,
     }
@@ -269,7 +274,7 @@ mod tests {
         }
     }
 
-    /// fake provider：complete() 直接 Err。
+    /// A fake provider whose `complete()` always returns `Err`.
     struct FailingProvider;
 
     impl LlmProvider for FailingProvider {
@@ -302,7 +307,7 @@ mod tests {
         serde_json::json!({"cwd": "/repo", "source": "new"})
     }
 
-    /// Step 模型：LLM 输出文本 → additional_context verdict。
+    /// Step model: LLM output text → `additional_context` verdict.
     #[tokio::test]
     async fn prompt_step_injects_additional_context() {
         let provider = Arc::new(FakeProvider {
@@ -330,7 +335,7 @@ mod tests {
         assert_eq!(arr[0], "preload-summary");
     }
 
-    /// provider 出错 → HandlerFailed。
+    /// Provider error → HandlerFailed.
     #[tokio::test]
     async fn prompt_step_propagates_provider_error() {
         let h = PromptHandler::new(PromptSpec {
@@ -350,7 +355,7 @@ mod tests {
         assert!(matches!(err, HookError::HandlerFailed(_)));
     }
 
-    // ----- render_envelope（信封模板渲染）-----
+    // ----- render_envelope (envelope template rendering) -----
 
     #[test]
     fn envelope_template_replaces_known_keys() {

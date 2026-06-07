@@ -1,13 +1,13 @@
 //! ACP shell (terminal) delegation e2e tests.
 //!
-//! 形态：与 `fs_delegation.rs` 同款——`Channel::duplex` 把 ACP server / client
-//! 在进程内对接，server 跑 `defect_acp::serve_on`（注入 `ScriptedProvider` +
-//! 一个含 `BashTool` 的 [`StaticToolRegistry`]），client 用一个声明 `terminal`
-//! 能力的 builder 注册 `terminal/*` 反向请求 handler。
+//! Same pattern as `fs_delegation.rs`: `Channel::duplex` connects the ACP server and
+//! client in-process. The server runs `defect_acp::serve_on` (injecting a
+//! `ScriptedProvider` plus a [`StaticToolRegistry`] containing `BashTool`). The client
+//! uses a builder that declares `terminal` capability and registers a reverse-request
+//! handler for `terminal/*`.
 //!
-//! LLM provider 的脚本由测试 case 自行配 `Round`：第 1 轮 emit tool_use
-//! （指定 args JSON），第 2 轮 emit "done" 文本。
-//!
+//! The LLM provider script is configured per test case via `Round`: round 1 emits a
+//! `tool_use` (with the specified args JSON), round 2 emits the text `"done"`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,7 +40,7 @@ use futures::stream;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-// ---------- transport wrapper ----------
+// Transport wrapper
 
 struct ChannelTransport<R: Role> {
     inner: Channel,
@@ -201,44 +201,46 @@ impl LlmProvider for ScriptedProvider {
 
 #[derive(Default)]
 struct ClientObservations {
-    /// 收到的 `terminal/create` 入参（按到达顺序）
+    /// Received `terminal/create` parameters (in arrival order)
     creates: Vec<CreateTerminalRequest>,
-    /// `terminal/output` 的次数（无入参细节，只看出现频率）
+    /// Counts of `terminal/output` (no argument details, only frequency)
     outputs: Vec<AcpTerminalId>,
-    /// `terminal/wait_for_exit` 入参
+    /// `terminal/wait_for_exit` arguments
     waits: Vec<AcpTerminalId>,
-    /// `terminal/release` 入参
+    /// Received `terminal/release` arguments
     releases: Vec<AcpTerminalId>,
-    /// `terminal/kill` 入参
+    /// The `terminal/kill` argument
     kills: Vec<AcpTerminalId>,
-    /// 收到的 SessionNotification 列表
+    /// List of received `SessionNotification`s
     updates: Vec<SessionUpdate>,
 }
 
 type SharedObs = Arc<Mutex<ClientObservations>>;
 
-/// 单个 terminal 的脚本：`output` / `wait_for_exit` 应该回什么。
+/// Script for a single terminal: what `output` / `wait_for_exit` should return.
 #[derive(Clone, Default)]
 struct TerminalScript {
-    /// 累积输出文本。
+    /// Accumulated output text.
     output: String,
     truncated: bool,
-    /// 退出态——None 表示还没退出（output 端不上报；但 wait_for_exit 阻塞
-    /// 行为不在 v0 测试里覆盖，这里若 None 则按 exit_code=0 兜底）。
+    /// Exit status — `None` means the terminal has not exited yet (the output side does
+    /// not report it; however, the blocking behavior of `wait_for_exit` is not covered by
+    /// v0 tests, so if `None` we fall back to `exit_code=0`).
     exit: Option<AcpTerminalExitStatus>,
-    /// `wait_for_exit` 之前的等待时间（用于 case3 / case7 的"客户端晚回"路径）。
+    /// Wait time before `wait_for_exit` (used for the "client returns late" path in case3
+    /// / case7).
     wait_delay: Duration,
-    /// 是否在收到 `kill` 后把 exit 改写成 SIGKILL。
+    /// Whether to rewrite the exit status as SIGKILL after receiving a `kill`.
     kill_marks_signal: bool,
-    /// 让 create 直接返回 wire error（用于 case7）。
+    /// Causes `create` to return a wire error directly (used for case7).
     create_error: Option<agent_client_protocol::Error>,
 }
 
 #[derive(Clone, Default)]
 struct ClientScript {
-    /// 命令字符串（CreateTerminalRequest.args[1]）→ TerminalScript
+    /// Maps command strings (`CreateTerminalRequest.args[1]`) to `TerminalScript`.
     by_command: HashMap<String, TerminalScript>,
-    /// 兜底脚本，未在 `by_command` 命中的命令使用。
+    /// Fallback script used for commands not found in `by_command`.
     default: TerminalScript,
 }
 
@@ -251,10 +253,11 @@ impl ClientScript {
     }
 }
 
-/// 进入 e2e 时由 client 端持有：每个 create 出来的 terminal 的当前态。
+/// Held by the client during e2e: the current state of each created terminal.
 struct LiveTerminal {
     script: TerminalScript,
-    /// 客户端在收到 kill 之后置位，wait_for_exit 据此选 SIGKILL 退出态。
+    /// Set by the client after receiving a kill; `wait_for_exit` uses this to select the
+    /// SIGKILL exit state.
     killed: bool,
 }
 
@@ -283,11 +286,13 @@ fn full_terminal_caps() -> ClientCapabilities {
     ClientCapabilities::new().terminal(true)
 }
 
-/// 装配 fake client：所有 `terminal/*` handler 在这里挂上，跑 init →
-/// session/new → 一段自定义 prompt 流程闭包，最终返回 stop reason。
+/// Assembles a fake client: all `terminal/*` handlers are wired here, runs init →
+/// session/new → a custom prompt flow closure, and finally returns a stop reason.
 ///
-/// 用宏而非函数：`Client.builder()` 链返回的中间类型未公开导出，函数签名
-/// 写不出来，宏在调用点展开后所有类型都由编译器推断。
+/// A macro is used instead of a function because the intermediate type returned by
+/// `Client.builder()` chaining is not publicly exported, making the function signature
+/// impossible to write. The macro expands at the call site, letting the compiler infer
+/// all types.
 macro_rules! build_and_run_client {
     (
         obs = $obs:expr,
@@ -415,7 +420,7 @@ macro_rules! build_and_run_client {
                     } else if let Some(e) = exit {
                         e
                     } else {
-                        // 没显式声明就按正常 exit_code=0 收尾。
+                        // If not explicitly declared, default to a normal exit code of 0.
                         AcpTerminalExitStatus::new().exit_code(Some(0_u32))
                     };
                     responder.respond(WaitForTerminalExitResponse::new(exit))
@@ -456,7 +461,8 @@ macro_rules! build_and_run_client {
     }};
 }
 
-/// 跑 init→session/new→prompt 路径，返回 stop reason 与 client 观察记录。
+/// Runs the init → session/new → prompt path, returning the stop reason and client
+/// observations.
 async fn run_e2e(
     cwd: PathBuf,
     rounds: Vec<Round>,
@@ -508,9 +514,9 @@ async fn run_e2e(
     (stop, final_obs)
 }
 
-// ---------- cases ----------
+// ========== test cases ==========
 
-/// #1 委托模式 + bash echo → terminal/create + wait_for_exit + output 全命中
+/// #1 delegated mode + bash echo → terminal/create + wait_for_exit + output all hit
 #[tokio::test]
 async fn case1_delegated_bash_round_trips() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -564,7 +570,8 @@ async fn case1_delegated_bash_round_trips() {
     );
 }
 
-/// #2 命令以非零退出 → tool 仍然 Completed（不是 Failed），exit code 进 raw output
+/// #2 command exits with non-zero → tool is still Completed (not Failed), exit code goes
+/// into raw output
 #[tokio::test]
 async fn case2_nonzero_exit_yields_completed_with_marker() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -606,7 +613,7 @@ async fn case2_nonzero_exit_yields_completed_with_marker() {
     assert!(!any_failed, "should not be Failed for non-zero exit");
 }
 
-/// #3 超时 → agent 发 terminal/kill；tool Completed 含 timeout 标记
+/// #3 timeout → agent sends terminal/kill; tool Completed includes timeout flag
 #[tokio::test]
 async fn case3_timeout_invokes_kill() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -627,8 +634,9 @@ async fn case3_timeout_invokes_kill() {
     by_cmd.insert(
         "sleep 10".to_string(),
         TerminalScript {
-            // 客户端按"长跑"模拟：wait_for_exit 慢回，让 agent 端先撞 timeout
-            // 触发 kill。kill 来后客户端在 wait 路径里把 exit 改成 SIGKILL。
+            // Simulates a "long run" scenario: `wait_for_exit` responds slowly so the
+            // agent side hits the timeout first and triggers a kill. When the kill
+            // arrives, the client changes the exit status to `SIGKILL` in the wait path.
             wait_delay: Duration::from_millis(500),
             kill_marks_signal: true,
             ..TerminalScript::default()
@@ -639,8 +647,9 @@ async fn case3_timeout_invokes_kill() {
         default: TerminalScript::default(),
     };
 
-    // 8s 兜底：cancel/timeout 路径如果再次回归"在 select 里 drop wait_fut →
-    // server 撕连接"的死锁，让测试快速失败而不是耗尽 cargo 的默认 60s。
+    // 8s safety net: if the cancel/timeout path regresses into the deadlock where
+    // dropping `wait_fut` inside `select` causes the server to tear down the connection,
+    // make the test fail fast instead of exhausting cargo's default 60s timeout.
     let fut = run_e2e(cwd, rounds, full_terminal_caps(), script);
     let (stop, obs) = match tokio::time::timeout(Duration::from_secs(8), fut).await {
         Ok(v) => v,
@@ -657,7 +666,7 @@ async fn case3_timeout_invokes_kill() {
     );
 }
 
-/// #4 turn 中途 cancel → agent 发 kill（不 hang）
+/// #4: cancel mid-turn → agent sends kill (no hang)
 #[tokio::test]
 async fn case4_cancel_invokes_kill() {
     use agent_client_protocol::schema::CancelNotification;
@@ -752,7 +761,8 @@ async fn case4_cancel_invokes_kill() {
     );
 }
 
-/// #5 client 没声明 terminal 能力 → 退回 LocalShellBackend，**不**发反向请求
+/// #5 client does not declare terminal capability → falls back to LocalShellBackend, does
+/// **not** send reverse request
 #[tokio::test]
 async fn case5_no_terminal_caps_falls_back_to_local() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -769,7 +779,7 @@ async fn case5_no_terminal_caps_falls_back_to_local() {
         },
     ];
 
-    // client_caps 没置 terminal=true → ShellMode::Local
+    // client_caps without terminal=true → ShellMode::Local
     let (stop, obs) = run_e2e(
         cwd,
         rounds,
@@ -789,7 +799,7 @@ async fn case5_no_terminal_caps_falls_back_to_local() {
     assert!(obs.releases.is_empty());
 }
 
-/// #6 委托模式下 workdir 越界 → agent 自己拦下，**不**发 terminal/create
+/// #6 Delegation mode: workdir escape blocked by agent, no terminal/create sent
 #[tokio::test]
 async fn case6_workdir_escape_blocked_before_create() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -819,7 +829,7 @@ async fn case6_workdir_escape_blocked_before_create() {
     );
 }
 
-/// #7 委托模式下 client 在 create 上返回 wire error → 工具 Failed，turn 继续
+/// #7 Delegation mode: client returns wire error on create → tool Failed, turn continues
 #[tokio::test]
 async fn case7_client_create_error_marks_tool_failed() {
     let dir = tempfile::tempdir().expect("tempdir");

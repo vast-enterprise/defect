@@ -1,8 +1,10 @@
-//! 权限决策与工具并发执行。
+//! Permission decision and concurrent tool execution.
 //!
-//! 从 turn 主流程疏散出来：`decide_permissions` / `emit_tool_failed` /
-//! `run_tools_concurrently` 作为 [`super::TurnRunner`] 的方法实现，加上 [`Approved`] /
-//! [`DecisionFlow`] / [`ToolResult`] 类型、单个工具流驱动 [`drive_tool_stream`] 与相关 helper。
+//! Extracted from the turn main flow: `decide_permissions` / `emit_tool_failed` /
+//! `run_tools_concurrently` are implemented as methods on [`super::TurnRunner`], along
+//! with the
+//! [`Approved`] / [`DecisionFlow`] / [`ToolResult`] types, single tool stream driving
+//! [`drive_tool_stream`], and related helpers.
 
 use std::sync::Arc;
 
@@ -68,8 +70,9 @@ impl TurnRunner<'_> {
                 }
             };
 
-            // ② PreToolUse hook（Sync 拦截）
-            // 在 policy 之前——hook 可改写 args / 直接 block 让 policy 都不用算。
+            // ② PreToolUse hook (sync interception)
+            // Before policy evaluation — the hook can rewrite args or block directly, so
+            // policy is not needed.
             // Let hooks process the tool result before it lands in history.
             let safety_hint_pre = tool.safety_hint(&args);
             match self
@@ -100,8 +103,9 @@ impl TurnRunner<'_> {
             )
             .with_current_provider(&self.config.provider);
             let description = tool.describe(&args, describe_ctx).await;
-            // raw_input 由主循环在外层填充原始 args（见 tool.rs 注释：工具自己不塞）。
-            // 不填则 ACP wire 上的 tool_call 与 langfuse span 都没有 input。
+            // The main loop fills `raw_input` with the original `args` from outside (see
+            // the comment in tool.rs: the tool itself does not set it). Without this,
+            // neither the ACP wire `tool_call` nor the Langfuse span would have an input.
             let mut started_fields =
                 with_status(description.fields.clone(), ToolCallStatus::Pending);
             if started_fields.raw_input.is_none() {
@@ -144,7 +148,7 @@ impl TurnRunner<'_> {
                 }
                 PolicyDecision::Ask(ask) => {
                     if ask.options.is_empty() {
-                        // 空 options 等价 Deny（见 sandbox-policy.md §2）
+                        // Empty options are equivalent to Deny (see sandbox-policy.md §2)
                         self.emit_tool_failed(&id, &tu.name, "denied by policy".to_string())
                             .await;
                         approved.push(Approved::Denied {
@@ -226,10 +230,13 @@ impl TurnRunner<'_> {
         let mut joinset: JoinSet<ToolResult> = JoinSet::new();
         let mut results: Vec<ToolResult> = Vec::with_capacity(approved.len());
 
-        // `max_concurrent_tools == 0` ⇒ 不限并发（None，快路径，永不 await permit）。
-        // 否则所有工具 task 共享一个 `Semaphore`：每个 task 在驱动工具流之前先抢一个
-        // permit，跑完（task future 结束）即归还。这给同一 turn 内一次发出 N 个
-        // `spawn_agent`（fanout）的场景一个上限，避免 spawn 风暴打爆 provider/资源。
+        // When `max_concurrent_tools == 0`, concurrency is unlimited (`None`, fast path,
+        // never awaits a permit).
+        // Otherwise all tool tasks share a single `Semaphore`: each task acquires a
+        // permit before driving the tool stream and releases it when the task future
+        // completes. This caps the number of concurrent tool executions in a single turn
+        // when N `spawn_agent` calls are fanned out, preventing a spawn storm from
+        // overwhelming the provider or resources.
         let semaphore = (self.config.max_concurrent_tools > 0).then(|| {
             Arc::new(tokio::sync::Semaphore::new(
                 self.config.max_concurrent_tools,
@@ -254,8 +261,9 @@ impl TurnRunner<'_> {
                     let provider = self.config.provider.clone();
                     let background = self.background.clone();
                     let goal = self.goal.clone();
-                    // 把本轮 active policy 传给工具——`spawn_agent` 据此让子 agent
-                    // 包父此刻的真实策略（反映 session 当前 permission mode）。
+                    // Pass the current active policy to the tool — `spawn_agent` uses it
+                    // to give the child agent the parent's actual policy (reflecting the
+                    // session's current permission mode).
                     let policy = self.policy.clone();
                     let subagent_depth = self.config.subagent_max_depth;
                     let name = tool.schema().name.clone();
@@ -267,9 +275,10 @@ impl TurnRunner<'_> {
                     let semaphore = semaphore.clone();
                     joinset.spawn(
                         async move {
-                            // 抢 permit；持有到本 task future 结束（drive 跑完）自动归还。
-                            // `acquire_owned` 仅在 Semaphore 被 close 时返回 Err——本处
-                            // 永不 close，故 unwrap 安全。
+                            // Acquire a permit; it is held until this task's future
+                            // completes (drive finishes) and is automatically returned.
+                            // `acquire_owned` only returns `Err` when the `Semaphore` is
+                            // closed — it is never closed here, so `unwrap` is safe.
                             let _permit = match semaphore {
                                 Some(sem) => {
                                     Some(sem.acquire_owned().await.expect("semaphore not closed"))
@@ -358,9 +367,9 @@ impl TurnRunner<'_> {
             }
         }
 
-        // ③/④ PostToolUse / PostToolUseFailure hook（Sync 拦截）
-        // 在 tool_result 落 history 之前给 hook 追加注释的机会。详见
-        // Give hooks a chance to append annotations before tool_result lands in history.
+        // PostToolUse / PostToolUseFailure hook (sync interception).
+        // Gives hooks a chance to append annotations before tool_result is written to
+        // history.
         for result in results.iter_mut() {
             self.fire_post_tool_hook(result).await;
         }
@@ -373,7 +382,7 @@ impl TurnRunner<'_> {
 
 impl<'a> TurnRunner<'a> {}
 
-// ----- 类型 -----
+// ----- Types -----
 
 pub(super) enum Approved {
     Run {
@@ -395,33 +404,36 @@ pub(super) enum Approved {
     },
 }
 
-/// `decide_permissions` 的返回：要么继续把 approved 列表交给执行阶段，
-/// 要么用户在 `Ask` 阶段取消了 turn。
+/// The return value of `decide_permissions`: either continue with the approved list to
+/// the execution phase, or the user cancelled the turn during the `Ask` phase.
 pub(super) enum DecisionFlow {
     Continue(Vec<Approved>),
     Cancelled,
 }
 
 pub(super) struct ToolResult {
-    /// 工具调用的 ACP id。step 模型下 `after ToolApply` 暂未消费，保留供未来事件/审计用。
+    /// ACP ID of the tool call. Not yet consumed by `after ToolApply` in the step model;
+    /// kept for future events/auditing.
     #[allow(dead_code)]
     pub(super) id: ToolCallId,
-    /// 工具名。`after ToolApply` step 的 matcher / 信封要用。
+    /// Tool name. Used by the matcher / envelope of the `after ToolApply` step.
     pub(super) name: String,
     pub(super) tool_use_id: String,
     pub(super) body: ToolResultBody,
     pub(super) is_error: bool,
-    /// 终态字段。旧 `PostToolUse` hook 曾消费；step 模型下暂未用，保留供未来用。
+    /// Final field. Previously consumed by the `PostToolUse` hook; unused in the step
+    /// model, kept for future use.
     #[allow(dead_code)]
     pub(super) fields: Option<ToolCallUpdateFields>,
-    /// 失败文本。旧 `PostToolUseFailure` hook 曾消费；step 模型下暂未用，保留供未来用。
+    /// Failure text. Previously consumed by the `PostToolUseFailure` hook; not yet used
+    /// in the step model, kept for future use.
     #[allow(dead_code)]
     pub(super) error: Option<String>,
 }
 
 // ----- helpers -----
 
-/// 从一个 [`Approved`] 取工具名（after Permission hook 信封用）。
+/// Extract the tool name from an [`Approved`] (for the after-Permission-hook envelope).
 pub(super) fn approved_tool_name(a: &Approved) -> String {
     match a {
         Approved::Run { tool, .. } => tool.schema().name.clone(),
@@ -455,16 +467,22 @@ fn failed_fields_text(text: String) -> ToolCallUpdateFields {
     f
 }
 
-/// 把 [`ToolCallUpdateFields::content`] 收成喂回 LLM 的 [`ToolResultBody`]。
+/// Collapse [`ToolCallUpdateFields::content`] into a [`ToolResultBody`] to feed back to
+/// the LLM.
 ///
-/// 规则：扫描所有 `ToolCallContent::Content` 块——
-/// - 纯文本（含零图片）：拼成单条 [`ToolResultBody::Text`]，与历史行为一致，
-///   也让 `fire_post_tool_hook` 的文本追加、OpenAI tool message 走简单路径
-/// - 一旦出现图片块：升级为 [`ToolResultBody::Content`]，文本与图片块按原序
-///   混排，交给 codec 按 provider 物化
+/// Rules: scan all `ToolCallContent::Content` blocks —
+/// - Plain text (zero images): combine into a single [`ToolResultBody::Text`], matching
+///   historical behavior,
+///   and keeping `fire_post_tool_hook`'s text appending and OpenAI tool messages on the
+///   simple path.
+/// - If any image block appears: upgrade to [`ToolResultBody::Content`], interleaving
+///   text and image blocks
+///   in original order, and let the codec materialize them per provider.
 ///
-/// `Diff` / `ResourceLink` 等非文本非图片块不进 tool_result（它们是给 UI 看的
-/// ACP 展示内容，不喂模型）；返回 `None` 表示没有可喂回的内容。
+/// `Diff` / `ResourceLink` and other non-text, non-image blocks are excluded from
+/// tool_result (they are ACP
+/// display content for the UI, not fed to the model); returns `None` if there is nothing
+/// to feed back.
 fn extract_body(fields: &ToolCallUpdateFields) -> Option<ToolResultBody> {
     let raw = fields.content.as_ref()?;
     let mut blocks: Vec<ToolResultContent> = Vec::new();
@@ -495,7 +513,7 @@ fn extract_body(fields: &ToolCallUpdateFields) -> Option<ToolResultBody> {
     if has_image {
         return Some(ToolResultBody::Content { blocks });
     }
-    // 纯文本：拼成单条 Text。
+    // Plain text: join into a single `Text`.
     let text = blocks
         .into_iter()
         .filter_map(|b| match b {
@@ -507,8 +525,8 @@ fn extract_body(fields: &ToolCallUpdateFields) -> Option<ToolResultBody> {
     Some(ToolResultBody::Text { text })
 }
 
-/// 单个工具流的驱动 task。把 [`ToolEvent`] 转发为 [`AgentEvent`]，最后产出
-/// [`ToolResult`] 喂回 LLM。
+/// Drives a single tool stream task. Forwards [`ToolEvent`] as [`AgentEvent`] and finally
+/// produces a [`ToolResult`] to feed back to the LLM.
 #[allow(clippy::too_many_arguments)]
 async fn drive_tool_stream(
     id: ToolCallId,
@@ -539,8 +557,9 @@ async fn drive_tool_stream(
     )
     .with_current_provider(&provider)
     .with_policy(policy)
-    // 本 turn 起的剩余 subagent 派发深度——`spawn_agent` 据它决定子 agent 还能否
-    // 继续递归（0 ⇒ 子工具集不含 spawn_agent）。
+    // Remaining subagent dispatch depth for this turn — `spawn_agent` uses it to decide
+    // whether child agents can continue recursing (0 ⇒ the child toolset contains no
+    // `spawn_agent`).
     .with_subagent_depth(subagent_depth);
     if let Some(bg) = background {
         ctx = ctx.with_background(bg);
@@ -548,10 +567,12 @@ async fn drive_tool_stream(
     if let Some(goal) = goal {
         ctx = ctx.with_goal(goal);
     }
-    // 注入 subagent 事件桥：让 `spawn_agent` 能把子 turn 事件包成
-    // AgentEvent::Subagent 转发回本 session 的事件流（按本次 tool_call_id 嵌套）。
-    // 对绝大多数工具是惰性的——只有 spawn_agent 会用到。顶层与子 agent 嵌套 turn 都
-    // 注入（递归桥接）：每层 bridge_task 只 prepend 自己这一跳的 tool_call_id。
+    // Inject a subagent event bridge so that `spawn_agent` can wrap child-turn events as
+    // `AgentEvent::Subagent` and forward them back into this session's event stream,
+    // nested under the current `tool_call_id`. This is a no-op for most tools—only
+    // `spawn_agent` uses it. The bridge is injected for both top-level and nested
+    // subagent turns (recursive bridging); each layer of `bridge_task` only prepends its
+    // own hop's `tool_call_id`.
     ctx = ctx.with_subagent_bridge(crate::tool::SubagentBridge {
         parent_events: events.clone(),
         parent_tool_call_id: id.clone(),
@@ -560,12 +581,15 @@ async fn drive_tool_stream(
 
     let mut last_body: Option<ToolResultBody> = None;
 
-    // 注意：cancel 通过 ctx.cancel 注入工具内部，由工具自己感知并产出
-    // [`ToolEvent::Failed(ToolError::Canceled)`]——不要在驱动层加 cancel arm。
-    // 一旦驱动层 select 里 drop 掉 stream，工具内部任何在飞的 ACP 反向请求
-    // 的 oneshot::Receiver 都会被 drop，server 把"无人接收"映射成 internal_error
-    // 并撕掉整条连接（详见 `agent_client_protocol::jsonrpc::incoming_actor`
-    // 里 `router.respond_with_result` 的 ?）。Tool trait 契约：必须感知 cancel。
+    // Note: cancellation is injected into the tool via `ctx.cancel`; the tool itself
+    // detects it and produces [`ToolEvent::Failed(ToolError::Canceled)`] — do not add a
+    // cancel arm in the driver layer.
+    // If the driver drops the stream inside a `select`, any in-flight oneshot::Receiver
+    // for an ACP reverse request inside the tool will be dropped, causing the server to
+    // map "no receiver" to an internal_error and tear down the entire connection (see the
+    // `?` on `router.respond_with_result` in
+    // `agent_client_protocol::jsonrpc::incoming_actor`).
+    // Tool trait contract: must detect cancellation.
     while let Some(ev) = stream.next().await {
         match ev {
             ToolEvent::Progress(fields) => {

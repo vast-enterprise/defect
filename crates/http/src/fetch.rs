@@ -1,12 +1,15 @@
-//! `fetch` 工具用的 HTTP 客户端实现。
+//! HTTP client implementation for the `fetch` tool.
 //!
-//! 与 `build_http_stack`（LLM provider 用、输入是 `toac::Request`）并行存在：
-//! provider 路径需要 toac 的 wire body；fetch 路径只发裸 GET，body 是
-//! `Empty<Bytes>`，并且需要在客户端这一层就完成「URL 校验 / 重定向 / 超时 /
-//! body 截断」——这些都不该塞进 toac 的 service 链。
+//! Exists in parallel with `build_http_stack` (used by LLM providers, input is
+//! `toac::Request`):
+//! the provider path needs toac's wire body; the fetch path only sends bare GET requests
+//! with
+//! `Empty<Bytes>` as the body, and must handle URL validation, redirects, timeouts, and
+//! body truncation at the client layer — these should not be pushed into the toac service
+//! chain.
 //!
-//! 共享的部分仍然在 [`super::proxy::build_proxy_connector`]——TLS / 代理 /
-//! 连接池语义两条路径完全一致。
+//! Shared logic remains in [`super::proxy::build_proxy_connector`] — TLS, proxy, and
+//! connection pool semantics are identical for both paths.
 //!
 //! HTTP fetch implementation.
 
@@ -28,14 +31,14 @@ use super::proxy::{ProxyAwareConnector, build_proxy_connector};
 use super::user_agent::default_user_agent;
 use super::{HttpStackConfig, HttpStackError, ProxyConfig};
 
-/// 内部使用的 hyper-util Client 类型别名——和 `build_http_stack` 用的
-/// 同一个连接器、同一个 body 类型族（这里是 `Empty<Bytes>`，因为 fetch
-/// 只发 GET）。
+/// Internal hyper-util Client type alias — uses the same connector and body type family
+/// as `build_http_stack` (here `Empty<Bytes>`, because fetch only issues GET requests).
 type FetchHyperClient = HyperClient<ProxyAwareConnector, Empty<Bytes>>;
 
-/// `fetch` 工具背后的 HTTP 客户端。
+/// HTTP client backing the `fetch` utility.
 ///
-/// 行为契约见 [`HttpClient`]：超时 / 重定向 / body 截断都在这一层实现。
+/// See [`HttpClient`] for the behavioral contract: timeouts, redirects, and body
+/// truncation are all implemented at this layer.
 pub struct FetchHttpClient {
     inner: FetchHyperClient,
     user_agent: HeaderValue,
@@ -49,18 +52,18 @@ impl std::fmt::Debug for FetchHttpClient {
     }
 }
 
-/// 按 [`HttpStackConfig`] 构造 fetch 客户端。
+/// Builds a fetch client from an [`HttpStackConfig`].
 ///
-/// 复用同一份 [`ProxyConfig`] 与 UA 默认值；`transport_retries` /
-/// `total_timeout` / `initial_backoff` 在 fetch 路径下不直接生效——
-/// fetch 的超时按"单次调用粒度"由 [`HttpRequest::timeout`] 决定，
-/// 重试由调用方自行决定（[`HttpClient`] 不重试，避免对带副作用的
-/// `GET` 隐式翻倍流量）。
+/// Reuses the same [`ProxyConfig`] and default user agent. `transport_retries` /
+/// `total_timeout` / `initial_backoff` do not apply directly in the fetch path —
+/// fetch timeouts are determined per-call by [`HttpRequest::timeout`], and retries
+/// are left to the caller ([`HttpClient`] does not retry, to avoid silently doubling
+/// traffic for `GET` requests with side effects).
 ///
 /// # Errors
 ///
-/// 连接器构造失败（TLS roots 加载、代理 URL 解析）时返回
-/// [`HttpStackError`]。
+/// Returns [`HttpStackError`] if the connector fails to build (e.g. TLS root loading,
+/// proxy URL parsing).
 pub fn build_fetch_client(config: &HttpStackConfig) -> Result<FetchHttpClient, HttpStackError> {
     let connector = build_proxy_connector(&config.proxy)?;
     let inner = HyperClient::builder(TokioExecutor::default()).build::<_, Empty<Bytes>>(connector);
@@ -75,11 +78,12 @@ pub fn build_fetch_client(config: &HttpStackConfig) -> Result<FetchHttpClient, H
     Ok(FetchHttpClient { inner, user_agent })
 }
 
-/// `build_fetch_client` + `Arc::new` 的便利入口——CLI 装配点的常用路径。
+/// Convenience wrapper around `build_fetch_client` + `Arc::new` — the common path used at
+/// CLI assembly points.
 ///
 /// # Errors
 ///
-/// 同 [`build_fetch_client`]。
+/// Same as [`build_fetch_client`].
 pub fn build_fetch_client_arc(
     config: &HttpStackConfig,
 ) -> Result<Arc<dyn HttpClient>, HttpStackError> {
@@ -118,7 +122,8 @@ impl FetchHttpClient {
                     return Err(HttpClientError::TooManyRedirects(redirects));
                 }
                 let Some(location) = response.headers().get(LOCATION) else {
-                    // 3xx 但缺 Location：把它当终态返回（很少见，对应大部分客户端行为）。
+                    // 3xx without Location: treat as terminal response (rare, matches
+                    // most client behavior).
                     return collect_response(response, &current, redirects, req.max_response_bytes)
                         .await;
                 };
@@ -172,12 +177,13 @@ fn parse_http_uri(raw: &str) -> Result<Uri, HttpClientError> {
     Ok(uri)
 }
 
-/// 解析 redirect target。
+/// Resolve the redirect target.
 ///
-/// - 绝对 URI（含 scheme + authority）→ 解析后校验 scheme。
-/// - 协议相对（`//host/path`）→ 沿用原 scheme。
-/// - 路径绝对（`/path`）→ 沿用原 scheme + authority。
-/// - 路径相对（`other.html`）→ v0 不支持，返回错误（实际场景罕见且语义易出错）。
+/// - Absolute URI (with scheme + authority) → parse and validate the scheme.
+/// - Protocol-relative (`//host/path`) → reuse the original scheme.
+/// - Absolute path (`/path`) → reuse the original scheme + authority.
+/// - Relative path (`other.html`) → not supported in v0, returns an error (rare in
+///   practice and error-prone).
 fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, HttpClientError> {
     let trimmed = location.trim();
     if trimmed.is_empty() {
@@ -187,7 +193,7 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, HttpClientError> 
     }
 
     if trimmed.contains("://") {
-        // 绝对 URI
+        // Absolute URI
         return parse_http_uri(trimmed);
     }
 
@@ -203,13 +209,13 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, HttpClientError> 
     })?;
 
     let composed = if let Some(rest) = trimmed.strip_prefix("//") {
-        // protocol-relative
+        // Protocol-relative URL
         format!("{base_scheme}://{rest}")
     } else if trimmed.starts_with('/') {
-        // path-absolute
+        // Path-absolute
         format!("{base_scheme}://{base_authority}{trimmed}")
     } else {
-        // path-relative：v0 不支持
+        // path-relative: not supported in v0
         return Err(HttpClientError::Transport(BoxError::new(
             std::io::Error::other(format!("relative redirect not supported: `{trimmed}`")),
         )));
@@ -270,13 +276,14 @@ async fn collect_response(
     })
 }
 
-/// 极简版本——给 CLI 装配在没有完整 [`HttpStackConfig`] 时也能拉起来。
+/// Minimal version – allows the CLI to set up a fetch client even when a full
+/// [`HttpStackConfig`] is not available.
 ///
-/// 等价于 `build_fetch_client(&HttpStackConfig::default())`。
+/// Equivalent to `build_fetch_client(&HttpStackConfig::default())`.
 ///
 /// # Errors
 ///
-/// 同 [`build_fetch_client`]。
+/// Same as [`build_fetch_client`].
 pub fn build_default_fetch_client_arc() -> Result<Arc<dyn HttpClient>, HttpStackError> {
     build_fetch_client_arc(&HttpStackConfig {
         proxy: ProxyConfig::FromEnv,

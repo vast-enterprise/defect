@@ -1,7 +1,8 @@
-//! ACP `ContentBlock` → 内部 `MessageContent` 的转换。
+//! Conversion from ACP `ContentBlock` to internal `MessageContent`.
 //!
-//! 从 turn 主流程疏散出来的纯函数集合：把客户端送来的 ACP 内容块翻译成 LLM 协议层的
-//! `MessageContent`。无 IO、无状态，便于单测（见 `turn/test.rs`）。
+//! A collection of pure functions extracted from the main turn flow: translates ACP
+//! content blocks sent by the client into `MessageContent` for the LLM protocol layer. No
+//! IO, no state, easy to unit-test (see `turn/test.rs`).
 
 use std::io;
 

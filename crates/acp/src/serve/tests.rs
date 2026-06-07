@@ -3,10 +3,12 @@ use agent_client_protocol::schema::ErrorCode;
 use defect_agent::error::BoxError;
 use defect_agent::llm::{ProviderError, ProviderErrorKind};
 
-/// `TurnError::Provider` 必须把内层 Display 灌进 wire `message`。
-/// 之前的实现用 [`Wire::internal_error()`]，message 永远是字面量
-/// "Internal error"——客户端 UI 拿不到任何辨识信息，acpx 显示成
-/// `RUNTIME: Internal error`。
+/// `TurnError::Provider` must propagate the inner `Display` into the wire `message`.
+/// The previous implementation used [`Wire::internal_error()`], so the message was always
+/// the literal
+/// "Internal error" — the client UI received no identifying information, and acpx
+/// displayed
+/// `RUNTIME: Internal error`.
 #[test]
 fn turn_provider_error_carries_message_on_wire() {
     let provider_err = ProviderError::new(ProviderErrorKind::ModelNotFound {
@@ -21,7 +23,8 @@ fn turn_provider_error_carries_message_on_wire() {
         "expected provider Display text in wire message, got: {:?}",
         wire.message
     );
-    // data.kind 仍然区分 provider vs internal，方便 verbose 模式排障。
+    // data.kind still distinguishes provider from internal, aiding verbose-mode
+    // debugging.
     let data = wire.data.expect("wire data");
     assert_eq!(data.get("kind").and_then(|v| v.as_str()), Some("provider"));
 }
@@ -51,8 +54,8 @@ fn turn_in_progress_uses_invalid_request_code() {
 
 use agent_client_protocol::schema::FileSystemCapabilities;
 
-/// Regression test for ACP filesystem delegation decisions —
-/// 任一 fs 能力位 false → 整组退回本地，不混用。
+/// Regression test for ACP filesystem delegation decisions — if any fs capability bit is
+/// false, the entire group falls back to local, no mixing.
 #[test]
 fn decide_fs_mode_full_caps_is_delegated() {
     let caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()

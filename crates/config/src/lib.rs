@@ -1,7 +1,8 @@
-//! 配置加载与合并。
+//! Configuration loading and merging.
 //!
-//! P1 负责把用户配置、项目配置、本地项目覆盖与 CLI override 收敛成一份
-//! 可直接用于启动的强类型配置对象。
+//! This module consolidates user configuration, project configuration, local project
+//! overrides, and CLI overrides into a single strongly-typed configuration object ready
+//! for startup.
 
 #![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 

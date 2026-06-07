@@ -1,19 +1,20 @@
-//! OpenAI Chat Completions 协议层单测。
+//! Unit tests for the OpenAI Chat Completions protocol layer.
 //!
-//! 重点覆盖：
-//! - `encode_request` 字段映射（system 提升到 messages[0]、tool_choice
-//!   多 variant、tools.function 包装、ToolUse / ToolResult 拆分、Image
-//!   url + base64、stream / stream_options 强制开启）
-//! - `decode_stream` SSE 状态机：
-//!   - 单 tool_call 完整路径（Start→ArgsDelta→finish_reason→ToolUseEnd→Stop）
-//!   - 两个 tool_call 并发（不同 index）的 ArgsDelta 交错
-//!   - DeepSeek `reasoning_content` → ThinkingDelta（裸 JSON 提取）
-//!   - `data: [DONE]` 终止流
-//!   - 单条 SSE JSON 解析失败 → `Malformed`，流不终止
-//!   - 流末未收到 finish_reason / [DONE] → `ProtocolViolation`
-//!   - cancel 触发 → 流静默终结
-//!   - 末尾 usage chunk（`choices: []` + `usage: {...}`）→ Usage chunk
-//!   - finish_reason 各 variant → StopReason 映射
+//! Key coverage:
+//! - `encode_request` field mapping (system promoted to `messages[0]`, `tool_choice`
+//!   multiple variants, `tools.function` wrapping, `ToolUse` / `ToolResult` splitting,
+//!   image url + base64, `stream` / `stream_options` forced on)
+//! - `decode_stream` SSE state machine:
+//!   - Single `tool_call` full path (Start → ArgsDelta → finish_reason → ToolUseEnd →
+//!     Stop)
+//!   - Two concurrent `tool_call`s (different indices) with interleaved ArgsDelta
+//!   - DeepSeek `reasoning_content` → ThinkingDelta (raw JSON extraction)
+//!   - `data: [DONE]` terminates the stream
+//!   - Single SSE JSON parse failure → `Malformed`, stream continues
+//!   - Missing `finish_reason` / `[DONE]` at stream end → `ProtocolViolation`
+//!   - Cancel triggers silent stream termination
+//!   - Trailing usage chunk (`choices: []` + `usage: {...}`) → Usage chunk
+//!   - Each `finish_reason` variant → `StopReason` mapping
 
 use defect_agent::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderErrorKind, Role,
@@ -29,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::wire::openai::components as wire;
 
-// ---------- helpers ------------------------------------------------------
+// Helpers
 
 #[derive(Debug, thiserror::Error)]
 #[error("test sse never errors")]
@@ -47,15 +48,16 @@ fn make_sse_events(datas: &[&str]) -> Vec<Sse> {
         .collect()
 }
 
-/// 直接喂 `Vec<Sse>` 给 `process_sse`，跳过 hyper / transport，专测状态机。
+/// Feed `Vec<Sse>` directly into `process_sse`, bypassing hyper/transport, to test only
+/// the state machine.
 fn run_state_machine(datas: &[&str]) -> (DecoderState, Vec<Result<ProviderChunk, ProviderError>>) {
     let mut state = DecoderState::default();
     let mut out = Vec::new();
     for sse in make_sse_events(datas) {
         let mut buf = Vec::new();
         process_sse(&mut state, sse, &mut buf, usage_from_wire);
-        // process_sse 内部反序压栈给 poll_next 的 pop()——测试要按时间序，
-        // 这里再反一次。
+        // process_sse pushes items in reverse order for poll_next's pop(); tests expect
+        // chronological order, so reverse again here.
         buf.reverse();
         out.extend(buf);
         if state.fatal || state.done {
@@ -80,7 +82,7 @@ fn ok_chunks(results: Vec<Result<ProviderChunk, ProviderError>>) -> Vec<Provider
     results.into_iter().map(|r| r.expect("err chunk")).collect()
 }
 
-// ---------- encode_request ----------------------------------------------
+// --- encode_request ---
 
 #[test]
 fn encode_minimal_request_promotes_system_to_messages0() {
@@ -98,7 +100,7 @@ fn encode_minimal_request_promotes_system_to_messages0() {
     };
     let w = encode_request(&req);
 
-    // stream 强制 true + include_usage 强制 true
+    // stream forced to true and include_usage forced to true
     assert_eq!(w.stream, Some(true));
     assert!(matches!(
         w.stream_options,
@@ -112,7 +114,7 @@ fn encode_minimal_request_promotes_system_to_messages0() {
         )
     ));
 
-    // messages[0] 是 system，messages[1] 是 user
+    // messages[0] is system, messages[1] is user
     assert_eq!(w.messages.len(), 2);
     assert!(matches!(
         &w.messages[0],
@@ -127,7 +129,7 @@ fn encode_minimal_request_promotes_system_to_messages0() {
         wire::ChatCompletionRequestMessage::ChatCompletionRequestUserMessage(_)
     ));
 
-    // tools / tool_choice / reasoning_effort 默认
+    // tools / tool_choice / reasoning_effort defaults
     assert!(w.tools.is_none());
     assert!(matches!(
         w.tool_choice,
@@ -139,7 +141,7 @@ fn encode_minimal_request_promotes_system_to_messages0() {
     ));
     assert!(w.reasoning_effort.is_none());
 
-    // model 用 Variant0 (free string)
+    // model uses Variant0 (free string)
     assert!(matches!(
         w.model,
         wire::ModelIdsShared::ModelIdsSharedVariant0(ref s) if s == "gpt-4o-mini"
@@ -199,13 +201,14 @@ fn encode_request_carries_sampling_and_thinking() {
             wire::ReasoningEffortVariant0::Medium
         ))
     ));
-    // top_k 被 OpenAI 协议层丢弃，wire 上没有该字段。
+    // top_k is dropped by the OpenAI protocol layer; the wire does not carry this field.
 }
 
 #[test]
 fn encode_request_full_overrides_reasoning_effort_regardless_of_thinking() {
-    // thinking::Disabled 时 wire 默认不带 reasoning_effort；override = High
-    // 仍要写到 wire。同时校验另一档 Xhigh 能被发出去。
+    // When `thinking::Disabled`, the wire omits `reasoning_effort` by default; with
+    // `override = High`, it must still be written to the wire. Also verify that the other
+    // tier `Xhigh` can be sent.
     let mut req = CompletionRequest {
         model: "gpt-5.1".into(),
         system: None,
@@ -226,7 +229,8 @@ fn encode_request_full_overrides_reasoning_effort_regardless_of_thinking() {
         ))
     ));
 
-    // override 还应该胜过 thinking::Enabled 的 Medium 默认值。
+    // The override should also take precedence over the `thinking::Enabled` default of
+    // `Medium`.
     req.sampling.thinking = ThinkingConfig::Enabled {
         budget_tokens: Some(1024),
     };
@@ -412,14 +416,14 @@ fn encode_request_splits_tool_use_and_tool_result_into_separate_messages() {
     };
     let w = encode_request(&req);
 
-    // tool_choice = Named → ChatCompletionNamedToolChoice
+    // tool_choice is `Named`, mapping to `ChatCompletionNamedToolChoice`
     assert!(matches!(
         w.tool_choice,
         Some(wire::ChatCompletionToolChoiceOption::ChatCompletionNamedToolChoice(ref t))
             if t.function.name == "fs_read"
     ));
 
-    // tools.0 = ChatCompletionTool { function: {...} }
+    // The first tool is a `ChatCompletionTool` with a function definition.
     let tools = w.tools.expect("tools");
     let wire::CreateChatCompletionRequestTools::ChatCompletionTool(t) = &tools[0] else {
         panic!("expected ChatCompletionTool");
@@ -434,7 +438,7 @@ fn encode_request_splits_tool_use_and_tool_result_into_separate_messages() {
             .contains_key("properties")
     );
 
-    // 期望 wire messages：
+    // Expected wire messages:
     //   [0] assistant (text "calling" + tool_calls=[call_1])
     //   [1] tool      (tool_call_id=call_1, content="hello")
     //   [2] user      (text "see results below")
@@ -459,7 +463,7 @@ fn encode_request_splits_tool_use_and_tool_result_into_separate_messages() {
     };
     assert_eq!(call.id, "call_1");
     assert_eq!(call.function.name, "fs_read");
-    // arguments 是 stringified JSON
+    // arguments is stringified JSON
     let parsed: serde_json::Value =
         serde_json::from_str(&call.function.arguments).expect("valid JSON");
     assert_eq!(parsed.get("path"), Some(&json!("/tmp/a")));
@@ -598,8 +602,9 @@ fn encode_request_keeps_prompt_cache_key_stable_across_tool_result_followups() {
 
 #[test]
 fn encode_multimodal_tool_result_routes_image_to_following_user_message() {
-    // OpenAI 的 tool message 塞不进图片：文本留 tool message（含占位提示），
-    // 图片下沉到紧随其后的 user message。
+    // OpenAI tool messages cannot contain images: text stays in the tool message (with a
+    // placeholder prompt), and images are moved down to the immediately following user
+    // message.
     let req = CompletionRequest {
         model: "gpt-4o".into(),
         system: None,
@@ -642,7 +647,7 @@ fn encode_multimodal_tool_result_routes_image_to_following_user_message() {
     };
     let w = encode_request(&req);
 
-    // 顺序：system, assistant(tool_calls), tool message, user(image)
+    // Order: system, assistant (tool_calls), tool message, user (image)
     let tool_msg = w
         .messages
         .iter()
@@ -730,11 +735,11 @@ fn encode_request_image_base64_and_url() {
     assert_eq!(img1.image_url.url, "https://example.com/x.jpg");
 }
 
-// ---------- thinking round-trip (Required vs Forbidden) ----------------
+// ---------- thinking round-trip (Required vs Forbidden) ---------------
 
-/// 给定一条带 [`MessageContent::Thinking`] 的 assistant message，按
-/// `echo_mode` 调 `encode_request_with_echo` 并返回 wire 上 assistant
-/// message 的 `reasoning_content`。
+/// Given an assistant message containing [`MessageContent::Thinking`], calls
+/// `encode_request_with_echo` according to `echo_mode` and returns the
+/// `reasoning_content` of the assistant message on the wire.
 fn encode_with_thinking(
     text: &str,
     signature: Option<&str>,
@@ -778,7 +783,8 @@ fn encode_thinking_required_writes_reasoning_content() {
 
 #[test]
 fn encode_thinking_forbidden_drops_reasoning_content() {
-    // Forbidden 不写——OpenAI 官方与 deepseek-reasoner/R1 都按这条走。
+    // Forbidden omits reasoning_content — both the OpenAI spec and deepseek-reasoner/R1
+    // follow this rule.
     let rc = encode_with_thinking("step 1", None, ThinkingEcho::Forbidden);
     assert!(rc.is_none(), "Forbidden must not emit reasoning_content");
 }
@@ -791,7 +797,8 @@ fn encode_thinking_optional_writes_reasoning_content() {
 
 #[test]
 fn encode_thinking_required_but_empty_text_is_none() {
-    // 空 buf —— 没东西可回放，不要硬塞空字符串触发服务端 invalid_request。
+    // Empty buffer — nothing to replay; avoid sending an empty string that would trigger
+    // an `invalid_request` error from the server.
     let rc = encode_with_thinking("", None, ThinkingEcho::Required);
     assert!(rc.is_none());
 }
@@ -895,9 +902,9 @@ fn encode_thinking_only_forbidden_keeps_content_none() {
 
 #[test]
 fn encode_request_default_forbids_thinking_echo() {
-    // 默认 `encode_request` (无 echo arg) 等价于 Forbidden —— 防止
-    // 通过该入口绕过 capability 矩阵把 reasoning_content 漏到
-    // 不该收的厂商上。
+    // The default `encode_request` (without an echo argument) is equivalent to
+    // `Forbidden` — this prevents reasoning content from leaking to vendors that should
+    // not receive it via this entry point, bypassing the capability matrix.
     let req = CompletionRequest {
         model: "gpt-4o".into(),
         system: None,
@@ -926,7 +933,7 @@ fn encode_request_default_forbids_thinking_echo() {
     assert!(asst.reasoning_content.is_none());
 }
 
-// ---------- decode_stream / state machine -------------------------------
+// decode_stream / state machine
 
 const TEXT_CHUNK_1: &str = r#"{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}"#;
 const TEXT_CHUNK_2: &str = r#"{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"hello "},"logprobs":null,"finish_reason":null}]}"#;
@@ -1022,15 +1029,15 @@ fn decode_single_tool_call_full_path() {
 #[test]
 fn decode_two_concurrent_tool_calls_interleaved_by_index() {
     let chunks_raw = [
-        // call A start
+        // Start of tool call A
         r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"alpha","arguments":""}}]},"finish_reason":null}]}"#,
-        // call B start
+        // B start
         r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_b","type":"function","function":{"name":"beta","arguments":""}}]},"finish_reason":null}]}"#,
-        // call A args
+        // call A arguments
         r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":1}"}}]},"finish_reason":null}]}"#,
-        // call B args
+        // call B arguments
         r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"y\":2}"}}]},"finish_reason":null}]}"#,
-        // finish
+        // finish reason
         r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
         DONE,
     ];
@@ -1075,7 +1082,8 @@ fn decode_two_concurrent_tool_calls_interleaved_by_index() {
 
 #[test]
 fn decode_reasoning_content_extension_emits_thinking_delta() {
-    // DeepSeek 在 delta 上挂 `reasoning_content`，wire OAS 没有，从 raw 取。
+    // DeepSeek attaches `reasoning_content` on the delta, but the wire OAS does not; read
+    // it from the raw chunk.
     let chunks_raw = [
         r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"thinking...","content":null},"finish_reason":null}]}"#,
         r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}"#,
@@ -1103,8 +1111,8 @@ fn decode_done_terminates_stream() {
     let datas = [TEXT_CHUNK_1, TEXT_CHUNK_FINISH_STOP, DONE, USAGE_CHUNK];
     let (state, _results) = run_state_machine(&datas);
     assert!(state.done, "[DONE] should set done flag");
-    // run_state_machine 在 done=true 时 break，USAGE_CHUNK 不被处理——
-    // 真实场景里上游也不会在 [DONE] 之后再发数据。
+    // `run_state_machine` breaks when `done` is true, so `USAGE_CHUNK` is never processed
+    // — in real usage the upstream won't send data after `[DONE]` either.
 }
 
 #[test]
@@ -1179,7 +1187,7 @@ fn decode_final_usage_chunk_has_empty_choices() {
     assert_eq!(usage.cache_read_input_tokens, Some(3));
 }
 
-// ---------- decode_stream_generic 端到端：经过 OpenAiSseDecoder ---------
+// ---------- decode_stream_generic end-to-end: via OpenAiSseDecoder ---------
 
 #[tokio::test]
 async fn decode_stream_end_to_end_text_path() {
@@ -1216,6 +1224,7 @@ async fn decode_stream_cancel_terminates_silently() {
     let cancel = CancellationToken::new();
     cancel.cancel();
     let chunks = run_decode_stream_generic(&datas, cancel).await;
-    // 立即取消 → 流应该立刻结束，不 yield 任何 Err（Canceled）。
+    // Cancel immediately → the stream should terminate at once, yielding no
+    // `Err(Canceled)`.
     assert!(chunks.iter().all(|r| r.is_ok()), "expected no Err chunks");
 }

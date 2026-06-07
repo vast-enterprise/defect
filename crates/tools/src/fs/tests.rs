@@ -1,7 +1,8 @@
 //! Filesystem tool family unit tests.
 //!
-//! #21（ACP fake client 反向请求）在 `crates/acp/tests/fs_delegation.rs` 跑；
-//! #22（真 LLM 让 deepseek 写文件）在 `crates/llm/examples/` 的冒烟里跑。
+//! - #21 (ACP fake client reverse request) runs in `crates/acp/tests/fs_delegation.rs`.
+//! - #22 (real LLM asks DeepSeek to write files) runs in the smoke tests under
+//!   `crates/llm/examples/`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{EditFileTool, LocalFsBackend, ReadFileTool, WriteFileTool};
 
-/// 一个跑测试用的工作区：tempdir + LocalFsBackend + cancel token。
+/// A test workspace: tempdir + LocalFsBackend + cancel token.
 struct Harness {
     _dir: TempDir,
     root: PathBuf,
@@ -30,7 +31,8 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        // canonicalize 一次：macOS 的 /var → /private/var 之类的链路要在测试断言里对齐
+        // Canonicalize once so that symlink chains (e.g. /var → /private/var on macOS)
+        // are resolved consistently for test assertions.
         let root = std::fs::canonicalize(dir.path()).expect("canon");
         let fs: Arc<dyn FsBackend> = Arc::new(LocalFsBackend::new(root.clone()));
         Self {
@@ -84,7 +86,7 @@ fn extract_text(event: &ToolEvent) -> String {
     out
 }
 
-/// 抽出 [`ContentBlock::Image`] 的 `(mime, base64-data)`。
+/// Extract `(mime, base64-data)` from a [`ContentBlock::Image`].
 fn extract_image(event: &ToolEvent) -> (String, String) {
     let fields = match event {
         ToolEvent::Completed(f) => f,
@@ -119,7 +121,7 @@ async fn case1_read_existing_utf8_full() {
     let events = drive(tool.execute(json!({"path": "hello.txt"}), h.ctx())).await;
     assert_eq!(events.len(), 1);
     let text = extract_text(&events[0]);
-    // 行号格式：右对齐 4 位 + "| "
+    // Line number format: right-aligned 4 digits + "| "
     assert!(text.contains("   1| alpha"), "text: {text:?}");
     assert!(text.contains("   2| beta"), "text: {text:?}");
     assert!(text.contains("   3| gamma"), "text: {text:?}");
@@ -171,7 +173,7 @@ async fn read_file_uses_configured_line_limits() {
 #[tokio::test]
 async fn case3_read_too_large() {
     let h = Harness::new();
-    // 11 MiB > 10 MiB 上限
+    // 11 MiB exceeds the 10 MiB limit
     let big = vec![b'a'; 11 * 1024 * 1024];
     h.write_file("big.txt", &big);
     let tool = ReadFileTool::new();
@@ -206,7 +208,8 @@ async fn case4_read_binary_refused() {
 async fn case29_read_png_returns_image_block() {
     use base64::Engine;
     let h = Harness::new();
-    // 一段任意二进制（含 NUL），按文本路径会被 looks_binary 拒；走图片路径应原样回。
+    // Arbitrary binary data (including NUL bytes) that would be rejected by
+    // `looks_binary` on the text path; the image path should return it as-is.
     let raw_bytes: &[u8] = &[0x89, b'P', b'N', b'G', 0x00, 0x01, 0x02, 0xff];
     h.write_file("logo.png", raw_bytes);
     let tool = ReadFileTool::new();
@@ -228,7 +231,8 @@ async fn case30_read_image_ignores_offset_limit_and_mime_by_ext() {
     let h = Harness::new();
     h.write_file("photo.JPEG", [0xff, 0xd8, 0xff, 0xe0]);
     let tool = ReadFileTool::new();
-    // offset/limit 对图片无意义，应被忽略而不报错；扩展名大小写不敏感。
+    // offset/limit are meaningless for images and should be silently ignored; extension
+    // matching is case-insensitive.
     let events = drive(tool.execute(
         json!({"path": "photo.JPEG", "offset": 5, "limit": 1}),
         h.ctx(),
@@ -258,7 +262,7 @@ async fn case6_read_symlink_outside_workspace() {
     let h = Harness::new();
     let other = tempfile::tempdir().unwrap();
     std::fs::write(other.path().join("secret.txt"), "secret").unwrap();
-    // workspace/escape 是 symlink，指向 workspace 外的目录
+    // `workspace/escape` is a symlink pointing to a directory outside the workspace
     std::os::unix::fs::symlink(other.path(), h.root.join("escape")).unwrap();
 
     let tool = ReadFileTool::new();
@@ -273,8 +277,8 @@ async fn case6_read_symlink_outside_workspace() {
 
 #[tokio::test]
 async fn case7_read_canceled() {
-    // LocalFsBackend 的 read 是同步打盘，体感很快——这里直接预先 cancel
-    // 让 select! 的 `cancelled` 分支胜出，验证取消通路存在。
+    // LocalFsBackend's read is synchronous and fast, so we cancel preemptively to let the
+    // `cancelled` branch of `select!` win, verifying the cancellation path exists.
     let h = Harness::new();
     h.write_file("a.txt", "hello\n");
     h.cancel.cancel();
@@ -288,7 +292,7 @@ async fn case7_read_canceled() {
     );
 }
 
-// ---------- write_file ----------
+// --- write_file ---
 
 #[tokio::test]
 async fn case8_write_new_file() {
@@ -328,7 +332,8 @@ async fn case10_write_overwrite_crlf_normalizes_lf_to_crlf() {
     let h = Harness::new();
     h.write_file("crlf.txt", b"a\r\nb\r\nc\r\n");
     let tool = WriteFileTool::new();
-    // LLM 给的是 LF——后端应当按文件原样还原成 CRLF，避免行末符腐蚀。
+    // The LLM provides LF; the backend should restore CRLF as the file originally had, to
+    // avoid line-ending corruption.
     let events =
         drive(tool.execute(json!({"path": "crlf.txt", "content": "x\ny\nz\n"}), h.ctx())).await;
     assert_eq!(events.len(), 1);
@@ -355,10 +360,10 @@ async fn case11_write_parent_missing_auto_creates() {
     let raw = extract_raw(&events[0]);
     assert_eq!(raw["created"], json!(true));
     assert_eq!(raw["parent_existed"], json!(false));
-    // 文件落到了应有的位置
+    // The file landed in the expected location
     let on_disk = std::fs::read_to_string(h.root.join("no_such_dir/sub/x.txt")).unwrap();
     assert_eq!(on_disk, "y");
-    // 不应有 .tmp 残留
+    // No `.tmp` files should remain
     let stale: Vec<_> = std::fs::read_dir(&h.root)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -384,9 +389,10 @@ async fn case12_write_path_escape() {
 
 #[tokio::test]
 async fn case13_write_no_partial_file_on_success() {
-    // §6.2 的退化版：tmp + rename 的可观察结果是——写完后**只有目标文件**，
-    // 不应留 .defect-*.tmp 残留。原始矩阵的 panic 注入需要 hook IO，
-    // 我们这里用「正常路径不留 tmp」+「parent 缺失不留 tmp（case11）」做回归基线。
+    // Degenerate version of §6.2: the observable outcome of tmp + rename is that after
+    // writing, **only the target file** exists, with no leftover `.defect-*.tmp` files.
+    // The original matrix's panic injection requires hooking IO; here we use "no tmp on
+    // normal path" + "no tmp when parent is missing (case11)" as a regression baseline.
     let h = Harness::new();
     let tool = WriteFileTool::new();
     let events =
@@ -444,7 +450,7 @@ async fn case15_edit_ambiguous_without_replace_all() {
     );
     let err_str = format!("{:?}", events[0]);
     assert!(err_str.contains("matched 3 times"), "err: {err_str}");
-    // 文件未被修改
+    // file was not modified
     assert_eq!(h.read_file("e.txt"), b"x\nx\nx\n");
 }
 
@@ -532,10 +538,11 @@ async fn case19_edit_empty_old_string() {
 
 // ---------- v1 conflict detection ----------
 
-/// 在 baseline 指纹与"写前再取"指纹之间，注入一次外部改写，让
-/// edit_file 的 conflict detection 看到不同的指纹。直接 wrap 真后端，
-/// 第一次 `fingerprint` 调用后**立刻**改写底层文件——这样第二次取到的
-/// mtime/size 必然变化。
+/// Injects an external modification between the baseline fingerprint and the "re-fetch
+/// before write" fingerprint, so that `edit_file`'s conflict detection sees different
+/// fingerprints. Wraps the real backend directly; immediately after the first
+/// `fingerprint` call, rewrites the underlying file — ensuring the second fetch sees a
+/// different mtime/size.
 struct MtimeAdvancer {
     inner: Arc<dyn FsBackend>,
     bump_pending: std::sync::atomic::AtomicBool,
@@ -572,7 +579,8 @@ impl FsBackend for MtimeAdvancer {
         Box::pin(async move {
             let fp = self.inner.fingerprint(path).await?;
             if do_bump {
-                // baseline 已经取到——改 size 让下一次 fingerprint 必然不同
+                // baseline already captured — change size to guarantee a different
+                // fingerprint next time
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 std::fs::write(&target, b"someone else's edit, longer than before\n").unwrap();
             }
@@ -669,18 +677,18 @@ async fn case28_write_describe_old_text_none_for_new_file() {
     assert!(diff.old_text.is_none(), "no old_text for new file");
 }
 
-// ---------- v1 chunked read ----------
+// v1 chunked read
 
 #[tokio::test]
 async fn case25_read_window_on_oversized_file() {
-    // 18 MiB > 10 MiB MAX_FS_BYTES。窗口读应当跳过整体 size 校验，
-    // 流式扫到第 100..110 行后即停。
+    // 18 MiB > 10 MiB MAX_FS_BYTES. Windowed read should skip the overall size check and
+    // stop after streaming through lines 100..110.
     let h = Harness::new();
     let path = h.root.join("big.log");
     {
         use std::io::Write;
         let mut f = std::fs::File::create(&path).unwrap();
-        // 200 行，每行 ~100 KiB；总大小 ~20 MiB（远超 10 MiB cap）
+        // 200 lines, each ~100 KiB; total ~20 MiB (far exceeding the 10 MiB cap)
         let line = "x".repeat(100 * 1024);
         for i in 1..=200 {
             writeln!(f, "{i:03}-{line}").unwrap();
@@ -704,7 +712,7 @@ async fn case25_read_window_on_oversized_file() {
     assert_eq!(raw["start_line"], json!(100));
 
     let text = extract_text(&events[0]);
-    // 行号渲染应当从 100 起；"100-" 行内应有这个标记
+    // Line numbers should start at 100; the "100-" line should contain this marker.
     assert!(text.contains(" 100| 100-"), "should start at line 100");
     assert!(text.contains(" 109| 109-"), "should reach line 109");
     assert!(!text.contains(" 110| "), "should stop before line 110");
@@ -712,10 +720,12 @@ async fn case25_read_window_on_oversized_file() {
 
 #[tokio::test]
 async fn case26_read_window_too_large_reports_too_large() {
-    // 哪怕走窗口路径，单次窗口本身占用超过 10 MiB 时也应当拒——
-    // 防止 LLM 把 `limit` 设很大变相绕过整体阈值。
+    // Even when using the window path, a single window exceeding 10 MiB should be
+    // rejected — this prevents the LLM from setting a large `limit` to effectively bypass
+    // the overall threshold.
     let h = Harness::new();
-    // 文件比 cap 大；窗口大小（5 行 × ~3 MiB = ~15 MiB）也超过 cap
+    // The file is larger than `cap`; the window size (5 lines × ~3 MiB = ~15 MiB) also
+    // exceeds `cap`.
     let path = h.root.join("big.log");
     {
         use std::io::Write;
@@ -726,8 +736,8 @@ async fn case26_read_window_too_large_reports_too_large() {
         }
     }
 
-    // 直接调后端层避免 ReadFileTool 的 limit clamp（默认 2000，单行 3 MiB
-    // × 5 = 15 MiB > cap）
+    // Call the backend layer directly to avoid `ReadFileTool`'s limit clamp (default
+    // 2000; 3 MiB per line × 5 = 15 MiB > cap).
     let res =
         h.fs.read_text(PathBuf::from("big.log"), Some(1), Some(5))
             .await;
@@ -739,7 +749,8 @@ async fn case26_read_window_too_large_reports_too_large() {
 
 #[tokio::test]
 async fn case24_edit_no_conflict_when_file_stable() {
-    // 控制组：fingerprint 双方一致 → 不应该报 Conflict，正常 edit。
+    // Control group: both sides have the same fingerprint → no Conflict should be
+    // reported, normal edit.
     let h = Harness::new();
     h.write_file("stable.txt", "alpha\n");
     let tool = EditFileTool::new();
@@ -758,8 +769,9 @@ async fn case20_edit_crlf_file_with_lf_new_string_keeps_crlf() {
     let h = Harness::new();
     h.write_file("crlf.txt", b"alpha\r\nBETA\r\ngamma\r\n");
     let tool = EditFileTool::new();
-    // new_string 含 LF——edit 走 read → replace → write 全链路，
-    // backend 在 write 时按文件原行末符（CRLF）规范化 new_string。
+    // new_string contains LF — the edit goes through the full read → replace → write
+    // pipeline, and the backend normalizes new_string to the file's original line endings
+    // (CRLF) during write.
     let events = drive(tool.execute(
         json!({
             "path": "crlf.txt",

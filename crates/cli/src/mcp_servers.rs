@@ -1,7 +1,8 @@
-//! 把 `[mcp]` 段的 typed 配置翻译成 ACP `McpServer` 列表。
+//! Translates the typed configuration from the `[mcp]` section into a list of ACP
+//! `McpServer` values.
 //!
-//! 仅装配 `enabled_servers` 中显式列出的；未在白名单里的 server 段配置
-//! 即使存在也不被 client 看到。
+//! Only assembles servers explicitly listed in `enabled_servers`; server section configs
+//! not in the allowlist are invisible to the client even if present.
 
 use std::path::PathBuf;
 
@@ -10,8 +11,8 @@ use agent_client_protocol_schema::{
 };
 use defect_config::{LoadedConfig, McpServerConfig as ConfigMcpServerConfig};
 
-/// 默认 MCP server 列表——session 启动期 client 会用这个数组生成
-/// session-level MCP factory。
+/// Default MCP server list — the client uses this array during session startup to build
+/// the session-level MCP factory.
 pub fn build_default_mcp_servers(config: &LoadedConfig) -> Vec<McpServer> {
     config
         .effective

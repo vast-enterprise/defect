@@ -1,15 +1,15 @@
-//! 注入编译期 metadata：build sha 用于 `User-Agent` 默认值。
+//! Inject compile-time metadata: build SHA used as the default `User-Agent` value.
 //!
-//! 解析顺序：
-//! 1. 环境变量 `DEFECT_HTTP_BUILD_SHA`——下游打包者（crates.io 发布的
-//!    tarball、Linux 发行版的 source-package、Bedrock/Docker 镜像构建）
-//!    没有 `.git` 时显式注入版本标识用。
-//! 2. `git rev-parse --short=8 HEAD`——开发环境 / monorepo 内构建时
-//!    自动取当前 commit。
-//! 3. `"unknown"` 兜底。
+//! Resolution order:
+//! 1. Environment variable `DEFECT_HTTP_BUILD_SHA` — for downstream packagers (crates.io
+//!    tarballs, Linux distro source packages, Bedrock/Docker image builds) who lack a
+//!    `.git` directory and need to explicitly inject a version identifier.
+//! 2. `git rev-parse --short=8 HEAD` — in development or monorepo builds, automatically
+//!    uses the current commit.
+//! 3. Falls back to `"unknown"`.
 //!
-//! 任何一步失败都不报错；最终值至少是 `"unknown"`，运行期 `User-Agent`
-//! 可读。
+//! No step errors out; the final value is at least `"unknown"`, making the runtime
+//! `User-Agent` readable.
 
 use std::process::Command;
 
@@ -18,7 +18,7 @@ const BUILD_SHA_ENV: &str = "DEFECT_HTTP_BUILD_SHA";
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed={BUILD_SHA_ENV}");
-    // 在 git tree 变化时也重跑——用 HEAD 文件作锚点。
+    // Also rerun when the git tree changes, using the HEAD file as a sentinel.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
 
     let sha = resolve_build_sha();

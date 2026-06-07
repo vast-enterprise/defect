@@ -1,33 +1,43 @@
-//! [`History`] 的具体实现 [`VecHistory`]：`Vec<Message>` + token 计量。
+//! Concrete implementation of [`History`] as [`VecHistory`]: `Vec<Message>` + token
+//! accounting.
 //!
-//! 纯存储，不做压缩——压缩编排在 turn 主循环（`session/turn/compact.rs`）。
+//! Pure storage, no compression — compression is orchestrated in the turn main loop
+//! (`session/turn/compact.rs`).
 //! History — design tradeoffs for conversation history representation.
 //!
-//! ## token 估算
+//! ## Token estimation
 //!
-//! 不引入 tokenizer 依赖（对齐 opencode：trigger 用真实 usage，内部估算用
-//! 字符启发式）。两段拼起来：
-//! - **基线**：上一次 LLM 调用回报的真实输入 token（`record_input_tokens`），
-//!   由 turn 主循环在每次调用后喂入。这是最准的一段。
-//! - **增量**：基线之后 `append` 的消息按 `chars/4` 估算累加——这部分还没进过
-//!   LLM，没有真实 token 可依。
+//! No tokenizer dependency (aligned with opencode: trigger uses real usage, internal
+//! estimation uses
+//! character heuristics). Two segments are combined:
+//! - **Baseline**: the real input token count from the last LLM call
+//!   (`record_input_tokens`),
+//!   fed in by the turn main loop after each call. This is the most accurate segment.
+//! - **Delta**: messages `append`ed after the baseline are estimated as `chars/4` and
+//!   accumulated — these
+//!   have not yet been sent to the LLM, so no real token count is available.
 //!
-//! `replace`（压缩后回写）会清空基线：新列表的 token 数得等下一次真实调用回报。
-//! 基线缺失时（session 刚建、或刚 replace 完）整份 snapshot 走字符启发式兜底。
+//! `replace` (write-back after compression) clears the baseline: the new list's token
+//! count must wait
+//! for the next real call report. When the baseline is missing (session just created, or
+//! just after
+//! `replace`), the entire snapshot falls back to character heuristics.
 
 use std::sync::Mutex;
 
 use crate::llm::{Message, MessageContent};
 use crate::session::History;
 
-/// 多模态图片在字符估算中按固定 token 数记账——对齐 Claude Code microcompact
-/// 的图片计数（无法按字符估，给个保守常量）。
+/// Multimodal images are counted as a fixed token cost in character estimation, aligning
+/// with Claude Code microcompact's image counting (cannot estimate by characters, so a
+/// conservative constant is used).
 const IMAGE_TOKEN_ESTIMATE: usize = 2_000;
 
-/// 字符到 token 的启发式比率：`chars / 4`（对齐 codex / opencode）。
+/// Heuristic character-to-token ratio: `chars / 4` (aligned with codex / opencode).
 const CHARS_PER_TOKEN: usize = 4;
 
-/// `Vec<Message>` + `Mutex` 的 [`History`] 实现，带 token 计量。
+/// A [`History`] implementation backed by `Vec<Message>` + `Mutex`, with token
+/// accounting.
 #[derive(Default)]
 pub struct VecHistory {
     inner: Mutex<Inner>,
@@ -36,10 +46,12 @@ pub struct VecHistory {
 #[derive(Default)]
 struct Inner {
     messages: Vec<Message>,
-    /// 上一次 LLM 调用回报的真实输入 token。`None` = 尚无真实基线
-    /// （新建 / 刚 replace），此时 `token_estimate` 整份走字符启发式。
+    /// Real input tokens reported by the last LLM call. `None` means no real baseline
+    /// exists yet (freshly created or just replaced), so `token_estimate` falls back
+    /// entirely to character heuristics.
     last_real_input: Option<u64>,
-    /// 真实基线之后 `append` 的消息的字符启发式估算累加（token 数）。
+    /// Accumulated character-heuristic token estimate for messages `append`ed after the
+    /// last real baseline.
     est_since_baseline: u64,
 }
 
@@ -62,8 +74,9 @@ impl VecHistory {
 impl History for VecHistory {
     fn append(&self, msg: Message) {
         let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
-        // 基线已建立时，新消息的估算单独累加到增量上；基线缺失时无需累加
-        // （token_estimate 会整份重算）。
+        // When a baseline exists, the estimate for new messages is accumulated separately
+        // into the delta; when no baseline is set, no accumulation is needed (the entire
+        // `token_estimate` will be recomputed).
         if inner.last_real_input.is_some() {
             inner.est_since_baseline = inner
                 .est_since_baseline
@@ -83,31 +96,38 @@ impl History for VecHistory {
     fn replace(&self, messages: Vec<Message>) {
         let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
         inner.messages = messages;
-        // 新列表的真实 token 数未知，等下一次 LLM 调用回报。
+        // The true token count of the new list is unknown; it will be reported on the
+        // next LLM call.
         inner.last_real_input = None;
         inner.est_since_baseline = 0;
     }
 
     fn splice_prefix(&self, drop_count: usize, summary: Message) -> usize {
         let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
-        // 不变式校验：`drop_count` 在某时刻的 snapshot 上算得，回写时列表只该因尾插
-        // （append）/ 原地替换变得**不更短**——若当前比 drop_count 还短，说明飞行期间
-        // 有人删了中段消息（违反 single-flight 不变式，见 session.rs 文档）。debug 下
-        // 炸出来定位 bug；release 下靠下面的 clamp 兜底不 panic。
+        // Invariant check: `drop_count` was computed from a snapshot at some earlier
+        // point; by the time it is applied, the list should only have grown (via append)
+        // or been replaced in place — it must not be **shorter**. If the current length
+        // is less than `drop_count`, it means a mid-list deletion happened in flight,
+        // violating the single-flight invariant (see `session.rs` docs). In debug builds
+        // this assertion catches the bug; in release builds the `clamp` below prevents a
+        // panic.
         debug_assert!(
             drop_count <= inner.messages.len(),
             "splice_prefix invariant violated: drop_count={drop_count} > current len={}; \
              history shrank mid-flight (concurrent mid-list deletion?)",
             inner.messages.len()
         );
-        // clamp 到当前长度——并发尾插只会让列表更长，drop_count 不该越界，
-        // 但 clamp 是廉价的安全网（极端竞态下旧 snapshot 比当前还长亦不 panic）。
+        // Clamp to current length — concurrent tail insertion only grows the list, so
+        // `drop_count` should never exceed it, but clamping is a cheap safety net (even
+        // if an old snapshot is longer than the current list under extreme races, this
+        // won't panic).
         let drop_count = drop_count.min(inner.messages.len());
         let tail = inner.messages.split_off(drop_count);
         inner.messages = Vec::with_capacity(tail.len() + 1);
         inner.messages.push(summary);
         inner.messages.extend(tail);
-        // 同 replace：新前缀真实 token 数未知，等下一次 LLM 调用回报。
+        // Same as `replace`: the true token count of the new prefix is unknown; it will
+        // be reported by the next LLM call.
         inner.last_real_input = None;
         inner.est_since_baseline = 0;
         drop_count
@@ -116,16 +136,18 @@ impl History for VecHistory {
     fn record_input_tokens(&self, tokens: u64) {
         let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
         inner.last_real_input = Some(tokens);
-        // 基线刷新——其后 append 的增量从零重新计。
+        // Baseline reset — subsequent appends count their delta from zero.
         inner.est_since_baseline = 0;
     }
 
     fn token_estimate(&self) -> Option<u64> {
         let inner = self.inner.lock().expect("VecHistory mutex poisoned");
         match inner.last_real_input {
-            // 有真实基线：基线 + 其后新增消息的字符启发式增量。
+            // With a real baseline: baseline + character-heuristic increment for messages
+            // added after it.
             Some(real) => Some(real.saturating_add(inner.est_since_baseline)),
-            // 无基线：整份走字符启发式兜底。空历史返回 None。
+            // No baseline: fall back to character heuristics for the entire history.
+            // Returns `None` if history is empty.
             None => {
                 if inner.messages.is_empty() {
                     return None;
@@ -142,10 +164,11 @@ impl History for VecHistory {
     }
 }
 
-/// 单条消息的字符启发式 token 估算（`chars/4`，图片记常量）。
+/// Character-based heuristic token estimate for a single message (`chars/4`, images count
+/// as a constant).
 ///
-/// `pub(crate)`：压缩模块（`session/turn/compact.rs`）选保留边界时复用同一
-/// 把尺子，避免两处估算口径漂移。
+/// `pub(crate)`: the compaction module (`session/turn/compact.rs`) reuses the same ruler
+/// when selecting retention boundaries, preventing drift between two estimation sites.
 pub(crate) fn estimate_message_tokens(msg: &Message) -> u64 {
     let chars: usize = msg
         .content
@@ -162,7 +185,8 @@ pub(crate) fn estimate_message_tokens(msg: &Message) -> u64 {
                 tool_result_chars(output) / CHARS_PER_TOKEN
             }
             MessageContent::Image { .. } => IMAGE_TOKEN_ESTIMATE,
-            // hosted activity 的 payload 跨进程不持久化，估算上忽略。
+            // The payload of a hosted activity is not persisted across processes, so it
+            // is ignored in the estimate.
             MessageContent::ProviderActivity { .. } => 0,
         })
         .sum();
@@ -184,7 +208,8 @@ fn tool_result_chars(output: &crate::llm::ToolResultBody) -> usize {
     }
 }
 
-/// 图片块的字符近似：base64 串长 / URL 长。计量与压缩判定用，不要求精确。
+/// Approximate character count for an image block: base64 string length or URL length.
+/// Used for estimation and compression decisions; exact precision is not required.
 fn image_data_chars(data: &crate::llm::ImageData) -> usize {
     match data {
         crate::llm::ImageData::Base64 { encoded } => encoded.len(),

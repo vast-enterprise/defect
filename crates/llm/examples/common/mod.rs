@@ -1,12 +1,14 @@
-//! 冒烟脚本的公用骨架。**仅供 examples/ 用**，不进 crate 公共 API。
+//! Common skeleton for smoke-test scripts. **For `examples/` only** — not part of the
+//! crate's public API.
 //!
-//! 设计取舍：
-//! - 凭证从 env 读，命令行只挑 scenario / 覆盖 model
-//! - tracing 默认 INFO，能用 `RUST_LOG=defect_llm=debug` 拨亮
-//! - 每个 scenario 走完打一行 `=== PASS / FAIL ===` 摘要，便于肉眼扫
+//! Design decisions:
+//! - Credentials are read from the environment; the command line only selects a scenario
+//!   or overrides the model.
+//! - `tracing` defaults to `INFO`; use `RUST_LOG=defect_llm=debug` to increase verbosity.
+//! - Each scenario prints a one-line `=== PASS / FAIL ===` summary for easy visual
+//!   scanning.
 //!
-//! See LLM provider integration tests
-//! 末尾的"真端点 smoke"清单。
+//! See LLM provider integration tests for the list of "real-endpoint smoke" tests.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -31,20 +33,22 @@ use futures::future::BoxFuture;
 use futures::{StreamExt, stream};
 use serde_json::json;
 
-/// 进程退出码：0 全部 PASS（含 SKIP）/ 1 至少一个 FAIL。
-/// SKIP 不视作失败——thinking 在不支持的模型上自动 skip 不该让 CI 红。
+/// Process exit codes: 0 for all PASS (including SKIP), 1 for at least one FAIL.
+/// SKIP is not considered a failure — auto-skipping on unsupported models should not turn
+/// CI red.
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAIL: i32 = 1;
 
-/// 装好 tracing：默认 `info,toac=warn`，环境变量 `RUST_LOG` 整体覆盖。
+/// Set up tracing: default `info,toac=warn`, overridden entirely by the `RUST_LOG`
+/// environment variable.
 ///
-/// `toac=warn` 默认 silence——toac wire crate 的 INFO request 事件含
+/// `toac=warn` silences the `toac` wire crate's INFO-level request events by default.
 
-/// 调试 wire 时显式 `RUST_LOG=...,toac=debug`。
+/// Use `RUST_LOG=...,toac=debug` to enable debug logging for the wire crate.
 ///
 /// # Panics
 ///
-/// 重复初始化会 panic——examples 只在 main 调一次。
+/// Panics if called more than once — examples call this only once in `main`.
 pub fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::fmt;
@@ -53,13 +57,13 @@ pub fn init_tracing() {
     fmt().with_env_filter(filter).with_target(true).init();
 }
 
-/// 从 env 读字符串；为空 / 不存在时返回 None。
+/// Reads a string from the environment; returns `None` if the variable is unset or empty.
 pub fn env_string(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// 简易回显工具：args.msg → text。tool-use scenario 用它走 tool_use →
-/// 工具执行 → tool_result 闭环。
+/// A simple echo tool: `args.msg` → text. In a tool-use scenario, it exercises the full
+/// tool_use → tool execution → tool_result round trip.
 pub struct EchoTool {
     schema: ToolSchema,
 }
@@ -118,8 +122,8 @@ impl Tool for EchoTool {
     }
 }
 
-/// 装配 agent core + session：注入回显工具，权限走 [`OpenPolicy`]
-/// 直放（冒烟不测权限交互）。
+/// Assemble agent core + session: inject an echo tool, with permissions governed by
+/// [`OpenPolicy`]; directly expose it (smoke tests skip permission checks).
 pub async fn build_session(
     provider: Arc<dyn LlmProvider>,
     model: &str,
@@ -153,7 +157,8 @@ pub async fn build_session(
     .expect("create session")
 }
 
-/// 跑一个 turn，把 emit 的事件实时打到 stdout，最后回 (stop_reason, 文本拼接)。
+/// Runs a single turn, printing emitted events to stdout in real time, and returns
+/// `(stop_reason, concatenated text)`.
 pub async fn run_turn_and_print(
     session: Arc<dyn Session>,
     prompt: &str,
@@ -243,8 +248,8 @@ fn first_text_content(fields: &ToolCallUpdateFields) -> Option<String> {
     None
 }
 
-/// 把 thinking enabled 的 sampling params 装好。Anthropic 接受 budget；
-/// OpenAI o-系列只看 reasoning_effort。
+/// Build sampling params with thinking enabled. Anthropic accepts a budget; OpenAI
+/// o-series only uses reasoning_effort.
 pub fn sampling_with_thinking(budget_tokens: Option<u32>) -> SamplingParams {
     SamplingParams {
         thinking: ThinkingConfig::Enabled { budget_tokens },
@@ -264,7 +269,7 @@ pub fn print_skip(label: &str, reason: &str) {
     println!("\n=== SKIP: {label}: {reason} ===");
 }
 
-/// 命令行第一个位置参数：scenario 名（默认 `all`）。
+/// The first positional CLI argument: scenario name (default `all`).
 pub fn scenario_from_args() -> String {
     std::env::args().nth(1).unwrap_or_else(|| "all".to_string())
 }

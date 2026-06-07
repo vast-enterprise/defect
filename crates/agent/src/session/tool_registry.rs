@@ -2,8 +2,9 @@
 //!
 //! - [`StaticToolRegistry`]: process-level (builtin tools) or session-level (MCP tools),
 //!   immutable after construction
-//! - [`CompositeRegistry`]: chains two registries so the main loop sees a unified interface
-//!   (`get` checks session-level first, then process-level; schemas concatenate both)
+//! - [`CompositeRegistry`]: chains two registries so the main loop sees a unified
+//!   interface (`get` checks session-level first, then process-level; schemas concatenate
+//!   both)
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -11,10 +12,10 @@ use std::sync::Arc;
 use crate::session::ToolRegistry;
 use crate::tool::{Tool, ToolSchema};
 
-/// 名 → 工具的不可变映射。
+/// An immutable mapping from names to tools.
 ///
-/// 用 [`StaticToolRegistry::builder`] 构造；构造后不可增删，确保
-/// schemas 顺序与 `get` 行为稳定。
+/// Construct via [`StaticToolRegistry::builder`]; once built, no tools can be added or
+/// removed, ensuring that the schema order and `get` behavior remain stable.
 pub struct StaticToolRegistry {
     schemas: Vec<ToolSchema>,
     by_name: HashMap<String, Arc<dyn Tool>>,
@@ -25,7 +26,7 @@ impl StaticToolRegistry {
         StaticToolRegistryBuilder::default()
     }
 
-    /// 空注册表。便于测试 / placeholder。
+    /// An empty registry, useful for testing or as a placeholder.
     pub fn empty() -> Self {
         Self {
             schemas: Vec::new(),
@@ -44,7 +45,7 @@ impl ToolRegistry for StaticToolRegistry {
     }
 }
 
-/// [`StaticToolRegistry`] 的构造器。
+/// A builder for [`StaticToolRegistry`].
 #[derive(Default)]
 pub struct StaticToolRegistryBuilder {
     schemas: Vec<ToolSchema>,
@@ -52,8 +53,9 @@ pub struct StaticToolRegistryBuilder {
 }
 
 impl StaticToolRegistryBuilder {
-    /// 注册一个工具。重名时覆盖，并把 schemas 中旧条目替换为新的（保持
-    /// schemas 顺序稳定，便于诊断）。
+    /// Registers a tool. If a tool with the same name already exists, it is overwritten
+    /// and the old entry in `schemas` is replaced with the new one (keeping `schemas`
+    /// order stable for diagnostics).
     pub fn insert(mut self, tool: Arc<dyn Tool>) -> Self {
         let schema = tool.schema().clone();
         if let Some(pos) = self.schemas.iter().position(|s| s.name == schema.name) {
@@ -75,10 +77,11 @@ impl StaticToolRegistryBuilder {
     }
 }
 
-/// 进程级 + 会话级两层注册表的"复合"视图。
+/// A "composite" view of the process-level and session-level registries.
 ///
-/// 查找语义：先会话级（per-session MCP），再进程级（内置）。这样会话级
-/// 的 MCP 工具可以"覆盖"同名内置工具——这是 MCP 模型的常规约定。
+/// Lookup semantics: session-level (per-session MCP) first, then process-level
+/// (built-in). This allows session-level MCP tools to "shadow" built-in tools with the
+/// same name — a common convention in the MCP model.
 pub struct CompositeRegistry {
     session: Arc<dyn ToolRegistry>,
     process: Arc<dyn ToolRegistry>,
@@ -94,7 +97,8 @@ impl ToolRegistry for CompositeRegistry {
     fn schemas(&self) -> Vec<ToolSchema> {
         let mut session_schemas = self.session.schemas();
         let mut process_schemas = self.process.schemas();
-        // 会话级覆盖：从 process 中剔除 session 已经声明的同名 schema。
+        // Session-level override: remove schemas from `process` that are already declared
+        // in `session` with the same name.
         let session_names: HashSet<&str> =
             session_schemas.iter().map(|s| s.name.as_str()).collect();
         process_schemas.retain(|s| !session_names.contains(s.name.as_str()));

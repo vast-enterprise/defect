@@ -8,25 +8,25 @@ use super::{DEFAULT_MAX_HOOK_CONTINUES, TurnRequestLimit, TurnState};
 use crate::llm::{ImageData, MessageContent};
 use crate::session::TurnError;
 
-// ----- TurnState: before-turn-end 续命硬上限 -----
+// ----- TurnState: hard cap on before-turn-end hook continues -----
 
 #[test]
 fn stop_hook_continues_capped() {
     let mut state = TurnState::new(TurnRequestLimit::Unbounded, DEFAULT_MAX_HOOK_CONTINUES);
-    // 初始可续命。
+    // Initially allowed to continue.
     assert!(state.may_stop_hook_continue());
-    // 续到上限。
+    // Continue until the cap is reached.
     for _ in 0..DEFAULT_MAX_HOOK_CONTINUES {
         assert!(state.may_stop_hook_continue());
         state.note_stop_hook_continue();
     }
-    // 达上限后不再允许——防死循环。
+    // After reaching the cap, further continues are disallowed to prevent infinite loops.
     assert!(!state.may_stop_hook_continue());
 }
 
 #[test]
 fn stop_hook_continues_respects_custom_cap() {
-    // 自定义上限 1：续命一次后即到顶。
+    // Custom cap of 1: reaches the limit after one continuation.
     let mut state = TurnState::new(TurnRequestLimit::Unbounded, 1);
     assert!(state.may_stop_hook_continue());
     state.note_stop_hook_continue();

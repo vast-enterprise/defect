@@ -1,7 +1,5 @@
-//! `fetch` 内置工具：拉一个 URL、按格式（markdown / html / text）渲染、
-//! 按超时与大小上限保护。
-//!
-//! Fetch tool — reads a URL, renders content (markdown / html / text), enforces timeout and size limits.
+//! Built-in `fetch` tool: reads a URL, renders content (markdown / html / text), enforces
+//! timeout and size limits.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,19 +27,20 @@ mod tests;
 
 const TITLE_TRUNC: usize = 80;
 
-/// `fetch` 工具的内置实现。无内部状态——单例 `Arc::new(FetchTool::new(cfg))` 即可。
+/// Built-in implementation of the `fetch` tool. Stateless — a singleton
+/// `Arc::new(FetchTool::new(cfg))` suffices.
 pub struct FetchTool {
     schema: ToolSchema,
     config: FetchToolConfig,
 }
 
 impl FetchTool {
-    /// 用 [`FetchToolConfig::default`] 构造。
+    /// Constructs using [`FetchToolConfig::default`].
     pub fn new() -> Self {
         Self::from_config(&FetchToolConfig::default())
     }
 
-    /// 按 [`FetchToolConfig`] 构造。
+    /// Constructs from a [`FetchToolConfig`].
     pub fn from_config(config: &FetchToolConfig) -> Self {
         let default_timeout = config.default_timeout_secs.max(1);
         let max_timeout = config.max_timeout_secs.max(default_timeout);
@@ -121,7 +120,8 @@ struct FetchOutput {
     redirects: u32,
     elapsed_ms: u64,
     final_url: String,
-    /// 单次 `timeout_secs` 被 clamp 到 `max_timeout_secs` 时为 `Some(原值)`。
+    /// `Some(original_value)` when the per-request `timeout_secs` was clamped to
+    /// `max_timeout_secs`.
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_clamped_from: Option<u32>,
 }
@@ -132,7 +132,8 @@ impl Tool for FetchTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // P2 only supports GET; URL is controllable, no local side effects → ReadOnly.
+        // P2 only supports GET; the URL is user-controlled and has no local side effects,
+        // so it is ReadOnly.
         SafetyClass::ReadOnly
     }
 
@@ -172,8 +173,8 @@ async fn run_fetch(
         Err(err) => return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(err))),
     };
 
-    // Pre-validate URL scheme so non-http/https fail with InvalidArgs (§10 #7),
-    // not Execution.
+    // Pre-validate the URL scheme so that non-http/https URLs fail with `InvalidArgs`
+    // (§10 #7) rather than `Execution`.
     if let Err(reason) = validate_scheme(&parsed.url) {
         return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

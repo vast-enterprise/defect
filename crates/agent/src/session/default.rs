@@ -1,16 +1,17 @@
-//! [`Session`] / [`AgentCore`] 的 v0 默认实现。
+//! Default v0 implementation of [`Session`] / [`AgentCore`].
 //!
-//! 装配关系：
+//! Assembly structure:
 //!
 //! ```text
 //! DefaultAgentCore
-//!   ├── Arc<dyn LlmProvider>          (装配时传入，本 core 的所有 session 共享)
-//!   ├── Arc<dyn ToolRegistry>         (内置工具，本 core 的所有 session 共享一份)
-//!   ├── TurnConfig                    (默认配置)
+//!   ├── Arc<dyn LlmProvider>          (injected at assembly, shared by all sessions in this core)
+//!   ├── Arc<dyn ToolRegistry>         (built-in tools, shared by all sessions in this core)
+//!   ├── TurnConfig                    (default configuration)
 //!   └── DashMap<SessionId, Arc<dyn Session>>
 //!
-//! 注：这些"共享"都以 **`AgentCore` 实例**为界，不是进程全局——把 defect 当库
-//! 引用时一个进程可装配多个 `AgentCore`，各持自己的 provider / 工具集 / 配置。
+//! Note: "shared" here is scoped to the **`AgentCore` instance**, not process-global.
+//! When using defect as a library, a single process can assemble multiple `AgentCore`
+//! instances, each with its own provider / tool set / configuration.
 //!
 //! DefaultSession
 //!   ├── id: SessionId
@@ -24,9 +25,10 @@
 //!   └── config: RwLock<TurnConfig>
 //! ```
 //!
-//! turn 互斥用 `Mutex<TurnSlot>`：`run_turn` 在最外层 `try_lock`，失败即返回
-//! `TurnError::TurnInProgress`。`TurnSlot` 内部存当前 turn 的
-//! [`CancellationToken`]，`cancel_turn` 取出后 `cancel()`。
+//! Turn mutual exclusion uses `Mutex<TurnSlot>`: `run_turn` calls `try_lock` at the
+//! outermost level, returning `TurnError::TurnInProgress` on failure. `TurnSlot`
+//! internally stores the current turn's [`CancellationToken`]; `cancel_turn` extracts
+//! it and calls `cancel()`.
 
 use std::io;
 use std::path::PathBuf;
@@ -61,38 +63,43 @@ use crate::session::{
 };
 use crate::shell::ShellBackend;
 
-/// 默认 [`AgentCore`]。
+/// Default [`AgentCore`].
 pub struct DefaultAgentCore {
-    /// 装配期落地的 provider 目录。session 持有同一份 `Arc`，按当前选中
-    /// 的 model id 解析对应的真实 [`LlmProvider`]——本类不再"持有单一
-    /// provider".
+    /// Provider registry wired at assembly time. Sessions share the same `Arc`; the
+    /// active model ID is used to resolve the corresponding [`LlmProvider`] — this type
+    /// no longer "holds a single provider".
     registry: Arc<ProviderRegistry>,
     process_tools: Arc<dyn ToolRegistry>,
-    /// 默认策略——**仅在未装配模式目录（`modes` 为 `None`）时**作为 session
-    /// 的 active policy。装配了目录时被目录的当前模式覆盖。
+    /// Default policy — used as the session's active policy **only when no mode catalog
+    /// is present (`modes` is `None`)**. When a catalog is present, it is overridden by
+    /// the catalog's current mode.
     policy: Arc<dyn SandboxPolicy>,
-    /// 权限模式目录模板。`Some` 时每个 session 各持一份克隆，可经
-    /// `session/set_mode` 独立切换；`None` 时退回 `policy` 单一不可切策略。
+    /// Permission mode catalog template. When `Some`, each session holds a cloned copy
+    /// and can switch independently via `session/set_mode`; when `None`, falls back to
+    /// the single non-switchable `policy`.
     modes: Option<ModeCatalog>,
     config: RwLock<TurnConfig>,
     loader: Option<Arc<dyn SessionLoader>>,
     session_tools: Option<Arc<dyn SessionToolFactory>>,
     observers: Vec<Arc<dyn SessionObserver>>,
-    /// HTTP fetch 后端。本 core 的所有 session 共享一份——HTTP 没有 per-client
-    /// capability 协商，多 session 间也无须隔离连接池。CLI 入口按
-    /// `HttpClientConfig` 构造一次后注入；测试 / `echo` provider 走
-    /// [`NoopHttpClient`]。
+    /// HTTP fetch backend. Shared across all sessions in this core — HTTP has no
+    /// per-client capability negotiation, and there is no need to isolate connection
+    /// pools between sessions. Constructed once at the CLI entry point from
+    /// `HttpClientConfig` and injected; tests and the `echo` provider use
+    /// [`NoopHttpClient`].
     http: Arc<dyn HttpClient>,
-    /// hook 引擎。本 core 的所有 session 共享——hook 配置走全局 + per-session
-    /// matcher. Assembled at CLI entry; without explicit injection, uses
-    /// [`NoopHookEngine`]，等价"未配置 hook = 主循环不变"。
+    /// Hook engine shared by all sessions in this core — hook configuration uses global +
+    /// per-session matchers. Assembled at CLI entry; without explicit injection, uses
+    /// [`NoopHookEngine`], equivalent to "no hooks configured = main loop unchanged".
     hook_engine: Arc<dyn HookEngine>,
-    /// 后台任务进度视图配置。所有 session 共享同一份（与进程级工具配置同档）。
-    /// 每个 session 建 `BackgroundTasks` 时传入。
+    /// Background progress view configuration. Shared across all sessions (at the same
+    /// level as process-wide tool configuration).
+    /// Passed to each session when constructing `BackgroundTasks`.
     background_progress: crate::session::BackgroundProgressConfig,
-    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 core 的 session 跑在目标模式下；
-    /// 由 CLI 装配期按 `--goal` 注入。所有 session 共享同一份（一个 `--goal` 进程
-    /// 通常只跑一个 session）。`None` = 非目标模式（默认）。
+    /// Shared state for the `--goal` goal-driven loop. When `Some`, sessions in this core
+    /// run in goal mode; injected by CLI assembly based on `--goal`. All sessions share
+    /// the same instance (a `--goal` process typically runs only one session). `None` =
+    /// non-goal mode (default).
     goal: Option<Arc<crate::session::GoalState>>,
     sessions: DashMap<SessionId, Arc<dyn Session>>,
 }
@@ -106,12 +113,13 @@ impl DefaultAgentCore {
 #[derive(Default)]
 pub struct DefaultAgentCoreBuilder {
     registry: Option<Arc<ProviderRegistry>>,
-    /// 单 provider 便捷入口：[`Self::provider`] 写到这里，`build()` 时
-    /// 与 `config.model` 一起合成一份单 entry 的 [`ProviderRegistry`]。
-    /// `registry` 已显式注入时此字段被忽略。
+    /// Convenience entry for a single provider: set [`Self::provider`] here, and at
+    /// `build()` time it is combined with `config.model` to produce a single-entry
+    /// [`ProviderRegistry`]. This field is ignored when `registry` has been explicitly
+    /// injected.
     single_provider: Option<Arc<dyn LlmProvider>>,
-    /// 单 provider 入口下的 session capabilities。`registry` 显式注入时
-    /// 由 entry 自带，本字段被忽略。
+    /// Session capabilities for the single-provider path. Ignored when `registry` is
+    /// explicitly injected, as the entry provides its own.
     single_capabilities: SessionCapabilitiesConfig,
     process_tools: Option<Arc<dyn ToolRegistry>>,
     policy: Option<Arc<dyn SandboxPolicy>>,
@@ -122,32 +130,39 @@ pub struct DefaultAgentCoreBuilder {
     http: Option<Arc<dyn HttpClient>>,
     hook_engine: Option<Arc<dyn HookEngine>>,
     config: TurnConfig,
-    /// 后台任务进度视图配置（环容量 / 正文上限）。每个 session 的 `BackgroundTasks`
-    /// 据此建进度环。未设置 ⇒ [`BackgroundProgressConfig::default`](crate::session::BackgroundProgressConfig)（鸟瞰、不灌正文）。
+    /// Background task progress view configuration (ring capacity / body limit). Each
+    /// session's `BackgroundTasks` builds its progress ring from this. When unset, falls
+    /// back to
+    /// [`BackgroundProgressConfig::default`](crate::session::BackgroundProgressConfig)
+    /// (bird's-eye view, no body content).
     background_progress: crate::session::BackgroundProgressConfig,
-    /// `--goal` 目标驱动循环的共享状态。CLI 装配期按 `--goal` 注入；未设置 ⇒ 非目标模式。
+    /// Shared state for the `--goal` goal-driven loop. Injected by the CLI during
+    /// assembly based on `--goal`; if unset, goal mode is disabled.
     goal: Option<Arc<crate::session::GoalState>>,
 }
 
 impl DefaultAgentCoreBuilder {
-    /// 装配期注入 provider 目录。CLI / 真实启动路径走这条；测试与单
-    /// provider 场景用 [`Self::provider`] 简便。
+    /// Injects the provider registry during assembly. Used by the CLI and real startup
+    /// paths; tests and single-provider scenarios should use [`Self::provider`] for
+    /// convenience.
     pub fn registry(mut self, registry: Arc<ProviderRegistry>) -> Self {
         self.registry = Some(registry);
         self
     }
 
-    /// 单 provider 便捷入口。`build()` 时把它包成单 entry 的
-    /// [`ProviderRegistry`]，default model = [`TurnConfig::model`]。
-    /// 与 [`Self::registry`] 互斥；同时设置时以 `registry` 为准。
+    /// Convenience entry point for a single provider. Wraps it into a single-entry
+    /// [`ProviderRegistry`] at `build()` time; default model = [`TurnConfig::model`].
+    /// Mutually exclusive with [`Self::registry`]; if both are set, `registry` takes
+    /// precedence.
     pub fn provider(mut self, provider: Arc<dyn LlmProvider>) -> Self {
         self.single_provider = Some(provider);
         self
     }
 
-    /// 单 provider 便捷入口下的 session capabilities 配置——会被合到
-    /// `build()` 自动构造的单 entry registry 上。多 provider 路径下应直接
-    /// 把 capabilities 写到 [`ProviderEntry`](crate::llm::ProviderEntry) 里，本字段会被忽略。
+    /// Session capabilities for the single-provider convenience path — these are merged
+    /// into the single-entry registry automatically constructed by `build()`. For the
+    /// multi-provider path, write capabilities directly into
+    /// [`ProviderEntry`](crate::llm::ProviderEntry) instead; this field is ignored.
     pub fn capabilities(mut self, capabilities: SessionCapabilitiesConfig) -> Self {
         self.single_capabilities = capabilities;
         self
@@ -163,10 +178,11 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
-    /// 注入权限模式目录。`Some` 时每个 session 暴露 ACP `SessionModeState`
-    /// 并支持 `session/set_mode`；目录的当前模式覆盖 [`Self::policy`] 作为
-    /// session 初始 active policy。不调用则 session 无模式切换、固定用
-    /// [`Self::policy`]（或默认 [`AskWritesPolicy`]）。
+    /// Inject a permission-mode catalog. When `Some`, each session exposes an ACP
+    /// `SessionModeState` and supports `session/set_mode`; the catalog's current mode
+    /// overrides [`Self::policy`] as the session's initial active policy. If not called,
+    /// the session has no mode switching and is fixed to [`Self::policy`] (or the default
+    /// [`AskWritesPolicy`]).
     pub fn modes(mut self, modes: ModeCatalog) -> Self {
         self.modes = Some(modes);
         self
@@ -192,40 +208,47 @@ impl DefaultAgentCoreBuilder {
         self
     }
 
-    /// 注入 `--goal` 目标驱动循环的共享状态。`Some` 时 session 跑在目标模式下：
-    /// 顶层 turn 把它经 [`crate::tool::ToolContext::goal`] 注入给 `goal_done` 工具，
-    /// `goal-gate` hook 据它驱动多轮自主循环。不调用 ⇒ 非目标模式（默认）。
+    /// Inject shared state for the `--goal` goal-driven loop. When `Some`, the session
+    /// runs in goal mode: the top-level turn injects it into the `goal_done` tool via
+    /// [`crate::tool::ToolContext::goal`], and the `goal-gate` hook uses it to drive
+    /// multi-turn autonomous loops. If not called, the session runs in non-goal mode (the
+    /// default).
     pub fn goal(mut self, goal: Arc<crate::session::GoalState>) -> Self {
         self.goal = Some(goal);
         self
     }
 
-    /// 设置后台任务进度视图配置（进度环容量 / 单 block 正文字符上限）。未调用时
-    /// 用默认（环 64、正文上限 0 = 只给摘要/元信息，不灌子 turn 正文）。CLI 装配期
-    /// 从 `[tools.background]` 投影注入。
+    /// Sets the background task progress view configuration (progress ring capacity /
+    /// per-block body character limit). When not called, defaults to ring size 64 and
+    /// body limit 0, meaning only summary/metadata is shown and sub-turn bodies are not
+    /// populated. During CLI assembly, this is injected from the `[tools.background]`
+    /// projection.
     pub fn background_progress(mut self, config: crate::session::BackgroundProgressConfig) -> Self {
         self.background_progress = config;
         self
     }
 
-    /// 设置本 core 的 HTTP fetch 后端。未设置时退化为 [`NoopHttpClient`]——
-    /// 任何 `fetch` 调用都会以 [`crate::http::HttpClientError::Transport`]
-    /// 失败，便于不需要网络的测试 / `echo` 装配跳过真实 HTTP 栈构造。
+    /// Sets the HTTP fetch backend for this core. When unset, defaults to
+    /// [`NoopHttpClient`]—any `fetch` call will fail with
+    /// [`crate::http::HttpClientError::Transport`], allowing tests or `echo` assemblies
+    /// that don't need networking to skip constructing a real HTTP stack.
     pub fn http(mut self, http: Arc<dyn HttpClient>) -> Self {
         self.http = Some(http);
         self
     }
 
-    /// 设置本 core 的 hook 引擎。未设置时退化为 [`NoopHookEngine`]——所有 hook
-    /// 调用直接返回 `Pass`，主循环行为与未引入 hook 系统时一致。
+    /// Sets the hook engine for this core. When unset, falls back to [`NoopHookEngine`] —
+    /// all hook calls return `Pass` directly, and the main loop behaves as if the hook
+    /// system were not introduced.
     pub fn hook_engine(mut self, hook_engine: Arc<dyn HookEngine>) -> Self {
         self.hook_engine = Some(hook_engine);
         self
     }
 
     /// # Panics
-    /// `registry` 与 `provider` 都未设置；或单 provider 路径下 `config.model`
-    /// 是空字符串（registry 至少要有一个 default model）。
+    /// Neither `registry` nor `provider` is set; or, in the single-provider path,
+    /// `config.model` is an empty string (the registry must have at least one default
+    /// model).
     pub fn build(mut self) -> DefaultAgentCore {
         let registry = self.registry.take().unwrap_or_else(|| {
             let provider = self
@@ -233,8 +256,9 @@ impl DefaultAgentCoreBuilder {
                 .take()
                 .expect("DefaultAgentCore requires a provider or a registry");
             let vendor = provider.info().vendor;
-            // 单 provider 路径下 config 通常不带选中的 vendor——补成本 provider 的
-            // vendor，让 `resolve_initial_provider` 能按 (vendor, model) 对找到 entry。
+            // Under the single-provider path, config usually lacks a selected vendor —
+            // fill in the provider's own vendor so that `resolve_initial_provider` can
+            // find the entry by the (vendor, model) pair.
             if self.config.provider.is_empty() {
                 self.config.provider = vendor.clone();
             }
@@ -244,11 +268,11 @@ impl DefaultAgentCoreBuilder {
                 "DefaultAgentCoreBuilder::provider() requires TurnConfig::model to be set; \
                  use registry() for multi-provider setups"
             );
-            // 单 provider 路径下，把 `TurnConfig::allowed_models` 当作模型
-            // 候选清单——这与 CLI 的多 provider 装配保持对称：用户用
-            // `[providers.<p>.models]` 声明候选，agent 不向 adapter 发
-            // `list_models` 网络请求。`allowed_models` 缺省时退回到只暴露
-            // 默认模型。
+            // In the single-provider path, treat `TurnConfig::allowed_models` as the
+            // model candidate list — this mirrors the multi-provider assembly in the CLI:
+            // users declare candidates via `[providers.<p>.models]`, and the agent does
+            // not send a `list_models` network request to the adapter. When
+            // `allowed_models` is absent, fall back to exposing only the default model.
             let model_ids = match self.config.allowed_models.as_ref() {
                 Some(ids) if !ids.is_empty() => ids.clone(),
                 _ => vec![model_id.clone()],
@@ -355,7 +379,8 @@ impl AgentCore for DefaultAgentCore {
                 self.process_tools.clone(),
             ));
 
-            // after session enter hook：吸收注入的 additional_context 作为系统 prompt 后缀候选。
+            // After the session-enter hook, absorb any injected `additional_context` as
+            // candidate system-prompt suffixes.
             let session_start_append = {
                 let cancel = CancellationToken::new();
                 let ctx = HookCtx::new(&id, &cwd, cancel);
@@ -368,7 +393,8 @@ impl AgentCore for DefaultAgentCore {
                 step.additional_context
             };
 
-            // session 级取消令牌：driver loop 退出信号 + 后台任务取消令牌来源（同一个）。
+            // Session-level cancellation token: both the driver loop exit signal and the
+            // source of background task cancellation tokens (same token).
             let session_cancel = CancellationToken::new();
             let (policy, modes) = self.session_policy_state();
             let concrete = Arc::new(DefaultSession {
@@ -405,8 +431,10 @@ impl AgentCore for DefaultAgentCore {
                 session_start_append,
                 request_audit: RequestAuditTracker::new(),
             });
-            // 起 session driver（主动续转）。driver 持 Weak 自引——session 外部
-            // 强引用清零时它 upgrade 失败而退出，不让 session 永生。
+            // Spawn the session driver (active keep-alive). The driver holds a `Weak`
+            // self-reference so that when all external strong references to the session
+            // are dropped, the driver's `upgrade` fails and it exits, preventing the
+            // session from living forever.
             tokio::spawn(DefaultSession::drive(Arc::downgrade(&concrete)));
             let session = concrete as Arc<dyn Session>;
 
@@ -455,7 +483,8 @@ impl AgentCore for DefaultAgentCore {
                 None => Arc::new(StaticToolRegistry::empty()) as Arc<dyn ToolRegistry>,
             };
 
-            // after session enter hook（resume 路径）。同 create_session：取注入的 context。
+            // After session enter hook (resume path). Same as `create_session`: retrieve
+            // the injected context.
             let session_start_append = {
                 let cancel = CancellationToken::new();
                 let ctx = HookCtx::new(&loaded.info.id, &loaded.info.cwd, cancel);
@@ -528,13 +557,14 @@ impl AgentCore for DefaultAgentCore {
 }
 
 impl DefaultAgentCore {
-    /// 按当前 [`TurnConfig::model`] 在 registry 上查 entry，并裁决出
-    /// `(provider, hosted_capabilities)`。供 `create_session` /
-    /// `load_session` 复用。
+    /// Look up the entry in the registry for the current [`TurnConfig::model`] and
+    /// resolve it into `(provider, hosted_capabilities)`. Shared by `create_session` /
+    /// `load_session`.
     ///
-    /// 配置里的 model 必须能在 registry 中找到 entry——CLI 装配期
-    /// [`ProviderRegistry::new`] 已经校验过 default model，能落到这里报错
-    /// 的只剩 builder 误用（registry 与 turn config 不一致）。
+    /// The configured model must have an entry in the registry —
+    /// [`ProviderRegistry::new`] already validated the default model during CLI assembly,
+    /// so the only way to reach this error is builder misuse (registry and turn config
+    /// are inconsistent).
     fn resolve_initial_provider(&self) -> Result<SessionProviderState, AgentError> {
         let (vendor, model) = {
             let cfg = self
@@ -560,11 +590,13 @@ impl DefaultAgentCore {
         })
     }
 
-    /// 为一个新 session 派生初始 `(active policy, 模式目录)`。
+    /// Derive the initial `(active policy, mode catalog)` for a new session.
     ///
-    /// 装配了 [`ModeCatalog`] 时：每个 session 各持一份目录克隆（`current` 可
-    /// 独立切换），active policy = 目录当前模式的 policy。未装配时：active policy
-    /// = 进程级 `policy`，无目录（不可切）。
+    /// When a [`ModeCatalog`] is configured: each session holds its own clone of the
+    /// catalog (so `current` can be switched independently), and the active policy is the
+    /// policy of the catalog's current mode. When not configured: the active policy is
+    /// the process-level `policy`, and there is no catalog (mode switching is
+    /// unavailable).
     fn session_policy_state(&self) -> (RwLock<Arc<dyn SandboxPolicy>>, Option<Mutex<ModeCatalog>>) {
         match &self.modes {
             Some(catalog) => {
@@ -577,9 +609,10 @@ impl DefaultAgentCore {
     }
 }
 
-/// session 当前选中的真实 provider + 该 provider 的 hosted capability 解析结果。
+/// The currently selected real provider for the session, together with the parsed hosted
+/// capabilities of that provider.
 ///
-/// `set_model` 跨 provider 切换时被原子替换。
+/// Atomically replaced by `set_model` when switching providers.
 struct SessionProviderState {
     provider: Arc<dyn LlmProvider>,
     hosted_capabilities: HostedCapabilities,
@@ -588,75 +621,90 @@ struct SessionProviderState {
 pub struct DefaultSession {
     id: SessionId,
     cwd: PathBuf,
-    /// `Arc` 而非 `Box`：后台压缩任务（[`CompactionSlot`](crate::session::CompactionSlot)）要 `'static` 持有它
-    /// 跨 turn，故须可共享引用计数。
+    /// Use `Arc` instead of `Box` because the background compaction task
+    /// ([`CompactionSlot`](crate::session::CompactionSlot)) needs to hold it with a
+    /// `'static` lifetime across turns, requiring shared reference counting.
     history: Arc<dyn History>,
     tools: Arc<dyn ToolRegistry>,
-    /// 全局 provider 目录。session 共享 [`DefaultAgentCore`] 持有的同一份
-    /// `Arc<ProviderRegistry>`——list_models / set_model 的 candidate 与
-    /// owner provider 全靠它解析。
+    /// Global provider directory. The session shares the same `Arc<ProviderRegistry>`
+    /// held by [`DefaultAgentCore`] — it is used to resolve candidates and owner
+    /// providers for `list_models` / `set_model`.
     registry: Arc<ProviderRegistry>,
-    /// 当前选中的 (provider, hosted_capabilities) 状态。`set_model` 跨
-    /// provider 时整体替换，保证 `(provider, hosted_capabilities)` 总是
-    /// 自洽——不存在"provider 换了但 capabilities 没换"的中间态。
+    /// Current selected (provider, hosted_capabilities) state. `set_model` replaces the
+    /// entire pair when switching providers, ensuring `(provider, hosted_capabilities)`
+    /// is always consistent — there is no intermediate state where the provider has
+    /// changed but capabilities have not.
     provider_state: RwLock<SessionProviderState>,
-    /// 当前生效的决策策略。`set_mode` 时原子替换（锁序：在 `modes` 之后）。
-    /// 用 `RwLock<Arc<_>>` 而非裸 `Arc`：per-session permission mode 需要运行时
-    /// 切换；`run_turn` 启动时 `.read().clone()` 快照一份给本轮，进行中的 turn
-    /// 不受后续切换影响（与 `set_model` 同语义）。
+    /// The currently active decision policy. Atomically replaced on `set_mode` (lock
+    /// order: after `modes`).
+    /// Uses `RwLock<Arc<_>>` rather than a bare `Arc` because the per-session permission
+    /// mode must be switchable at runtime; `run_turn` snapshots the policy via
+    /// `.read().clone()` at the start of each turn, so in-flight turns are unaffected by
+    /// subsequent switches (same semantics as `set_model`).
     policy: RwLock<Arc<dyn SandboxPolicy>>,
-    /// 权限模式目录。`Some` 时支持 `session/set_mode` 与 ACP `SessionModeState`；
-    /// `None` 时 `policy` 固定不可切。`std::sync::Mutex` 仅短暂持锁、不跨 await。
+    /// Permission mode catalog. When `Some`, enables `session/set_mode` and ACP
+    /// `SessionModeState`; when `None`, `policy` is fixed and cannot be switched. Uses
+    /// `std::sync::Mutex` held only briefly, never across an await.
     modes: Option<Mutex<ModeCatalog>>,
     events: Arc<EventEmitter>,
     permissions: Arc<PermissionGate>,
-    /// 单 turn 互斥 + cancel 通道。`Some(token)` 表示有 turn 在跑；
-    /// `None` 表示空闲。`std::sync::Mutex` 仅短暂持锁、不跨 await。
+    /// Single-turn mutex + cancel channel. `Some(token)` means a turn is running; `None`
+    /// means idle. The `std::sync::Mutex` is held briefly and never across an await.
     turn_state: Mutex<TurnSlot>,
-    /// session 级后台任务表（`run_in_background` 落点）。持有任务 `JoinHandle`
-    /// 使其活过发起它的 turn；内部 cancel token 独立于 turn 子 token。`run_turn`
-    /// 把 clone 经 `TurnRunner` → `ToolContext` 注入给工具。详见
-    /// See task-arrange design for background task semantics.
+    /// Session-level background task table (landing point for `run_in_background`). Holds
+    /// the task's `JoinHandle` to keep it alive past the originating turn; its internal
+    /// cancel token is independent of the turn's child token. `run_turn` clones it
+    /// through `TurnRunner` → `ToolContext` for injection into tools. See the
+    /// task-arrange design for background task semantics.
     background: crate::session::BackgroundTasks,
-    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下；顶层 turn
-    /// 把它经 [`crate::tool::ToolContext::goal`] 注入工具，`goal-gate` hook 据它续命 /
-    /// 放行。从 [`DefaultAgentCore::goal`] 克隆而来。`None` = 非目标模式。
+    /// Shared state for the `--goal` goal-driven loop. When `Some`, this session runs in
+    /// goal mode; the top-level turn injects it into tools via
+    /// [`crate::tool::ToolContext::goal`], and the `goal-gate` hook uses it to keep the
+    /// turn alive or let it proceed. Cloned from [`DefaultAgentCore::goal`]. `None` =
+    /// non-goal mode.
     goal: Option<Arc<crate::session::GoalState>>,
-    /// session 级后台压缩槽（single-flight）。越 soft 水位时由 turn 主循环异步起一次
-    /// 摘要压缩，不阻塞本轮。详见 `session/turn/compaction_slot.rs`。
+    /// Session-level single-flight compaction slot. When the soft watermark is exceeded,
+    /// the turn main loop asynchronously triggers one summary compaction without blocking
+    /// the current turn. See `session/turn/compaction_slot.rs`.
     compaction_slot: crate::session::CompactionSlot,
-    /// turn slot 释放通知。`TurnGuard::drop` 时 `notify_one`——session driver 在
-    /// 撞上 `TurnInProgress` 后等它，待当前 turn 结束再起自主续转 turn（主动续转的
-    /// liveness guarantee).
+    /// Notifies when a turn slot is released. `TurnGuard::drop` calls `notify_one` — the
+    /// session driver waits on this after hitting `TurnInProgress`, so it can start an
+    /// autonomous turn continuation once the current turn ends (liveness guarantee for
+    /// autonomous continuation).
     turn_freed: Arc<tokio::sync::Notify>,
-    /// session 级取消令牌——session 终结时 cancel，driver loop 据此退出。也是
-    /// `background` 内任务取消令牌的来源（同一个 token）。
+    /// Session-level cancellation token; cancelled when the session terminates, causing
+    /// the driver loop to exit. Also the source (same token) for cancellation tokens of
+    /// tasks inside `background`.
     session_cancel: CancellationToken,
     config: RwLock<TurnConfig>,
-    /// session 级 fs 后端。由 [`AgentCore::create_session`] 注入；
-    /// `TurnRunner` 把 `&dyn FsBackend` 借到 [`crate::tool::ToolContext`] 传给工具。
+    /// Session-level filesystem backend. Injected by [`AgentCore::create_session`];
+    /// `TurnRunner` borrows a `&dyn FsBackend` into [`crate::tool::ToolContext`] for
+    /// tools.
     fs: Arc<dyn FsBackend>,
-    /// session 级 shell 后端。与 `fs` 同款由 [`AgentCore::create_session`] 注入；
-    /// `bash` 工具通过 [`crate::tool::ToolContext`] 拿它。
+    /// Session-level shell backend. Injected by [`AgentCore::create_session`] alongside
+    /// `fs`; the `bash` tool accesses it via [`crate::tool::ToolContext`].
     shell: Arc<dyn ShellBackend>,
-    /// agent 接入方式。由 [`AgentCore::create_session`] / `load_session` 注入，
-    /// turn 装配时组进 [`RunningContext`]，渲染进 system prompt 的 `# Environment` 段。
+    /// How the agent is accessed. Injected by [`AgentCore::create_session`] /
+    /// `load_session`, assembled into [`RunningContext`] during turn setup, and rendered
+    /// into the `# Environment` section of the system prompt.
     frontend: Frontend,
-    /// HTTP fetch 后端（本 core 的多 session 共享，由 [`DefaultAgentCore`]
-    /// 一份持有 / clone）。`fetch` 工具通过 [`crate::tool::ToolContext`] 拿它。
+    /// HTTP fetch backend, shared across sessions in this core and held/cloned by
+    /// [`DefaultAgentCore`]. The `fetch` tool accesses it via
+    /// [`crate::tool::ToolContext`].
     http: Arc<dyn HttpClient>,
-    /// hook 引擎（本 core 的多 session 共享）。`run_turn` 装配
-    /// [`TurnRunner`] 时把 `&dyn HookEngine` 借给主循环。
+    /// Hook engine, shared across sessions in this core. When `run_turn` assembles
+    /// [`TurnRunner`], it borrows `&dyn HookEngine` to the main loop.
     hook_engine: Arc<dyn HookEngine>,
-    /// session 启动期 `after_session_enter` hook 返回的 append 内容（如 skill
-    /// L1 清单 / always-on skill body）。由 [`AgentCore::create_session`] /
-    /// `load_session` 在 hook 跑完之后填进来；每个 turn 装配 system prompt 时由
-    /// [`merge_session_overlay`] 与显式 `config.system_prompt` 合并，经
-    /// [`crate::session::prompt::resolve_system_prompt`] 落到 "Session
+    /// Content appended by the `after_session_enter` hook during session startup (e.g.,
+    /// skill L1 manifest / always-on skill body). Populated by
+    /// [`AgentCore::create_session`] / `load_session` after the hook runs; on each turn,
+    /// when assembling the system prompt, [`merge_session_overlay`] merges it with the
+    /// explicit `config.system_prompt`, and
+    /// [`crate::session::prompt::resolve_system_prompt`] places it into the "Session
     /// Instructions" section via hooks.
     session_start_append: Vec<agent_client_protocol_schema::ContentBlock>,
-    /// 相邻请求稳定性诊断器。每次实际发给 provider 的请求都会产一条
-    /// tracing 记录，帮助定位 cache miss 来源。
+    /// Adjacent-request stability diagnostic. Emits a tracing record for every request
+    /// actually sent to the provider, helping to identify the source of cache misses.
     request_audit: RequestAuditTracker,
 }
 
@@ -676,11 +724,14 @@ impl DefaultSession {
             .hosted_capabilities
     }
 
-    /// 一次 turn 的执行核心——用户 turn 与自主续转 turn 共用。
+    /// Core execution of a turn, shared by user-initiated turns and automatic
+    /// continuation turns.
     ///
-    /// `prompt` 是外部输入（用户 turn）或空（自主续转 turn）。两种情况都会把已完成的
-    /// 后台结果作为 prompt **前缀块**带入；空 prompt + 无后台结果时不起 turn（返回
-    /// `EndTurn`，避免空转）。turn slot 互斥仍由本函数顶部把守。
+    /// `prompt` is either external input (user turn) or empty (automatic continuation
+    /// turn). In both cases, any completed background results are prepended as **prefix
+    /// blocks** to the prompt. An empty prompt with no background results does not start
+    /// a turn (returns `EndTurn` to avoid a no-op turn). Turn slot mutual exclusion is
+    /// still enforced at the top of this function.
     async fn run_turn_core(
         &self,
         prompt: Vec<ContentBlock>,
@@ -705,13 +756,15 @@ impl DefaultSession {
                 cancel
             };
 
-            // RAII：函数任意路径退出（含 await 内 panic）都释放 slot + 唤醒 driver。
+            // RAII guard: releases the slot and wakes the driver on any exit path
+            // (including panic inside an await).
             let _guard = TurnGuard {
                 state: &self.turn_state,
                 freed: &self.turn_freed,
             };
 
-            // 把已完成的后台任务结果作为本轮 prompt 的**前缀块**带入。
+            // Prepend completed background-task results as prefix blocks for the current
+            // prompt.
             // Background task reflow — see task-arrange §3.1 / §5.1.
             let prompt = {
                 let outcomes = self.background.drain_completed();
@@ -731,7 +784,8 @@ impl DefaultSession {
                 }
             };
 
-            // 空 prompt（自主 turn 却无任何后台结果可消化）——不起 turn，避免空转。
+            // Empty prompt (autonomous turn with no background results to consume) — skip
+            // the turn to avoid spinning.
             if prompt.is_empty() {
                 return Ok(StopReason::EndTurn);
             }
@@ -741,14 +795,17 @@ impl DefaultSession {
                 .read()
                 .expect("DefaultSession config rwlock poisoned")
                 .clone();
-            // turn 在启动时拍一次 (provider, hosted) 快照——同一 turn 内即使有并发的
-            // set_model 请求，本 turn 仍走选定的 provider；下一 turn 才生效。
+            // Snapshot (provider, hosted) once at turn start — concurrent set_model
+            // requests within the same turn still use the chosen provider; changes take
+            // effect on the next turn.
             let provider = self.current_provider();
             let hosted = self.current_hosted();
             let running_ctx = RunningContext::new(self.frontend, &self.cwd);
-            // session 作用域注入（after_session_enter hook 的 additional_context，
-            // 如 skill L1 清单 / always-on skill body）与显式 system_prompt 合并成
-            // 单一 "Session Instructions" overlay——两者同源、同落点，不另加参数。
+            // Merge session-scoped injection (the `additional_context` from the
+            // `after_session_enter` hook, e.g. skill L1 manifest / always-on skill body)
+            // with the explicit `system_prompt` into a single "Session Instructions"
+            // overlay — both originate from the same source and target the same location,
+            // so no extra parameter is needed.
             let session_overlay =
                 merge_session_overlay(config.system_prompt.as_deref(), &self.session_start_append);
             let system_prompt = resolve_system_prompt(
@@ -760,10 +817,14 @@ impl DefaultSession {
                 session_overlay.as_deref(),
             )
             .map_err(|err| TurnError::Internal(BoxError::new(err)))?;
-            // 快照本轮 active policy：进行中的 turn 用固定策略，期间
-            // `session/set_mode` 切换只影响后续 turn（与 set_model 同语义）。
-            // 用 owned `Arc` 而非借用——它要随 `ToolContext` 流给 `spawn_agent`，
-            // 让子 agent 包的是父此刻的真实策略而非陈旧的进程级默认。
+            // Snapshot the active policy for this turn: an in-progress turn uses a fixed
+            // policy, so
+            // `session/set_mode` changes only affect subsequent turns (same semantics as
+            // `set_model`).
+            // Use an owned `Arc` rather than a borrow — it flows with `ToolContext` into
+            // `spawn_agent`,
+            // ensuring child agents capture the parent's actual policy at this moment,
+            // not a stale process-level default.
             let policy = self
                 .policy
                 .read()
@@ -787,14 +848,18 @@ impl DefaultSession {
                 hooks: self.hook_engine.as_ref(),
                 session_id: &self.id,
                 request_audit: &self.request_audit,
-                // 顶层 turn 注入 session 级后台任务句柄——工具的 run_in_background
-                // 能力由此开启。嵌套子 agent turn 不注入（见 spawn_agent）。
+                // Inject the session-level background task handle into the top-level
+                // turn, enabling the tool's `run_in_background` capability. Nested
+                // sub-agent turns do not receive this injection (see `spawn_agent`).
                 background: Some(self.background.clone()),
-                // 顶层 turn 注入目标循环状态（`--goal` 模式下 `Some`）：goal_done 工具
-                // 与 goal-gate hook 据它驱动多轮自主循环。非目标模式为 `None`。
+                // Top-level turn injects the goal-loop state (`Some` under `--goal`
+                // mode); the `goal_done` tool and `goal-gate` hook use it to drive
+                // multi-turn autonomous loops. `None` in non-goal mode.
                 goal: self.goal.clone(),
-                // 顶层 turn 注入后台压缩槽 + history/provider 的 Arc，使越 soft 水位时
-                // 能异步起摘要压缩。子 agent turn 全传 None（见 spawn_agent）。
+                // Inject the compaction slot, history Arc, and provider Arc into the
+                // top-level turn so that summary compaction can be triggered
+                // asynchronously when the soft watermark is exceeded. Sub-agent turns
+                // pass `None` for all of these (see `spawn_agent`).
                 compaction_slot: Some(self.compaction_slot.clone()),
                 history_arc: Some(self.history.clone()),
                 provider_arc: Some(provider.clone()),
@@ -808,27 +873,34 @@ impl DefaultSession {
         .await
     }
 
-    /// Session driver loop（主动续转）：常驻 task，在后台任务完成时起一个自主 turn
-    /// 消化结果。`create_session` / `load_session` 时 spawn。
+    /// Session driver loop (autonomous turn continuation): a long-lived task that starts
+    /// an autonomous turn when a background task completes, consuming its results.
+    /// Spawned during `create_session` / `load_session`.
     ///
-    /// 持 `Weak<Self>` 而非 `Arc`：driver 不能让 session 永生。每轮先 `upgrade`——
-    /// 外部强引用（`AgentCore.sessions` DashMap）全没了时 upgrade 失败、driver 退出。
-    /// `session_cancel` 是显式退出信号（process shutdown / 未来的 session evict）。
+    /// Holds `Weak<Self>` instead of `Arc`: the driver must not keep the session alive
+    /// indefinitely. Each iteration first calls `upgrade` — when all external strong
+    /// references (the `AgentCore.sessions` DashMap) are gone, `upgrade` fails and the
+    /// driver exits. `session_cancel` is the explicit exit signal (process shutdown /
+    /// future session eviction).
     ///
     /// Two waiting paths:
-    /// - `background.wait_for_completion()`：有任务完成 → 准备起自主 turn；
-    /// - `session_cancel.cancelled()`：session 终结 → 退出 loop。
+    /// - `background.wait_for_completion()`: a task completed → prepare to start an
+    ///   autonomous turn;
+    /// - `session_cancel.cancelled()`: session terminated → exit the loop.
     ///
-    /// 起 turn 前若撞上 `TurnInProgress`（用户 turn 正在跑），等 `turn_freed`
-    /// 再重试——这正是"用户输入与后台结果竞争同一个 turn slot"的落点：用户 turn
-    /// 先到就先跑，后台结果搭它的车（run_turn_core 的 drain）或等它结束再单独起。
+    /// If a `TurnInProgress` is encountered before starting a turn (a user turn is
+    /// running), wait for `turn_freed` and retry — this is exactly where user input and
+    /// background results contend for the same turn slot: if the user turn arrives first,
+    /// it runs, and the background result either hitches a ride (via `run_turn_core`'s
+    /// drain) or waits for it to finish before starting its own turn.
     async fn drive(weak: std::sync::Weak<Self>) {
         loop {
             let Some(this) = weak.upgrade() else { break };
             if this.session_cancel.is_cancelled() {
                 break;
             }
-            // 先拿 notified() future 再检查队列——避免漏掉两步之间到达的完成通知。
+            // First take the notified() future, then check the queue — avoid missing
+            // completion notifications that arrive between the two steps.
             let completion = this.background.wait_for_completion();
             if this.background.has_completed() {
                 this.run_autonomous_turn_with_retry().await;
@@ -843,8 +915,9 @@ impl DefaultSession {
         }
     }
 
-    /// 起一个自主续转 turn；若 turn slot 被占（用户 turn 在跑），等它释放再试，
-    /// 最多重试到结果被消化。`session_cancel` 触发时放弃。
+    /// Run an autonomous turn; if the turn slot is occupied (a user turn is running),
+    /// wait for it to be released and retry, up to the point where the result is
+    /// consumed. Abort when `session_cancel` fires.
     async fn run_autonomous_turn_with_retry(self: &Arc<Self>) {
         loop {
             if self.session_cancel.is_cancelled() {
@@ -855,14 +928,16 @@ impl DefaultSession {
                 .await
             {
                 Err(TurnError::TurnInProgress) => {
-                    // 用户 turn 正在跑。等它结束——它的 run_turn_core 会 drain 掉我们的
-                    // 后台结果（搭车），那样这里 has_completed 就空了、自然退出。
+                    // A user turn is in progress. Wait for it to finish — its
+                    // `run_turn_core` will drain our background results (piggybacking),
+                    // so `has_completed` will be empty here and we exit naturally.
                     tokio::select! {
                         () = self.turn_freed.notified() => {}
                         () = self.session_cancel.cancelled() => return,
                     }
                     if !self.background.has_completed() {
-                        // 被在跑的用户 turn 搭车消化了——无需再起自主 turn。
+                        // Consumed by an in-flight user turn (piggybacking) — no need to
+                        // start an autonomous turn.
                         return;
                     }
                 }
@@ -874,8 +949,9 @@ impl DefaultSession {
 
 impl Drop for DefaultSession {
     fn drop(&mut self) {
-        // session 析构 → 取消 session_cancel：掐掉所有在途后台任务，并让 driver loop
-        // 的 `session_cancel.cancelled()` 腿醒来退出（driver 持 Weak，此时 upgrade 也已失败）。
+        // On session drop, cancel `session_cancel`: this kills all in-flight background
+        // tasks and wakes the driver loop's `session_cancel.cancelled()` branch so it
+        // exits (the driver holds a `Weak`, which will now fail to upgrade).
         self.session_cancel.cancel();
     }
 }
@@ -885,10 +961,11 @@ struct TurnSlot {
     cancel: Option<CancellationToken>,
 }
 
-/// `run_turn` 的"占位 / 释放" guard：构造时占用 turn slot、drop 时释放。
+/// A guard that occupies a turn slot on construction and releases it on drop.
 struct TurnGuard<'a> {
     state: &'a Mutex<TurnSlot>,
-    /// turn 释放时唤醒 session driver（主动续转的活性保证）。
+    /// Notifies the session driver when the turn is released (liveness guarantee for
+    /// proactive turn renewal).
     freed: &'a tokio::sync::Notify,
 }
 
@@ -897,7 +974,8 @@ impl<'a> Drop for TurnGuard<'a> {
         if let Ok(mut slot) = self.state.lock() {
             slot.cancel = None;
         }
-        // turn slot 已空——唤醒可能等着起自主续转 turn 的 driver。
+        // Turn slot is now empty; wake the driver that may be waiting to start its own
+        // turn.
         self.freed.notify_one();
     }
 }
@@ -921,10 +999,11 @@ impl Session for DefaultSession {
 
     fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>> {
         Box::pin(async move {
-            // 多 provider 装配下：candidate 集来自 registry——每个 entry
-            // 自带 model 列表（CLI 装配时已经塞进去）。再按 session 的
-            // `allowed_models` 白名单过滤。registry 不发网络请求，这条路径
-            // 永远走得通。
+            // Under multi-provider assembly, the candidate set comes from the registry —
+            // each entry already carries its own model list (populated during CLI
+            // assembly). It is then filtered against the session's `allowed_models`
+            // allowlist. The registry makes no network requests, so this path always
+            // succeeds.
             let allowed_models = self
                 .config
                 .read()
@@ -972,8 +1051,9 @@ impl Session for DefaultSession {
                 .expect("DefaultSession config rwlock poisoned")
                 .allowed_models
                 .clone();
-            // 注意：`allowed_models` 是裸 model id 清单，不带 vendor 维度——同名
-            // model 在所有 provider 下统一放行/拒绝。pair 化是后续工作。
+            // Note: `allowed_models` is a flat list of model IDs without a vendor
+            // dimension — models with the same name are allowed or denied uniformly
+            // across all providers. Pairing is deferred to future work.
             if let Some(allowed_models) = allowed_models.as_ref()
                 && !allowed_models.iter().any(|allowed| allowed == &model)
             {
@@ -988,10 +1068,11 @@ impl Session for DefaultSession {
                 }));
             };
 
-            // 跨 provider 切换时重新 resolve hosted capabilities：每个 entry
-            // 自带它的 [`SessionCapabilitiesConfig`]，与 provider 的
-            // hosted_capabilities 交叉裁决。Delegate 但 provider 不支持时
-            // 返回 ProviderError——保持 set_model 的失败语义稳定。
+            // When switching providers, re-resolve hosted capabilities: each entry
+            // carries its own [`SessionCapabilitiesConfig`], which is cross-referenced
+            // with the provider's hosted_capabilities. If the delegate is not supported
+            // by the provider, a `ProviderError` is returned — preserving the stable
+            // failure semantics of `set_model`.
             let new_provider = entry.provider().clone();
             let resolved = ResolvedSessionCapabilities::resolve(
                 entry.capabilities(),
@@ -1004,8 +1085,10 @@ impl Session for DefaultSession {
                 ))))
             })?;
 
-            // 锁顺序：provider_state 先于 config，与 run_turn 的快照路径一致。
-            // 同时持有两把写锁的窗口很短（仅几条赋值），不会阻塞主循环。
+            // Lock order: `provider_state` before `config`, matching the snapshot path in
+            // `run_turn`.
+            // The window where both write locks are held is very short (just a few
+            // assignments) and will not block the main loop.
             {
                 let mut state = self
                     .provider_state
@@ -1054,8 +1137,9 @@ impl Session for DefaultSession {
         let Some(modes) = self.modes.as_ref() else {
             return Err(AgentError::ModeNotFound(mode_id));
         };
-        // 锁序：modes 先于 policy（与 run_turn 的 read 路径无交叠——run_turn 只读
-        // policy）。两把锁都只短暂持有、不跨 await。
+        // Lock order: `modes` before `policy` (no overlap with `run_turn`'s read path —
+        // `run_turn` only reads `policy`). Both locks are held briefly and never across
+        // an `.await`.
         let mut catalog = modes.lock().expect("DefaultSession modes mutex poisoned");
         if !catalog.set_current(&mode_id) {
             return Err(AgentError::ModeNotFound(mode_id));
@@ -1093,8 +1177,10 @@ impl Session for DefaultSession {
     }
 
     fn run_turn(&self, prompt: Vec<ContentBlock>) -> BoxFuture<'_, Result<StopReason, TurnError>> {
-        // 用户驱动的 turn：把已完成的后台结果作为 prompt 前缀**搭车**带入
-        // （被动回流，与主动续转互补——主动续转管空闲态，搭车管"恰好用户也开口了"）。
+        // User-driven turn: piggybacks completed background results as a prefix to the
+        // prompt.
+        // (Passive backflow, complementary to active continuation — active continuation
+        // handles idle state, piggybacking handles "user happened to speak up".)
         Box::pin(self.run_turn_core(prompt, crate::hooks::step::IngestSource::User))
     }
 
@@ -1109,7 +1195,7 @@ impl Session for DefaultSession {
         if let Some(token) = token {
             token.cancel();
         }
-        // 没 turn 在跑 → no-op（幂等）
+        // No turn running → no-op (idempotent)
     }
 
     fn resolve_permission(&self, id: ToolCallId, outcome: PermissionResolution) {
@@ -1131,9 +1217,10 @@ fn filter_allowed_models(
         .collect()
 }
 
-/// 给 model 的 display_name 拼上 provider 前缀，便于 ACP 客户端区分同一
-/// model id 在不同 provider 下的来源——多网关同模型时这是真正的消歧手段
-/// （"OpenAI: gpt-4o" vs "gw-b: gpt-4o"）。
+/// Prepend the provider name to the model's `display_name` so that ACP clients can
+/// distinguish the same model ID served by different providers — the only reliable
+/// disambiguation when multiple gateways expose the same model (e.g. "OpenAI: gpt-4o" vs
+/// "gw-b: gpt-4o").
 fn decorate_with_provider_display(mut model: ModelInfo, provider: &ProviderInfo) -> ModelInfo {
     let name = model
         .display_name
@@ -1143,20 +1230,22 @@ fn decorate_with_provider_display(mut model: ModelInfo, provider: &ProviderInfo)
     model
 }
 
-/// session id 生成：随机 UUID v4。
+/// Generates a session ID as a random UUID v4.
 ///
-/// `defect-acp` 的 `session/new` handler 在调用
-/// [`AgentCore::create_session`] 之前需要 `SessionId`（用于构造
-/// `AcpFsBackend`); this function is public,
-/// 让 acp / 测试都能拿到一致格式的 id。
+/// The `defect-acp` `session/new` handler needs a [`SessionId`] (to construct an
+/// `AcpFsBackend`) before calling [`AgentCore::create_session`]; this function is
+/// public so that both acp and tests can produce IDs in a consistent format.
 ///
-/// 用全局唯一的 UUID 而非进程内计数 + 时间戳：跨进程重启、并发实例都不撞，
-/// 也让下游（storage 落盘目录、可观测性 trace 关联）能拿它当稳定主键。
+/// Using a globally unique UUID instead of an in-process counter plus timestamp
+/// avoids collisions across process restarts and concurrent instances, and allows
+/// downstream consumers (storage on-disk directories, observability trace
+/// correlation) to use it as a stable primary key.
 pub fn new_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// 给 tracing span 用的 session id 短形：按字符取前 12 个。仅诊断用。
+/// Short session ID for tracing spans: takes the first 12 characters. Diagnostic use
+/// only.
 fn short_id(s: &str) -> &str {
     match s.char_indices().nth(12) {
         Some((idx, _)) => &s[..idx],
@@ -1164,9 +1253,10 @@ fn short_id(s: &str) -> &str {
     }
 }
 
-/// 把显式 `config.system_prompt` 与 session 启动期 hook 注入的 `append`（仅取
-/// 文本块）合并成单一 overlay 字符串，喂给 [`resolve_system_prompt`] 的
-/// `session_overlay` 参数。两者都空 ⇒ `None`（不注入空段）；都有 ⇒ `\n\n` 相隔。
+/// Merge the explicit `config.system_prompt` with the text-only content blocks from the
+/// session-start hook's `append` into a single overlay string for the `session_overlay`
+/// parameter of [`resolve_system_prompt`]. Returns `None` when both are empty (no empty
+/// segment injected); when both are present they are separated by `\n\n`.
 fn merge_session_overlay(system_prompt: Option<&str>, append: &[ContentBlock]) -> Option<String> {
     let appended: String = append
         .iter()

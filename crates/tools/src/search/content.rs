@@ -1,4 +1,4 @@
-//! `mode = content`：grep 文件内容并按 `path:line:text` 渲染。
+//! `mode = content`: grep file contents and render as `path:line:text`.
 
 use std::path::Path;
 use std::time::Instant;
@@ -17,7 +17,7 @@ use super::{SearchOutput, display_relative, elapsed_ms, make_completed, truncate
 #[derive(Debug)]
 struct FileBlock {
     relative_path: String,
-    /// (line_number, kind, text). kind: 'M' = match, '-' = context.
+    /// (line_number, kind, text) where kind is 'M' for a match line or '-' for context.
     lines: Vec<(u64, char, String)>,
     matches_in_file: u32,
 }
@@ -59,9 +59,9 @@ pub(super) fn run(
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
         }
-        // walker 给的是绝对路径；用户的 glob 通常是相对工作区写的
-        // （`crates/**/*.rs`），所以三种都试一下，命中即收。与 files
-        // 模式（[`super::files::run`]）保持一致。
+        // The walker yields absolute paths, but user globs are typically relative to the
+        // workspace (e.g. `crates/**/*.rs`), so try all three forms and accept any match.
+        // This matches the behavior of the files mode ([`super::files::run`]).
         if let Some(g) = &glob {
             let rel = path.strip_prefix(cwd).unwrap_or(path);
             let basename = path.file_name();
@@ -85,8 +85,8 @@ pub(super) fn run(
                 matches_in_file: 0,
             },
         };
-        // 单文件内的 search 失败（IO / 非 UTF-8 等）跳过——与 ripgrep 行为一致；
-        // 不让单个坏文件让整个 search 失败。
+        // Skip search failures in a single file (IO, non-UTF-8, etc.) — consistent with
+        // ripgrep behavior; don't let one bad file fail the entire search.
         let _ = searcher.search_path(&matcher, path, &mut sink);
 
         if sink.block.matches_in_file == 0 {
@@ -97,17 +97,17 @@ pub(super) fn run(
         blocks.push(sink.block);
 
         if matches_total >= head_limit {
-            // 让最后一个文件的额外 match 也保留（它们在 sink 里已经累积了），
-            // 然后 truncate 标记交给下面的 byte 截断逻辑。
+            // Keep extra matches from the last file (they are already accumulated in the
+            // sink), then let the byte truncation logic below set the truncated flag.
             truncated = matches_total > head_limit || walked < u64::MAX;
-            // 实际上 head_limit 触达后即可停。
+            // We can stop as soon as `head_limit` is reached.
             if matches_total >= head_limit {
                 break 'outer;
             }
         }
     }
 
-    // 触达上限（head_limit）时标记 truncated。
+    // Mark truncated when the head limit is reached.
     if matches_total >= head_limit {
         truncated = true;
     }
@@ -137,7 +137,8 @@ impl Sink for ContentSink {
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         let line_no = mat.line_number().unwrap_or(0);
         let text = decode_line(mat.bytes());
-        // multi_line 模式下 mat.bytes() 可能含多行——按 \n 拆开存成多条 match。
+        // In `multi_line` mode, `mat.bytes()` may contain multiple lines — split on `\n`
+        // and store each as a separate match.
         for (idx, line) in text.split('\n').enumerate() {
             if line.is_empty() && idx > 0 && text.ends_with('\n') {
                 continue;

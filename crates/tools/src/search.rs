@@ -1,7 +1,5 @@
-//! `search` 内置工具：在 workspace 内 grep 文件内容（content mode）或
-//! 列出匹配 glob 的文件（files mode）。
-//!
-//! Search tool — workspace file name (glob) and content (grep) search.
+//! Built-in `search` tool: grep file contents (content mode) or list files matching a
+//! glob (files mode) within the workspace.
 
 use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
@@ -37,21 +35,21 @@ mod tests;
 const TITLE_TRUNC: usize = 80;
 const MAX_MATCH_LINE: usize = 4 * 1024;
 
-/// `search` 工具的内置实现。无运行时状态——参数化的 schema 与上限在构造时
-/// 固化。
+/// Built-in implementation of the `search` tool. No runtime state — the parameterized
+/// schema and limits are fixed at construction time.
 pub struct SearchTool {
     schema: ToolSchema,
     config: SearchToolConfig,
 }
 
 impl SearchTool {
-    /// 用 [`SearchToolConfig::default`] 构造。
+    /// Constructs using [`SearchToolConfig::default`].
     pub fn new() -> Self {
         Self::from_config(&SearchToolConfig::default())
     }
 
-    /// 按 [`SearchToolConfig`] 构造。`max_head_limit` 会反映在 schema 的
-    /// `head_limit` 上限里。
+    /// Constructs from a [`SearchToolConfig`]. The `max_head_limit` is reflected in the
+    /// schema's `head_limit` upper bound.
     pub fn from_config(config: &SearchToolConfig) -> Self {
         let default_head_limit = config.default_head_limit.max(1);
         let max_head_limit = config.max_head_limit.max(default_head_limit);
@@ -271,8 +269,9 @@ async fn run_search(
         Err(e) => return ToolEvent::Failed(e),
     };
 
-    // 在阻塞线程跑 walker / grep——`ignore` + `grep-searcher` 都是同步 IO，
-    // 在主 runtime 上跑会阻塞其它 task。
+    // Run the walker/grep on a blocking thread — `ignore` and `grep-searcher` both
+    // perform synchronous I/O, so running them on the main runtime would block other
+    // tasks.
     let cancel_for_task = cancel.clone();
     let cwd_for_task = cwd.clone();
     let join = tokio::task::spawn_blocking(move || {
@@ -444,7 +443,8 @@ fn truncate_for_title(s: &str) -> String {
     format!("{truncated}…")
 }
 
-/// 把 `path` 转换成相对 `cwd` 的展示字符串；落在 cwd 之外时回退到绝对路径。
+/// Converts `path` to a display string relative to `cwd`; falls back to the absolute path
+/// if it lies outside `cwd`.
 pub(crate) fn display_relative(cwd: &Path, path: &Path) -> String {
     path.strip_prefix(cwd)
         .map(|p| p.to_string_lossy().into_owned())

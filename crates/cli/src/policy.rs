@@ -1,4 +1,4 @@
-//! 把 [`SandboxMode`] 翻成具体的 [`SandboxPolicy`] 实例。
+//! Maps a [`SandboxMode`] to a concrete [`SandboxPolicy`] instance.
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use defect_agent::policy::{
 };
 use defect_config::SandboxMode;
 
-/// 按 `[sandbox].mode` 选择 policy 实现。
+/// Selects the policy implementation based on `[sandbox].mode`.
 pub fn build_policy(mode: SandboxMode) -> Arc<dyn SandboxPolicy> {
     match mode {
         SandboxMode::ReadOnly => Arc::new(ReadOnlyPolicy),
@@ -18,33 +18,33 @@ pub fn build_policy(mode: SandboxMode) -> Arc<dyn SandboxPolicy> {
     }
 }
 
-/// 全部 sandbox 模式，按固定展示顺序（read-only → ask-writes → open →
-/// deny-all）。`current` 标记当前选中项，映射到 ACP `SessionModeState`。
+/// All sandbox modes in a fixed display order (read-only → ask-writes → open → deny-all).
+/// `current` marks the currently selected item, mapping to the ACP `SessionModeState`.
 ///
-/// 暴露**全部** 4 个模式给客户端（`session/set_mode` 可在它们之间切换）。
-/// mode id 用 [`SandboxMode::as_str`]——与配置文件里 `[sandbox].mode` 取值
-/// 同一套字符串，单一真相源。
+/// Exposes **all** 4 modes to the client (`session/set_mode` can switch between them).
+/// Mode IDs use [`SandboxMode::as_str`] — the same strings as the `[sandbox].mode` value
+/// in the config file, providing a single source of truth.
 pub fn build_mode_catalog(current: SandboxMode) -> ModeCatalog {
     let modes = [
         (
             SandboxMode::ReadOnly,
             "Read-only",
-            "只放行只读工具；写/执行/网络一律拒绝。",
+            "Allow read-only tools only; deny all writes, execution, and network access.",
         ),
         (
             SandboxMode::AskWrites,
             "Ask before writes",
-            "只读直接放行；写/执行/网络逐次询问，可选择本次或永久允许。",
+            "Allow reads directly; ask for each write, execution, and network action, with the choice to allow once or always.",
         ),
         (
             SandboxMode::Open,
             "Open",
-            "一切放行，不询问。适合受信环境 / 全自动运行。",
+            "Allow everything without asking. Suitable for trusted environments / fully automated runs.",
         ),
         (
             SandboxMode::DenyAll,
             "Deny all",
-            "一切拒绝。用于演练 / 只看不动。",
+            "Deny everything. For dry runs / look-but-don't-touch.",
         ),
     ]
     .into_iter()
@@ -56,8 +56,9 @@ pub fn build_mode_catalog(current: SandboxMode) -> ModeCatalog {
     })
     .collect::<Vec<_>>();
 
-    // 不变量：`current` 必命中上面四条之一（SandboxMode 是封闭枚举），故
-    // `ModeCatalog::new` 恒返回 `Some`——拿不到就是装配 bug，fail loud。
+    // Invariant: `current` must match one of the four modes above (`SandboxMode` is a
+    // closed enum), so `ModeCatalog::new` always returns `Some` — if it doesn't, that's a
+    // build bug; fail loud.
     ModeCatalog::new(modes, current.as_str())
         .expect("mode catalog must contain the current sandbox mode")
 }

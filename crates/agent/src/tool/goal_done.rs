@@ -1,15 +1,21 @@
-//! `goal_done`：AI 声明目标已达成的工具（`--goal` 目标驱动循环）。
+//! Tool used by the AI to declare that a goal has been reached (for the `--goal`
+//! goal-driven loop).
 //!
-//! `--goal` 模式下，agent 多轮自主跑直到目标达成。模型认为目标达成时调用本工具，
-//! 它把 [`crate::session::GoalState`] 标记为 reached。之后某轮模型不再调任何工具、
-//! 自愿停止时，`goal-gate` hook（[`crate::hooks::builtin::GoalGate`]）在
-//! `before_turn_end` 读到 reached → 放行结束循环；未 reached → 续命注入"继续工作"。
+//! In `--goal` mode, the agent runs autonomously for multiple turns until the goal is
+//! reached. When the model decides the goal is achieved, it calls this tool, which marks
+//! [`crate::session::GoalState`] as `reached`. On a later turn where the model stops
+//! calling tools and voluntarily halts, the `goal-gate` hook
+//! ([`crate::hooks::builtin::GoalGate`]) reads the state in `before_turn_end`: if
+//! `reached`, it allows the loop to end; otherwise, it injects a "continue working"
+//! message to keep the agent going.
 //!
-//! Design note: the turn that calls this tool **does carry tool_use**, the turn
-//! 不会立即停（turn loop 见 `session/turn.rs`）——模型通常在调完 goal_done、确认无
-//! 更多事可做后，下一轮自然停止，那时 goal-gate 才放行。
+//! Design note: the turn that calls this tool **does carry tool_use**, so the turn does
+//! not end immediately (see the turn loop in `session/turn.rs`). The model typically
+//! calls `goal_done`, confirms there is nothing more to do, and then stops naturally on
+//! the next turn, at which point `goal-gate` allows the loop to exit.
 //!
-//! `safety_hint = ReadOnly`：只写内存里的标志位，不碰文件 / 网络 / 子进程。
+//! `safety_hint = ReadOnly`: only writes an in-memory flag; does not touch files,
+//! network, or subprocesses.
 
 use std::pin::Pin;
 
@@ -24,11 +30,12 @@ use crate::tool::{
     SafetyClass, Tool, ToolCallDescription, ToolContext, ToolEvent, ToolSchema, ToolStream,
 };
 
-/// `goal_done` 工具的名字。
+/// The name of the `goal_done` tool.
 pub const GOAL_DONE_TOOL_NAME: &str = "goal_done";
 
-/// `goal_done` 工具。`--goal` 装配期注册；无状态（标志位在 [`ToolContext::goal`]
-/// 的共享 `GoalState` 上，本工具只调 `mark_reached`）。
+/// The `goal_done` tool. Registered during `--goal` assembly; stateless (the flag lives
+/// on the shared `GoalState` in [`ToolContext::goal`], this tool only calls
+/// `mark_reached`).
 pub struct GoalDoneTool {
     schema: ToolSchema,
 }
@@ -94,8 +101,9 @@ impl Tool for GoalDoneTool {
     }
 
     fn execute(&self, args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream {
-        // 标志位置位：非目标模式（goal=None）下也不报错——工具不该被注册，但万一被
-        // 调到，安静地当成 no-op 确认，避免 turn 崩。
+        // Set the flag: even in non-goal mode (goal=None), do not error — the tool should
+        // not be registered, but if it is somehow invoked, silently treat it as a no-op
+        // to avoid crashing the turn.
         let goal = ctx.goal.clone();
         let parsed: GoalDoneArgs = serde_json::from_value(args).unwrap_or_default();
         let fut = async move {

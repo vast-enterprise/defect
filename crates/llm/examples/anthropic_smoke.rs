@@ -1,18 +1,18 @@
-//! Anthropic provider 真端点冒烟。
+//! Anthropic provider real endpoint smoke test.
 //!
-//! 用法：
+//! Usage:
 //!
 //! ```bash
 //! ANTHROPIC_API_KEY=sk-ant-... \
 //!   cargo run -p defect-llm --example anthropic_smoke -- [scenario]
 //! ```
 //!
-//! `[scenario]` ∈ `list-models | text | tool | thinking | all`，默认 `all`。
+//! `[scenario]` ∈ `list-models | text | tool | thinking | all`, defaults to `all`.
 //!
-//! 可选 env：
-//! - `ANTHROPIC_BASE_URL`：覆盖默认 `https://api.anthropic.com`
-//! - `ANTHROPIC_MODEL`：覆盖默认模型 `claude-sonnet-4-5`
-//! - `RUST_LOG=defect_llm=debug` 打开协议层调试日志
+//! Optional env:
+//! - `ANTHROPIC_BASE_URL`: overrides default `https://api.anthropic.com`
+//! - `ANTHROPIC_MODEL`: overrides default model `claude-sonnet-4-5`
+//! - `RUST_LOG=defect_llm=debug` enables protocol-level debug logging
 
 mod common;
 
@@ -191,7 +191,8 @@ async fn scenario_thinking(
         return Err("empty assistant text".to_string());
     }
     if hits.thought_text.trim().is_empty() {
-        // 模型可能没启用 thinking——明确 skip 而不是 fail，避免误报。
+        // The model may not have thinking enabled — explicitly skip rather than fail to
+        // avoid false positives.
         return Ok(Some(format!(
             "no thinking text emitted on model {model}; ensure the model supports extended thinking"
         )));

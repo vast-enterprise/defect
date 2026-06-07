@@ -5,9 +5,12 @@
 //! via the session-level persistent event pump — no second `session/prompt` needed.
 //!
 //! Setup:
-//! - 自定义工具 `bg_tool`：调 `ctx.background.spawn` 起一个立即完成的后台任务，**立刻**返回。
-//! - 脚本化 provider：turn 1 调 `bg_tool` 后 EndTurn；其后每轮发一段可识别文本 + EndTurn。
-//! - 客户端只发**一次** prompt，然后被动收通知——断言能收到含后台答案标记的 AgentMessageChunk。
+//! - Custom tool `bg_tool`: calls `ctx.background.spawn` to start a background task that
+//!   completes immediately, returning **immediately**.
+//! - Scripted provider: turn 1 calls `bg_tool` then EndTurn; each subsequent turn sends a
+//!   recognizable text fragment + EndTurn.
+//! - Client sends only **one** prompt, then passively receives notifications — asserts
+//!   that it receives an `AgentMessageChunk` containing the background answer marker.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -34,7 +37,8 @@ use futures::future::BoxFuture;
 use futures::stream;
 use tokio_util::sync::CancellationToken;
 
-/// 后台答案里嵌一个独特标记，客户端据它确认"来自自主续转 turn 的事件确实到达"。
+/// Embed a unique marker in the background answer so the client can confirm that events
+/// from the autonomous turn continuation have arrived.
 const MARKER: &str = "BG-MARKER-7f3a";
 
 struct ChannelTransport<R: Role> {
@@ -80,8 +84,10 @@ fn caps() -> Capabilities {
     }
 }
 
-/// turn 1：调 bg_tool 后 Stop=ToolUse；之后每轮：发一段含 MARKER 的文本 + EndTurn。
-/// 自主续转 turn（携带后台答案）跑的就是"之后"分支——它的 AgentMessageChunk 含 MARKER。
+/// Turn 1: after calling `bg_tool`, the stop reason is `ToolUse`. In subsequent turns,
+/// send a text chunk containing `MARKER` followed by `EndTurn`. The autonomous
+/// continuation turn (carrying the background answer) follows the "subsequent" branch —
+/// its `AgentMessageChunk` contains `MARKER`.
 struct BgWireProvider {
     calls: Mutex<u32>,
 }
@@ -134,8 +140,9 @@ impl LlmProvider for BgWireProvider {
                     }),
                 ]
             } else {
-                // 自主续转 turn：把 MARKER 回成 assistant 文本——它会经 pump 投成
-                // AgentMessageChunk 送到客户端。
+                // Autonomous turn continuation: convert MARKER back into assistant text —
+                // it will be turned into an `AgentMessageChunk` by the pump and sent to
+                // the client.
                 vec![
                     Ok(ProviderChunk::MessageStart {
                         id: "m2".to_string(),
@@ -155,7 +162,8 @@ impl LlmProvider for BgWireProvider {
     }
 }
 
-/// 后台 spawn 工具：起一个立即完成、结果含 MARKER 的后台任务，立刻返回。
+/// Background spawn tool: spawns a background task that completes immediately and returns
+/// a result containing MARKER.
 struct BgTool {
     schema: ToolSchema,
 }
@@ -199,8 +207,10 @@ impl Tool for BgTool {
     }
 }
 
-/// 客户端只发一次 prompt；断言它随后被动收到由自主续转 turn 产生的、含 MARKER 的
-/// AgentMessageChunk——证明主动续转穿过 ACP 协议层送达客户端。
+/// The client sends a single prompt; assert that it then passively receives an
+/// `AgentMessageChunk` containing `MARKER`, produced by an autonomous turn continuation —
+/// proving that active turn continuation reaches the client through the ACP protocol
+/// layer.
 #[tokio::test]
 async fn background_result_reaches_client_via_autonomous_turn() {
     let provider = Arc::new(BgWireProvider {
@@ -261,7 +271,8 @@ async fn background_result_reaches_client_via_autonomous_turn() {
                     .send_request(NewSessionRequest::new(cwd))
                     .block_task()
                     .await?;
-                // 只发一次 prompt——turn 1 调 bg_tool 起后台任务后即结束。
+                // Send only one prompt — turn 1 calls `bg_tool` to start the background
+                // task and then ends.
                 let _ = cx
                     .send_request(PromptRequest::new(
                         new_session.session_id,
@@ -275,8 +286,9 @@ async fn background_result_reaches_client_via_autonomous_turn() {
         .await
         .expect("client connection completed");
 
-    // prompt 已 respond，但自主续转 turn 是 prompt respond **之后**异步发生的。
-    // 轮询通知，等含 MARKER 的 AgentMessageChunk 到达（带超时上限）。
+    // The prompt has responded, but the autonomous turn continuation happens
+    // asynchronously *after* the prompt response. Poll for notifications until an
+    // `AgentMessageChunk` containing `MARKER` arrives (with a timeout).
     let mut saw_marker = false;
     for _ in 0..200 {
         {

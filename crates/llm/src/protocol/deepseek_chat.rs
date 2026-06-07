@@ -1,7 +1,8 @@
-//! DeepSeek Chat Completions 响应兼容层。
+//! Compatibility layer for DeepSeek Chat Completions responses.
 //!
-//! 请求侧复用 OpenAI Chat Completions 编码；只在响应 usage 字段上补
-//! DeepSeek 的私货：`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`。
+//! The request side reuses the OpenAI Chat Completions encoding; only the response
+//! `usage` field is augmented with DeepSeek-specific fields: `prompt_cache_hit_tokens` /
+//! `prompt_cache_miss_tokens`.
 
 use defect_agent::llm::{ProviderChunk, ProviderError, Usage};
 use futures::Stream;
@@ -11,9 +12,9 @@ use tokio_util::sync::CancellationToken;
 use super::openai_chat;
 use crate::wire::openai::components as wire;
 
-/// DeepSeek SSE 流 → ProviderChunk 流。
+/// DeepSeek SSE stream → ProviderChunk stream.
 ///
-/// 复用 OpenAI-compatible 状态机，只改 usage 提取逻辑。
+/// Reuses the OpenAI-compatible state machine, only changing the usage extraction logic.
 pub fn decode_stream(
     sse: SseEventStream,
     cancel: CancellationToken,
@@ -39,9 +40,10 @@ fn usage_from_deepseek_wire(
                 .and_then(|details| details.cached_tokens)
                 .and_then(|value| u64::try_from(value).ok())
         }),
-        // DeepSeek 文档中的 `prompt_cache_miss_tokens` 表示未命中的 prompt
-        // token 数，不等价于 Anthropic `cache_creation_input_tokens` 的
-        // "写入缓存成本"；这里不混用字段。
+        // DeepSeek's `prompt_cache_miss_tokens` represents the number of cache-missed
+        // prompt tokens, which is not equivalent to Anthropic's
+        // `cache_creation_input_tokens` ("write-to-cache cost"); we do not conflate the
+        // fields here.
         cache_creation_input_tokens: None,
     }
 }

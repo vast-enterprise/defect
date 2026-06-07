@@ -75,14 +75,14 @@ fn composite_session_overrides_process() {
     ) as Arc<dyn ToolRegistry>;
     let session = Arc::new(
         StaticToolRegistry::builder()
-            .insert(Arc::new(StubTool::new("fs"))) // override
+            .insert(Arc::new(StubTool::new("fs"))) // overrides the process registry's "fs" entry
             .insert(Arc::new(StubTool::new("mcp.linear")))
             .build(),
     ) as Arc<dyn ToolRegistry>;
 
     let comp = CompositeRegistry::new(session, process);
     let names: Vec<String> = comp.schemas().into_iter().map(|s| s.name).collect();
-    // session 在前；process 中重名的 fs 被剔除
+    // session first; duplicate `fs` from process is removed
     assert_eq!(names, vec!["fs", "mcp.linear", "grep"]);
     assert!(comp.get("fs").is_some());
     assert!(comp.get("grep").is_some());

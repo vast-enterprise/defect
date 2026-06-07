@@ -1,10 +1,10 @@
-//! DeepSeek provider。
+//! DeepSeek provider.
 //!
-//! DeepSeek 走 OpenAI Chat Completions 兼容协议，所以这里复用
-//! [`super::openai::OpenAiProvider`] 处理 chat / transport / 协议解码。
-//! 唯一单独 override 的是 `GET /models`：DeepSeek 返回的 model schema
-//! 缺少 OpenAI OAS 中要求的 `created` 字段，不能直接复用 OpenAI 生成的
-//! wire 类型。
+//! DeepSeek uses the OpenAI Chat Completions compatible protocol, so we reuse
+//! [`super::openai::OpenAiProvider`] for chat, transport, and protocol decoding.
+//! The only thing we override is `GET /models`: DeepSeek's model schema lacks the
+//! `created` field required by the OpenAI OAS, so we cannot directly reuse the
+//! wire types generated for OpenAI.
 
 use std::collections::HashMap;
 use std::env;
@@ -33,16 +33,16 @@ const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 const API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
 const BASE_URL_ENV: &str = "DEEPSEEK_BASE_URL";
 
-/// DeepSeek provider 配置。
+/// DeepSeek provider configuration.
 #[derive(Debug, Default, Clone)]
 pub struct DeepSeekConfig {
     pub api_key: Option<String>,
-    /// 覆盖默认的 `DEEPSEEK_API_KEY` 环境变量名。语义同
-    /// [`super::openai::OpenAiConfig::api_key_env`]。
+    /// Overrides the default `DEEPSEEK_API_KEY` environment variable name. Semantics are
+    /// the same as [`super::openai::OpenAiConfig::api_key_env`].
     pub api_key_env: Option<String>,
     pub base_url: Option<String>,
-    /// `reasoning_effort` 覆盖；语义同
-    /// [`super::openai::OpenAiConfig::reasoning_effort`]。
+    /// `reasoning_effort` override; semantics are the same as
+    /// [`super::openai::OpenAiConfig::reasoning_effort`].
     pub reasoning_effort: Option<ReasoningEffort>,
     pub http: HttpStackConfig,
 }
@@ -80,7 +80,7 @@ impl DeepSeekConfig {
     }
 }
 
-/// DeepSeek provider。
+/// DeepSeek provider.
 #[derive(Debug)]
 pub struct DeepSeekProvider {
     inner: Arc<OpenAiProvider>,
@@ -90,7 +90,8 @@ pub struct DeepSeekProvider {
 impl DeepSeekProvider {
     /// # Errors
     ///
-    /// 缺凭证或底层 HTTP 客户端初始化失败时返回错误。
+    /// Returns an error if credentials are missing or the underlying HTTP client fails to
+    /// initialize.
     pub fn new(config: DeepSeekConfig) -> Result<Self, ProviderError> {
         let openai_cfg = OpenAiConfig {
             api_key: config.resolve_api_key(),
@@ -190,7 +191,7 @@ impl MakeRequest for DeepSeekListModelsRequest {
 
     /// # Errors
     ///
-    /// 此实现不会构造请求错误。
+    /// This implementation does not construct request errors.
     async fn make_request(self) -> Result<Request<toac::body::Body>, Self::Error> {
         let mut builder = Request::builder().method(http::Method::GET).uri("/models");
         builder = builder.header(
@@ -221,7 +222,8 @@ impl ParseResponse for DeepSeekModelsResponse {
 
     /// # Errors
     ///
-    /// 响应体不是合法 JSON，或与 DeepSeek `/models` 返回结构不匹配时失败。
+    /// Returns an error if the response body is not valid JSON or does not match the
+    /// structure returned by the DeepSeek `/models` endpoint.
     async fn parse_response<B>(response: http::Response<B>) -> Result<Self, Self::Error>
     where
         B: http_body::Body<Data = bytes::Bytes> + Send + Sync + 'static,

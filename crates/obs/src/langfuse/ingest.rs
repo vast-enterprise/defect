@@ -1,14 +1,17 @@
-//! Langfuse 批量上报器。
+//! Langfuse batch uploader.
 //!
-//! 形状：`enqueue`（非阻塞）→ 有界 mpsc → 后台 flush 任务（攒满 N 条或隔 T 秒）
-//! → 复用 `defect-http` 的 [`HttpStack`] POST `/api/public/ingestion`。
+//! Pipeline: `enqueue` (non-blocking) → bounded mpsc → background flush task (batch on N
+//! items or every T seconds)
+//! → reuses `defect-http`'s [`HttpStack`] POST `/api/public/ingestion`.
 //!
-//! ## 可丢弃降级（硬约束）
+//! ## Drop-safe degradation (hard constraint)
 //!
-//! Langfuse 是旁路遥测，**任何故障都不得影响 agent 主循环**：
-//! - `enqueue` 用 `try_send`，channel 满即**丢弃并计数告警**，绝不阻塞；
-//! - POST 失败只 `warn!`，**不重试**（避免堆积反压）；
-//! - 207（partial success）读 body 把 errors 记进日志，但不影响后续。
+//! Langfuse is out-of-band telemetry; **no failure may affect the agent's main loop**:
+//! - `enqueue` uses `try_send`; when the channel is full, **drop and count a warning**,
+//!   never block;
+//! - POST failures only `warn!`, **no retry** (to avoid backpressure buildup);
+//! - On 207 (partial success), read the body and log errors, but do not affect subsequent
+//!   processing.
 //!
 //! Langfuse ingestion — batch upload of traces and observations.
 
@@ -28,42 +31,45 @@ use tower::ServiceExt;
 
 use super::model::{IngestionBatch, IngestionEvent, IngestionResponse};
 
-/// 后台任务的指令。
+/// Commands for the background task.
 enum Cmd {
-    /// 一条待上报事件。
+    /// An event to be reported.
     Event(Box<IngestionEvent>),
-    /// 立即冲刷缓冲，完成后 ack（用于退出前 flush）。
+    /// Flush the buffer immediately and signal completion via the oneshot (used for
+    /// flushing before shutdown).
     Flush(oneshot::Sender<()>),
 }
 
-/// 上报器句柄。`Clone` 廉价（内部 `Arc`）——每 session 的 observer 各持一份。
+/// Ingest handle. `Clone` is cheap (inner `Arc`) — each session's observer holds one.
 #[derive(Clone)]
 pub struct LangfuseIngest {
     tx: mpsc::Sender<Cmd>,
-    /// 因 channel 满而丢弃的事件累计数。仅用于节流告警。
+    /// Cumulative count of events dropped due to a full channel. Used only for throttling
+    /// alerts.
     dropped: Arc<AtomicU64>,
 }
 
-/// 上报器构造配置。
+/// Configuration for building the reporter.
 pub struct IngestConfig {
-    /// 已建好的 HTTP 栈（与 LLM provider 共用，含超时/重试/代理/UA/trace）。
+    /// Pre-built HTTP stack (shared with the LLM provider, includes
+    /// timeout/retry/proxy/UA/trace).
     pub http: HttpStack,
-    /// Langfuse host，如 `https://cloud.langfuse.com`（不带尾斜杠）。
+    /// Langfuse host, e.g. `https://cloud.langfuse.com` (without trailing slash).
     pub host: String,
-    /// 公钥。
+    /// Public key.
     pub public_key: String,
-    /// 私钥。
+    /// Secret key.
     pub secret_key: String,
-    /// 攒满多少条立即冲刷。
+    /// Flush when the batch reaches this many items.
     pub max_batch: usize,
-    /// 周期冲刷间隔。
+    /// Periodic flush interval.
     pub flush_interval: Duration,
-    /// 入队 channel 容量（背压边界；满了丢弃）。
+    /// Capacity of the enqueue channel (backpressure boundary; drops when full).
     pub queue_capacity: usize,
 }
 
 impl LangfuseIngest {
-    /// 启动后台 flush 任务，返回句柄。
+    /// Spawns the background flush task and returns a handle.
     pub fn spawn(config: IngestConfig) -> Self {
         let (tx, rx) = mpsc::channel(config.queue_capacity);
         let dropped = Arc::new(AtomicU64::new(0));
@@ -87,11 +93,12 @@ impl LangfuseIngest {
         Self { tx, dropped }
     }
 
-    /// 非阻塞入队。channel 满即丢弃并计数——绝不阻塞调用方（agent 主循环）。
+    /// Non‑blocking enqueue. Drops and counts when the channel is full — never blocks the
+    /// caller (agent main loop).
     pub fn enqueue(&self, event: IngestionEvent) {
         if self.tx.try_send(Cmd::Event(Box::new(event))).is_err() {
             let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-            // 节流告警：每丢够一批才 warn 一次，避免日志风暴。
+            // Throttle warnings: only warn once per batch of drops to avoid log storms.
             if n.is_multiple_of(256) {
                 tracing::warn!(
                     dropped_total = n,
@@ -101,9 +108,11 @@ impl LangfuseIngest {
         }
     }
 
-    /// 冲刷缓冲并等待完成。用于 session 流结束 / 进程退出前尽力送达。
+    /// Flushes the buffer and waits for completion. Used for best-effort delivery before
+    /// a session stream ends or the process exits.
     ///
-    /// 后台任务已退出（接收端关闭）时直接返回——尽力而为，不保证送达。
+    /// Returns immediately if the background task has already exited (receiver closed) —
+    /// best-effort, no delivery guarantee.
     pub async fn flush(&self) {
         let (ack_tx, ack_rx) = oneshot::channel();
         if self.tx.send(Cmd::Flush(ack_tx)).await.is_ok() {
@@ -112,7 +121,7 @@ impl LangfuseIngest {
     }
 }
 
-/// 后台 flush 任务的状态。
+/// State of the background flush task.
 struct Worker {
     rx: mpsc::Receiver<Cmd>,
     http: HttpStack,
@@ -141,7 +150,7 @@ impl Worker {
                         self.send_batch(&mut buf).await;
                         let _ = ack.send(());
                     }
-                    // 所有 sender 已 drop：冲刷残留后退出。
+                    // All senders dropped: flush remaining data and exit.
                     None => {
                         self.send_batch(&mut buf).await;
                         break;
@@ -154,7 +163,7 @@ impl Worker {
         }
     }
 
-    /// 把当前缓冲打包成一次请求发出。空缓冲是 no-op。
+    /// Sends the current buffer as a single request. An empty buffer is a no-op.
     async fn send_batch(&self, buf: &mut Vec<IngestionEvent>) {
         if buf.is_empty() {
             return;
@@ -182,7 +191,8 @@ impl Worker {
             }
         };
 
-        // HttpStack 是 Clone 的 tower service——克隆出独立副本走 oneshot。
+        // `HttpStack` is a cloneable tower service — clone an independent copy and call
+        // `oneshot` on it.
         match self.http.clone().oneshot(request).await {
             Ok(resp) => self.inspect_response(resp).await,
             Err(err) => {
@@ -191,13 +201,15 @@ impl Worker {
         }
     }
 
-    /// 检查响应。
+    /// Inspect the response.
     ///
-    /// Langfuse ingestion 端点对批量请求**始终返回 207 Multi-Status**——逐条结果
-    /// 在 body 的 `successes` / `errors` 里。所以：
-    /// - **2xx（含 207）**：解析 body，仅当 `errors` **非空**时 warn（部分失败）；
-    ///   全成功（errors 空）静默返回——这是正常路径，不是错误。
-    /// - **非 2xx**（401/403/5xx 等真错误）：原样 warn。
+    /// The Langfuse ingestion endpoint **always returns 207 Multi-Status** for batch
+    /// requests, with per-item results in the body's `successes` / `errors` fields.
+    /// Therefore:
+    /// - **2xx (including 207)**: parse the body; warn only if `errors` is **non-empty**
+    ///   (partial failure). If `errors` is empty (all succeeded), return silently — this
+    ///   is the normal path, not an error.
+    /// - **Non-2xx** (401/403/5xx etc., genuine errors): warn as-is.
     async fn inspect_response(&self, resp: http::Response<hyper::body::Incoming>) {
         let status = resp.status();
         let body = match resp.into_body().collect().await {
@@ -209,10 +221,10 @@ impl Worker {
         };
 
         if status.is_success() {
-            // 解析逐条结果，只在真有失败条目时告警。
+            // Parse individual results; warn only when there are actual failures.
             match serde_json::from_slice::<IngestionResponse>(&body) {
                 Ok(parsed) if parsed.errors.is_empty() => {
-                    // 正常路径：全部成功，静默。
+                    // Normal path: all succeeded, silent.
                     tracing::trace!(
                         succeeded = parsed.successes.len(),
                         "langfuse: ingestion batch accepted"
@@ -227,7 +239,8 @@ impl Worker {
                     );
                 }
                 Err(err) => {
-                    // 2xx 但 body 不是预期结构——记一条 debug，不当错误处理。
+                    // 2xx but body is not the expected structure — log a debug line, do
+                    // not treat as an error.
                     let snippet = String::from_utf8_lossy(&body);
                     let snippet = snippet.chars().take(512).collect::<String>();
                     tracing::debug!(%status, %err, body = %snippet, "langfuse: unrecognized ingestion response");
@@ -236,7 +249,7 @@ impl Worker {
             return;
         }
 
-        // 非 2xx：真错误（鉴权失败 / 服务端错误等）。
+        // Non-2xx: real error (auth failure / server error, etc.).
         let snippet = String::from_utf8_lossy(&body);
         let snippet = snippet.chars().take(1024).collect::<String>();
         tracing::warn!(%status, body = %snippet, "langfuse: ingestion request failed");

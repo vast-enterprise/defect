@@ -1,19 +1,21 @@
-//! session 级能力配置与启动期裁决。
+//! Session-level capability configuration and startup-time decision.
 //!
 //! Capability management for sessions.
 //!
-//! `WebSearchCapabilityMode` 表达「这个 session 要不要走 provider-hosted
-//! web search」：
-//! - `Delegate`：走 provider-hosted web search（adapter 不支持时启动失败）
-//! - `Disabled`：不暴露 hosted web search
+//! `WebSearchCapabilityMode` controls whether this session uses provider-hosted web
+//! search:
+//! - `Delegate`: use provider-hosted web search (fails at startup if the adapter does not
+//!   support it)
+//! - `Disabled`: do not expose hosted web search
 //!
-//! 注意：本地 grep/glob 工具（`search` tool）**不在** capability 层管理，
-//! 由 `[tools.search].enabled` 单独决定，与 `web_search` 完全独立。两者可
-//! 同时启用，LLM 会同时看到 hosted `web_search` 与本地 `search` 两个工具。
+//! Note: the local grep/glob tool (`search` tool) is **not** managed at the capability
+//! layer; it is controlled independently by `[tools.search].enabled` and is completely
+//! separate from `web_search`. Both can be enabled simultaneously, and the LLM will see
+//! both the hosted `web_search` and the local `search` tools.
 //!
-//! 决策时机：session 启动期一次性。`(provider, mode)` 在 session 生命
-//! 周期内不变，turn loop 直接复用 session 上记好的 [`HostedCapabilities`]
-//! 标记。
+//! Decision timing: once at session startup. The `(provider, mode)` pair is fixed for the
+//! session lifetime; the turn loop directly reuses the [`HostedCapabilities`] flag stored
+//! on the session.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,22 +23,23 @@ use crate::llm::HostedCapabilities;
 
 use super::SessionInitError;
 
-/// hosted web search 能力开关。
+/// Toggle for hosted web search capability.
 ///
-/// TOML 形态：`"delegate"` / `"disabled"`。
+/// TOML representation: `"delegate"` / `"disabled"`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchCapabilityMode {
-    /// 委托给 provider-hosted web search。provider 不支持时 session 启动失败。
+    /// Delegate to provider-hosted web search. Session startup fails if the provider does
+    /// not support it.
     Delegate,
-    /// 不暴露 hosted web search。
+    /// Do not expose hosted web search.
     #[default]
     Disabled,
 }
 
-/// 单条 capability 的配置。预留出口给后续 `image_generation` /
-/// `code_execution` 等同形态 capability。
+/// Configuration for a single capability. Reserved for future capabilities of the same
+/// form, such as `image_generation` / `code_execution`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebSearchCapabilityConfig {
@@ -44,19 +47,20 @@ pub struct WebSearchCapabilityConfig {
 }
 
 impl WebSearchCapabilityConfig {
-    /// 用单个 mode 构造。跨 crate 调用方需要这个入口，因为本结构体
-    /// `#[non_exhaustive]` 后不能直接 struct literal。
+    /// Constructs from a single `mode`. Cross-crate callers need this entry point because
+    /// the struct is `#[non_exhaustive]` and cannot be built with a struct literal
+    /// directly.
     #[must_use]
     pub const fn new(mode: WebSearchCapabilityMode) -> Self {
         Self { mode }
     }
 }
 
-/// session 级能力配置入口。
+/// Entry point for session-level capability configuration.
 ///
-/// 由 `defect-config` 在 `EffectiveConfig.capabilities` 上构造，并叠加
-/// `providers.<p>.capabilities` 覆写，最后在 [`AgentCore::create_session`][crate::session::AgentCore::create_session]
-/// 装配时传给 session。
+/// Constructed by `defect-config` on `EffectiveConfig.capabilities`, overlaid with
+/// `providers.<p>.capabilities` overrides, and finally passed to the session during
+/// assembly in [`AgentCore::create_session`][crate::session::AgentCore::create_session].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCapabilitiesConfig {
@@ -64,33 +68,34 @@ pub struct SessionCapabilitiesConfig {
 }
 
 impl SessionCapabilitiesConfig {
-    /// 用单条 [`WebSearchCapabilityConfig`] 构造。跨 crate 调用方（例如
-    /// `defect-config`）需要这个入口，因为本结构体 `#[non_exhaustive]`
-    /// 后不能直接 struct literal。
+    /// Construct from a single [`WebSearchCapabilityConfig`]. Cross-crate callers (e.g.
+    /// `defect-config`) need this entry point because the struct is `#[non_exhaustive]`
+    /// and cannot be built with a struct literal directly.
     #[must_use]
     pub const fn with_web_search(web_search: WebSearchCapabilityConfig) -> Self {
         Self { web_search }
     }
 }
 
-/// session 启动期裁决出的运行时能力。
+/// Runtime capabilities resolved at session startup.
 ///
-/// 与 [`SessionCapabilitiesConfig`] 区分：前者是用户配置（意图），这里
-/// 是与 provider [`HostedCapabilities`] 交叉后得到的实际启用集合。
+/// Distinct from [`SessionCapabilitiesConfig`]: that is the user's configuration
+/// (intent), while this is the actual enabled set after intersecting with the provider's
+/// [`HostedCapabilities`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResolvedSessionCapabilities {
-    /// 最终决定本 session 是否走 hosted web search。
-    /// `Delegate × supported` → `true`；其余情况 → `false`。
+    /// Whether this session uses hosted web search.
+    /// `Delegate × supported` → `true`; otherwise → `false`.
     pub hosted: HostedCapabilities,
 }
 
 impl ResolvedSessionCapabilities {
-    /// 一次性裁决：把 `(mode, provider hosted)` 映射到结果。
+    /// Resolve once: map `(mode, provider_hosted)` to the result.
     ///
     /// # Errors
     ///
-    /// `Delegate` 但 provider 不支持 hosted web search 时返回
-    /// [`SessionInitError::CapabilityUnsatisfied`]。
+    /// Returns [`SessionInitError::CapabilityUnsatisfied`] when the mode is `Delegate`
+    /// but the provider does not support hosted web search.
     pub fn resolve(
         config: SessionCapabilitiesConfig,
         provider_hosted: HostedCapabilities,

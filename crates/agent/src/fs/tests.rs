@@ -16,7 +16,8 @@ fn missing_parent_resolves_by_walking_up() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
-    // 父目录不存在——向上走到 workspace root 再拼回缺失段。
+    // Parent directory does not exist — walk up to the workspace root and rejoin the
+    // missing segment.
     let resolved = resolve_workspace_path(root, Path::new("missing_dir/sub/file.txt")).unwrap();
     let root_canon = std::fs::canonicalize(root).unwrap();
     let expected = root_canon.join("missing_dir/sub/file.txt");
@@ -28,7 +29,8 @@ fn parent_canonicalize_blocks_traversal() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
-    // workspace_root/.. 是上一层目录——canonicalize 父目录后绝对在 workspace 之外。
+    // `workspace_root/..` is the parent directory — after canonicalizing the parent, it
+    // is guaranteed to be outside the workspace.
     let err = resolve_workspace_path(root, Path::new("../escape.txt")).unwrap_err();
     assert!(matches!(err, FsError::NotPermitted(_)), "got {err:?}");
 }
@@ -38,7 +40,7 @@ fn write_target_may_not_exist() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
-    // 目标文件不存在但父目录存在 → 应当成功
+    // Target file does not exist but its parent directory does → should succeed
     let resolved = resolve_workspace_path(root, Path::new("new.txt")).unwrap();
     let expected = std::fs::canonicalize(root).unwrap().join("new.txt");
     assert_eq!(resolved, expected);
@@ -51,7 +53,7 @@ fn symlink_pointing_outside_workspace_is_blocked() {
         let dir = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let root = dir.path();
-        // workspace/escape -> /tmp/other-tempdir/
+        // Symlink: workspace/escape -> /tmp/other-tempdir/
         std::os::unix::fs::symlink(other.path(), root.join("escape")).unwrap();
 
         let err = resolve_workspace_path(root, Path::new("escape/file.txt")).unwrap_err();

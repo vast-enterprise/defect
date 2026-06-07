@@ -1,7 +1,9 @@
-//! 厂商层：实现 [`defect_agent::llm::LlmProvider`]。
+//! Vendor layer: implements [`defect_agent::llm::LlmProvider`].
 //!
-//! 厂商层承担 transport / auth / URL 模板 / 能力声明 / 错误 hint /
-//! 模型元信息表 / vendor-specific tracing。每家厂商一个子模块。
+//! The vendor layer handles transport, auth, URL templates, capability declarations,
+//! error hints,
+//! model metadata tables, and vendor-specific tracing. Each vendor gets its own
+//! submodule.
 
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;

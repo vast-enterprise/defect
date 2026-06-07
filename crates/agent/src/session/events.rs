@@ -2,14 +2,15 @@
 //!
 //! ## Shape
 //!
-//! 主循环只 [`EventEmitter::emit`]；订阅者通过 [`EventEmitter::subscribe`]
-//! 拿一个独立的 mpsc receiver。emit 内部串行 send 到所有 receiver，
-//! **慢消费者会让 emit 阻塞**（backpressure）——这正是我们要的"不丢事件"。
+//! The main loop only calls [`EventEmitter::emit`]; subscribers get an independent mpsc
+//! receiver via [`EventEmitter::subscribe`]. `emit` sends to all receivers serially.
+//! **Slow consumers block `emit`** (backpressure) — this is the desired "no event loss"
+//! behavior.
 //!
-//! ## 不用 broadcast 的理由
+//! ## Why not broadcast
 //!
-//! [`tokio::sync::broadcast`] calls `Lagged` and skips events when receivers
-//! fall behind, violating the "no drop" invariant of [`AgentEvent`].
+//! [`tokio::sync::broadcast`] returns `Lagged` and skips events when receivers fall
+//! behind, violating the "no drop" invariant of [`AgentEvent`].
 
 use std::sync::Mutex;
 
@@ -20,18 +21,21 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::event::AgentEvent;
 
-/// 默认 mpsc 容量。订阅者跟不上时主循环阻塞在第 257 条事件。
+/// Default mpsc capacity. The main loop blocks on the 257th event when subscribers fall
+/// behind.
 const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 
-/// 单个订阅者的 sender 句柄。`Mutex` 包它仅是因为 [`EventEmitter::emit`]
-/// 是 `&self` + `async`——dashmap / RwLock 都可以；这里选 std Mutex 是因为
-/// 我们只在 emit 时短暂持锁取列表快照、send 在锁外。
+/// A single subscriber's sender handle. It is wrapped in `Mutex` only because
+/// [`EventEmitter::emit`] is `&self` + `async` — either `DashMap` or `RwLock` would work;
+/// `std::Mutex` is chosen here because we only briefly hold the lock during `emit` to
+/// snapshot the list, and `send` happens outside the lock.
 type SubscriberHandle = mpsc::Sender<AgentEvent>;
 
-/// 事件总线。每 session 一个实例。
+/// Event bus. One instance per session.
 pub struct EventEmitter {
     capacity: usize,
-    /// 注册中的订阅者。drop receiver 后下次 emit 会自动清理。
+    /// Subscribers currently registered. Dropping a receiver will be cleaned up
+    /// automatically on the next `emit`.
     senders: Mutex<Vec<SubscriberHandle>>,
 }
 
@@ -47,7 +51,8 @@ impl EventEmitter {
         }
     }
 
-    /// 新增订阅者。返回的 stream 在 [`Self`] 被 drop 后自然结束。
+    /// Subscribes a new listener. The returned stream ends naturally when [`Self`] is
+    /// dropped.
     pub fn subscribe(&self) -> BoxStream<'static, AgentEvent> {
         let (tx, rx) = mpsc::channel(self.capacity);
         self.senders
@@ -57,12 +62,12 @@ impl EventEmitter {
         ReceiverStream::new(rx).boxed()
     }
 
-    /// 把事件投递给所有订阅者。
+    /// Delivers the event to every subscriber.
     ///
-    /// 串行 await 每个 sender。任一订阅者填满自己的 channel 时，本调用会
-    /// 阻塞直到对方消费——这是有意为之的 backpressure。
+    /// Awaits each sender serially. If a subscriber's channel is full, this call blocks
+    /// until the subscriber consumes — this is intentional backpressure.
     pub async fn emit(&self, event: AgentEvent) {
-        // 取快照，避免在 await 期间持锁。
+        // Take a snapshot to avoid holding the lock across an await point.
         let snapshot: Vec<SubscriberHandle> = {
             let guard = self
                 .senders
@@ -83,14 +88,15 @@ impl EventEmitter {
         }
     }
 
-    /// 清理已经 drop 的 receiver 对应的 sender。
+    /// Remove senders whose receivers have been dropped.
     fn prune(&self, snapshot: &[SubscriberHandle], dead_indices: &[usize]) {
         let mut guard = self
             .senders
             .lock()
             .expect("EventEmitter senders mutex poisoned");
-        // snapshot 与 *guard 可能由于其他 subscribe 调用而长度不一致；
-        // 我们按"指针相等"判断，避免删错。
+        // The snapshot and `*guard` may have different lengths due to concurrent
+        // `subscribe` calls; we compare by pointer equality to avoid removing the wrong
+        // sender.
         guard.retain(|tx| {
             !dead_indices.iter().any(|&i| {
                 snapshot

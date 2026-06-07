@@ -1,8 +1,9 @@
-//! Turn 主循环里的 hook 触发逻辑。
+//! Hook trigger logic inside the turn main loop.
 //!
-//! 从 turn 主流程疏散出来：`decide_turn_end`（before turn-end 续命判定）、prompt 摄入 / 工具
-//! 前后的 `fire_*` 触发，以及反馈注入 helper，作为 [`super::TurnRunner`] 的方法实现。
-//! step 类型与引擎见 `crate::hooks`。
+//! Extracted from the turn main flow: `decide_turn_end` (before turn-end continuation
+//! decision), `fire_*` triggers before/after prompt ingestion and tools, and feedback
+//! injection helpers, implemented as methods on [`super::TurnRunner`]. See `crate::hooks`
+//! for step types and engine.
 
 use agent_client_protocol_schema::{ContentBlock, StopReason as AcpStopReason, ToolCallId};
 use serde_json::Value as JsonValue;
@@ -13,13 +14,13 @@ use super::content::content_block_to_message_content;
 use super::tools::ToolResult;
 use super::{TurnRunner, TurnState};
 
-/// `fire_user_prompt_submit` 的结果。
+/// The result of `fire_user_prompt_submit`.
 pub(super) enum UserPromptHookFlow {
     Continue(Vec<ContentBlock>),
     Refused,
 }
 
-/// `fire_pre_tool_use` 的结果。
+/// The result of `fire_pre_tool_use`.
 pub(super) enum PreToolHookFlow {
     Continue { args: JsonValue },
     Block(String),
@@ -28,15 +29,19 @@ pub(super) enum PreToolHookFlow {
 impl TurnRunner<'_> {
     /// `before turn-end` decision point.
     ///
-    /// turn **自愿停止**（LLM 说 EndTurn / 没要工具）前调用。让 hook 决定：放停，还是续命
-    /// （注入反馈、不结束、回循环顶再转一轮）。
+    /// Called when the turn is **voluntarily stopping** (LLM said `EndTurn` / didn't
+    /// request a tool). Lets the hook decide: allow the stop, or keep the turn alive
+    /// (inject feedback, don't end, loop back to the top for another round).
     ///
-    /// 返回 `true` = 续命（调用方 `continue` 回循环顶）；`false` = 放停（正常结束 turn）。
+    /// Returns `true` = keep alive (caller `continue`s back to the loop top); `false` =
+    /// allow stop (end the turn normally).
     ///
-    /// 续命受**硬上限** `max_stop_hook_continues` 约束——达上限后强制放停，防死循环。续命的反馈
-    /// 作为 **user 消息**注入 history（与用户 prompt 同一道工序，见设计 §4：末尾兜底交替）。
+    /// Keep-alive is bounded by the **hard limit** `max_stop_hook_continues` — once
+    /// reached, the stop is forced to prevent infinite loops. The keep-alive feedback is
+    /// injected into history as a **user message** (same pipeline as user prompts; see
+    /// design §4: final alternation fallback).
     pub(super) async fn decide_turn_end(&self, state: &mut TurnState) -> bool {
-        // 达到续命硬上限：不再问 hook，强制放停。
+        // Hard limit reached: stop asking the hook and force-stop.
         if !state.may_stop_hook_continue() {
             return false;
         }
@@ -52,8 +57,10 @@ impl TurnRunner<'_> {
 
         match control {
             crate::hooks::step::HookControl::Continue => {
-                // 续命：把反馈作为 user 消息注入 history。空反馈也注入一条兜底提示，避免
-                // LLM 下一轮立刻又说"我说完了"造成空转（设计 §3 不变量）。
+                // Inject the feedback as a user message into the history. If the feedback
+                // is empty, inject a fallback prompt to prevent the LLM from immediately
+                // saying "I'm done" on the next turn, which would cause a no-op loop
+                // (design §3 invariant).
                 let blocks = if step.feedback.is_empty() {
                     vec![ContentBlock::from(
                         "Continue working — the stop condition is not yet satisfied.",
@@ -65,15 +72,18 @@ impl TurnRunner<'_> {
                 state.note_stop_hook_continue();
                 true
             }
-            // Proceed / Break / Skip 在 turn-end 都意味着放停。
+            // Proceed, Break, and Skip all mean "stop" at turn-end.
             _ => false,
         }
     }
 
-    /// 把一组 content block 作为 user 消息注入 history（续命反馈用）。
+    /// Inject a set of content blocks into the history as a user message (used for
+    /// keepalive feedback).
     ///
-    /// 兜底角色交替（设计 §4）：history 末尾已是 user 角色时，并进同一条而非新增相邻 user，
-    /// 防止两家 wire codec 撞上"连续同角色"。无法解码的 block 跳过（最佳努力，不杀 turn）。
+    /// Fallback role alternation (design §4): if the history already ends with a user
+    /// role, merge into the same message rather than appending an adjacent user, to
+    /// prevent two wire codecs from encountering consecutive identical roles. Blocks that
+    /// cannot be decoded are skipped (best effort, does not kill the turn).
     pub(super) fn append_user_feedback(&self, blocks: Vec<ContentBlock>) {
         let content: Vec<MessageContent> = blocks
             .into_iter()
@@ -89,20 +99,24 @@ impl TurnRunner<'_> {
         });
     }
 
-    /// 触发 `UserPromptSubmit` hook。
+    /// Triggers the `UserPromptSubmit` hook.
     ///
-    /// 处理三类 outcome：
-    /// - `block` → 拒绝该 turn（调用方返回 `Refusal`）
-    /// - `patch = UserPrompt { prepend, append }` → 改写 prompt 顺序为
-    ///   `[prepend, original, append]`，落 history 时按改写后形态
-    /// - `append` → 暂未拼到 system prompt（v0 无落点；待 system_prompt
-    ///   filled in dynamically after assembly
+    /// Handles three outcomes:
+    /// - `block` → rejects the turn (caller returns `Refusal`)
+    /// - `patch = UserPrompt { prepend, append }` → rewrites the prompt order to
+    ///   `[prepend, original, append]`; the rewritten form is used when appending to
+    ///   history
+    /// - `append` → not yet spliced into the system prompt (v0 has no landing point;
+    ///   pending `system_prompt`
+    ///   filled in dynamically after assembly)
     pub(super) async fn fire_user_prompt_submit(
         &self,
         prompt: Vec<ContentBlock>,
     ) -> UserPromptHookFlow {
-        // Step 模型：`before Ingest`（输入摄入前）。hook 可改写 input、或 `Break` 拒该 turn。
-        // source 由 turn 携带——用户 turn=User，后台续转 turn=Background（§5.1）。
+        // Step model: `before Ingest` (before input ingestion). The hook can rewrite the
+        // input or `Break` to reject the turn.
+        // The source is carried by the turn — user turn = User, background continuation
+        // turn = Background (§5.1).
         let mut step = crate::hooks::step::BeforeIngest {
             source: self.ingest_source.clone(),
             input: prompt,
@@ -113,12 +127,13 @@ impl TurnRunner<'_> {
                 tracing::info!("user prompt blocked by before-ingest hook");
                 UserPromptHookFlow::Refused
             }
-            // Proceed / Continue / Skip 在摄入点都意味着"继续"，带 hook 改写后的 input。
+            // Proceed, Continue, and Skip all mean "continue" at the ingestion point,
+            // using the hook-rewritten input.
             _ => UserPromptHookFlow::Continue(step.input),
         }
     }
 
-    /// 触发 `before ToolApply` hook（每工具）。
+    /// Fires the `before ToolApply` hook (per tool).
     pub(super) async fn fire_pre_tool_use(
         &self,
         id: &ToolCallId,
@@ -127,7 +142,8 @@ impl TurnRunner<'_> {
         safety: crate::tool::SafetyClass,
     ) -> PreToolHookFlow {
         let _ = id;
-        // Step 模型：`before ToolApply`。hook 可改 args、填 result（拦工具=合成输出）、或 `Break`。
+        // Step model: `before ToolApply`. The hook may modify `args`, set `result`
+        // (intercepting the tool = synthetic output), or return `Break`.
         let mut step = crate::hooks::step::BeforeToolApply {
             tool_name: name.to_string(),
             safety,
@@ -136,8 +152,9 @@ impl TurnRunner<'_> {
         };
         let control = self.hooks.dispatch(&mut step, self.hook_ctx()).await;
 
-        // 填了 result = 拦掉这个工具（合成输出），turn 继续。映射到现有 Block 流（调用方据此
-        // 不执行工具、用 reason 作为被拒文本喂回）。
+        // If `step.result` is set, the tool is blocked (synthetic output) and the turn
+        // continues. This maps to the existing `Block` flow: the caller skips tool
+        // execution and feeds `reason` back as the rejection text.
         if let Some(result) = step.result {
             let reason = match &result.body {
                 crate::llm::ToolResultBody::Text { text } => text.clone(),
@@ -153,10 +170,12 @@ impl TurnRunner<'_> {
         PreToolHookFlow::Continue { args: step.args }
     }
 
-    /// 触发 `after ToolApply` hook（每工具）。把 hook 注入的 `additional_context`
-    /// 拼到 `result.body` 末尾——下一轮 LLM 看到 hook 注释作为工具输出的一部分。
+    /// Fires the `after ToolApply` hook (per tool). Appends any `additional_context`
+    /// injected by the hook to the end of `result.body`, so the next LLM turn sees the
+    /// hook annotation as part of the tool output.
     pub(super) async fn fire_post_tool_hook(&self, result: &mut ToolResult) {
-        // Step 模型：`after ToolApply`。观察 + 可注入（拼进 tool_result）。
+        // Step model: `after ToolApply`. Observable and injectable (appended to
+        // `tool_result`).
         let mut step = crate::hooks::step::AfterToolApply {
             tool_name: result.name.clone(),
             is_error: result.is_error,
@@ -169,7 +188,7 @@ impl TurnRunner<'_> {
             return;
         }
 
-        // 把 hook 注入的 ContentBlock（仅取 Text 块）拼到 tool_result body。
+        // Append text blocks from hook-injected `ContentBlock`s to the tool_result body.
         let extra: String = step
             .additional_context
             .iter()
@@ -189,7 +208,8 @@ impl TurnRunner<'_> {
                 }
                 text.push_str(&extra);
             }
-            // 多模态结果：把追加文本作为新的文本块挂到末尾，不动图片块。
+            // For multimodal results, append the extra text as a new text block at the
+            // end, leaving image blocks unchanged.
             ToolResultBody::Content { blocks } => {
                 blocks.push(ToolResultContent::Text { text: extra });
             }

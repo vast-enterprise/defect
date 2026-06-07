@@ -1,9 +1,9 @@
-//! session 启动期能力裁决的端到端测试。
+//! End-to-end tests for capability resolution during session startup.
 //!
-//! 与 `session::capabilities::tests` 的纯函数单测互补：这里跑通
-//! `DefaultAgentCore::create_session` 的真实路径，确认
-//! `(SessionCapabilitiesConfig, hosted_capabilities)` 在装配期被读、
-//! 失败路径产出 `AgentError::Init(SessionInitError::CapabilityUnsatisfied)`。
+//! Complementary to the pure-function unit tests in `session::capabilities::tests`: this
+//! exercises the real path through `DefaultAgentCore::create_session`, verifying that
+//! `(SessionCapabilitiesConfig, hosted_capabilities)` is read during assembly and that
+//! the failure path produces `AgentError::Init(SessionInitError::CapabilityUnsatisfied)`.
 
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ fn unsupported_caps() -> Capabilities {
     }
 }
 
-/// hosted web_search 不支持的 provider。
+/// A provider that does not support hosted web search.
 struct NoHostedProvider;
 impl LlmProvider for NoHostedProvider {
     fn info(&self) -> ProviderInfo {
@@ -60,7 +60,7 @@ impl LlmProvider for NoHostedProvider {
     }
 }
 
-/// hosted web_search 支持的 provider。
+/// Provider that supports hosted web search.
 struct HostedSearchProvider;
 impl LlmProvider for HostedSearchProvider {
     fn info(&self) -> ProviderInfo {
@@ -161,9 +161,10 @@ async fn delegate_with_supported_provider_creates_session() {
         .await
         .expect("create session");
 
-    // 通过 Session::id 间接验证返回的是有效 session；hosted_capabilities
-    // 字段是 DefaultSession 内部状态，没有公开 getter，留待 turn 路径
-    // (CompletionRequest::hosted_capabilities) 验证。
+    // Indirectly verify that the returned session is valid via `Session::id`; the
+    // `hosted_capabilities` field is internal to `DefaultSession` with no public getter,
+    // so it will be validated later on the turn path
+    // (`CompletionRequest::hosted_capabilities`).
     let _ = session.id();
 }
 

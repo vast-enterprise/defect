@@ -1,10 +1,10 @@
-//! E2E smoke test：在进程内用 [`Channel::duplex`] 把 ACP 客户端 / 服务端对接起来，
-//! 跑一遍 initialize → session/new → session/prompt 的最小路径。
+//! E2E smoke test: connects an ACP client and server in-process via [`Channel::duplex`],
+//! then runs the minimal path of initialize → session/new → session/prompt.
 //!
-//! 校验三件事：
-//! 1. `serve_on` 正确处理 `initialize` / `session/new` / `session/prompt`
-//! 2. [`EchoProvider`] 通过 [`crate::project`] 投射出 `AgentMessageChunk`
-//! 3. `PromptResponse` 拿到 `EndTurn` stop reason
+//! Verifies three things:
+//! 1. `serve_on` correctly handles `initialize` / `session/new` / `session/prompt`
+//! 2. [`EchoProvider`] projects `AgentMessageChunk` through [`crate::project`]
+//! 3. `PromptResponse` yields `EndTurn` as the stop reason
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -27,8 +27,9 @@ use futures::future::BoxFuture;
 use futures::stream;
 use tokio_util::sync::CancellationToken;
 
-/// `Channel` 实现的是 `ConnectTo<R>` for 任意 R，但 `serve_on` 需要
-/// `T: ConnectTo<Agent>`。这里的 wrapper 仅是显式声明 role，方便类型推导。
+/// `Channel` implements `ConnectTo<R>` for any `R`, but `serve_on` requires
+/// `T: ConnectTo<Agent>`. This wrapper simply declares the role explicitly to aid type
+/// inference.
 struct ChannelTransport<R: Role> {
     inner: Channel,
     _marker: std::marker::PhantomData<R>,
@@ -234,7 +235,8 @@ async fn echo_round_trip() {
         .build();
     let agent_core: Arc<dyn AgentCore> = Arc::new(agent_core);
 
-    // server 用 channel_b（agent 视角），client 用 channel_a（client 视角）。
+    // The server uses `channel_b` (from the agent's perspective), and the client uses
+    // `channel_a` (from the client's perspective).
     let (channel_a, channel_b) = Channel::duplex();
 
     let server_handle = tokio::spawn(serve_on(
@@ -305,8 +307,9 @@ async fn echo_round_trip() {
         "echo provider should drive a clean EndTurn"
     );
 
-    // serve 用的是 `connect_to`（内部 `future::pending`），不会因为 main_fn
-    // 结束自动退出；测试里直接 abort 即可。
+    // `serve` uses `connect_to` (which internally calls `future::pending`), so it won't
+    // exit automatically when `main_fn` ends; aborting it directly in the test is
+    // sufficient.
     server_handle.abort();
     let _ = server_handle.await;
 
@@ -461,14 +464,16 @@ async fn load_session_round_trip() {
     let _ = server_handle.await;
 }
 
-/// `--resume`：首个 `session/new` 被透明改写成 load_session——返回的是被恢复
-/// 的旧 session id，且响应前回放了旧 transcript；一次性消费后，第二个
-/// `session/new` 回到正常的新建路径。
+/// With `--resume`, the first `session/new` is transparently rewritten to `load_session`
+/// — it returns the restored old session id and replays the old transcript before
+/// responding. After that one-time consumption, a second `session/new` falls back to the
+/// normal creation path.
 #[tokio::test]
 async fn resume_intercepts_first_session_new() {
     let sessions_dir = tempfile::tempdir().expect("tempdir");
 
-    // 阶段一：正常建一个 session 跑一轮，落盘。用独立 server 实例。
+    // Phase 1: create a normal session, run one turn, and persist to disk. Use a separate
+    // server instance.
     let prompt_text = "remember this";
     let persisted_id = {
         let provider = Arc::new(EchoProvider::new());
@@ -526,7 +531,8 @@ async fn resume_intercepts_first_session_new() {
         id
     };
 
-    // 阶段二：新 server 带 resume 目标。首个 session/new 应恢复旧 session。
+    // Phase 2: new server with resume target. The first session/new should restore the
+    // old session.
     let provider = Arc::new(EchoProvider::new());
     let config = TurnConfig {
         model: "echo".to_string(),
@@ -574,7 +580,7 @@ async fn resume_intercepts_first_session_new() {
                     .block_task()
                     .await?;
 
-                // 首个 session/new → 透明 resume：返回旧 id。
+                // First session/new → transparent resume: returns the old id.
                 let resumed = cx
                     .send_request(NewSessionRequest::new(cwd.clone()))
                     .block_task()
@@ -600,7 +606,8 @@ async fn resume_intercepts_first_session_new() {
                     .any(|text| text == prompt_text);
                 assert!(replayed, "resume should replay prior transcript");
 
-                // 第二个 session/new → 一次性已消费，回到正常新建（新 id）。
+                // Second session/new → one-time resume consumed, falls back to normal
+                // creation (new id).
                 let fresh = cx
                     .send_request(NewSessionRequest::new(cwd.clone()))
                     .block_task()
@@ -828,9 +835,10 @@ async fn model_candidates_fall_back_to_configured_whitelist_when_provider_list_f
     let _ = server_handle.await;
 }
 
-/// 装一个两模式目录，`session/new` 应通过 `config_options`（category=mode）暴露
-/// 它们；经 `session/set_config_option` 切到第二个应成功，且不影响后续 prompt
-/// 跑通（验证模式切换是 turn 边界生效、不打断会话）。
+/// Set up a two-mode catalog; `session/new` should expose them via `config_options`
+/// (category=mode), and switching to the second mode via `session/set_config_option`
+/// should succeed without affecting subsequent prompt completion (verifying that mode
+/// switching takes effect at turn boundaries and does not interrupt the session).
 #[tokio::test]
 async fn set_mode_switches_session_permission_mode() {
     use defect_agent::policy::{ModeCatalog, OpenPolicy, PolicyMode, ReadOnlyPolicy};
@@ -846,7 +854,7 @@ async fn set_mode_switches_session_permission_mode() {
             PolicyMode {
                 id: "read-only".to_string(),
                 name: "Read-only".to_string(),
-                description: Some("只读".to_string()),
+                description: Some("Read-only".to_string()),
                 policy: Arc::new(ReadOnlyPolicy),
             },
         ],
@@ -926,9 +934,9 @@ async fn set_mode_switches_session_permission_mode() {
     let _ = server_handle.await;
 }
 
-/// `session/new` 应通过 `config_options` 暴露 thought-level 选择器（当前
-/// `default`）；`session/set_config_option` 改成 `high` 应成功，且响应回带
-/// 更新后的当前值。未知 value 应被拒。
+/// `session/new` should expose the thought-level selector via `config_options` (currently
+/// `default`); `session/set_config_option` to `high` should succeed, with the response
+/// returning the updated current value. Unknown values should be rejected.
 #[tokio::test]
 async fn set_config_option_switches_reasoning_effort() {
     let config = TurnConfig {
@@ -965,7 +973,8 @@ async fn set_config_option_switches_reasoning_effort() {
                 let options = new_session
                     .config_options
                     .expect("agent should advertise config options");
-                // 无模式目录：model + thought-level 两个选择器（无 permission_mode）。
+                // No-mode directory: two selectors for model and thought-level (no
+                // `permission_mode`).
                 assert_eq!(options.len(), 2);
                 assert!(options.iter().any(|o| o.id.0.as_ref() == "model"));
                 assert!(
@@ -975,7 +984,7 @@ async fn set_config_option_switches_reasoning_effort() {
                 );
                 assert!(!options.iter().any(|o| o.id.0.as_ref() == "permission_mode"));
 
-                // 合法档位：high。
+                // Valid option: high.
                 cx.send_request(
                     agent_client_protocol::schema::SetSessionConfigOptionRequest::new(
                         new_session.session_id.clone(),
@@ -986,7 +995,7 @@ async fn set_config_option_switches_reasoning_effort() {
                 .block_task()
                 .await?;
 
-                // 非法 value：必须报错。
+                // Invalid value: must produce an error.
                 let bad = cx
                     .send_request(
                         agent_client_protocol::schema::SetSessionConfigOptionRequest::new(
@@ -1009,7 +1018,7 @@ async fn set_config_option_switches_reasoning_effort() {
     let _ = server_handle.await;
 }
 
-/// 从一个 select 型 config option 取当前值字符串（测试辅助）。
+/// Returns the current value of a select-type config option as a string (test helper).
 fn select_current_value(opt: &agent_client_protocol::schema::SessionConfigOption) -> String {
     match &opt.kind {
         agent_client_protocol::schema::SessionConfigKind::Select(select) => {
@@ -1020,7 +1029,7 @@ fn select_current_value(opt: &agent_client_protocol::schema::SessionConfigOption
     }
 }
 
-/// 从一个 select 型 config option 取全部候选值（按序，测试辅助）。
+/// Extract all candidate values from a select config option (in order, test helper).
 fn select_option_values(opt: &agent_client_protocol::schema::SessionConfigOption) -> Vec<String> {
     use agent_client_protocol::schema::{SessionConfigKind, SessionConfigSelectOptions};
     match &opt.kind {
@@ -1039,11 +1048,12 @@ fn select_option_values(opt: &agent_client_protocol::schema::SessionConfigOption
     }
 }
 
-/// 权限模式必须**也**作为 `category = Mode` 的 config option 暴露（现代客户端
-/// 如 Zed 只读 config_options、忽略 deprecated `modes` 字段）。装了模式目录的
-/// session：`session/new` 的 `config_options` 应含 `permission_mode` + 一个
-/// thought-level 项；`session/set_config_option` 切 `permission_mode` 到合法
-/// mode id 应成功，未知 id 应被拒。
+/// Permission modes must also be exposed as a config option with `category = Mode`
+/// (modern clients like Zed read `config_options` and ignore the deprecated `modes`
+/// field). For a session with a mode catalog: `session/new`'s `config_options` should
+/// include `permission_mode` plus a thought-level item; `session/set_config_option`
+/// switching `permission_mode` to a valid mode id should succeed, and an unknown id
+/// should be rejected.
 #[tokio::test]
 async fn mode_exposed_as_config_option_and_set_via_config() {
     use defect_agent::policy::{ModeCatalog, OpenPolicy, PolicyMode, ReadOnlyPolicy};
@@ -1059,7 +1069,7 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
             PolicyMode {
                 id: "read-only".to_string(),
                 name: "Read-only".to_string(),
-                description: Some("只读".to_string()),
+                description: Some("Read-only".to_string()),
                 policy: Arc::new(ReadOnlyPolicy),
             },
         ],
@@ -1102,7 +1112,7 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
                 let options = new_session
                     .config_options
                     .expect("agent should advertise config options");
-                // model + mode + thought-level 三个选择器。
+                // Three selectors: model, mode, and thought-level.
                 assert_eq!(options.len(), 3);
                 let model_opt = options
                     .iter()
@@ -1123,7 +1133,7 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
                 );
                 assert_eq!(select_current_value(mode_opt), "ask-writes");
 
-                // 合法 mode：read-only。响应回带刷新后的当前值。
+                // Valid mode: read-only. Response includes the refreshed current value.
                 let resp = cx
                     .send_request(
                         agent_client_protocol::schema::SetSessionConfigOptionRequest::new(
@@ -1141,7 +1151,7 @@ async fn mode_exposed_as_config_option_and_set_via_config() {
                     .expect("permission_mode in refreshed options");
                 assert_eq!(select_current_value(refreshed), "read-only");
 
-                // 非法 mode id：必须报错。
+                // Invalid mode id: must produce an error.
                 let bad = cx
                     .send_request(
                         agent_client_protocol::schema::SetSessionConfigOptionRequest::new(

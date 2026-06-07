@@ -4,8 +4,8 @@ use std::fs;
 
 use tempfile::TempDir;
 
-/// 在 `<root>/.config/defect/agents/<name>/` (user) 或
-/// `<root>/proj/.defect/agents/<name>/` (project) 写一个 profile。
+/// Write a profile at `<root>/.config/defect/agents/<name>/` (user) or
+/// `<root>/proj/.defect/agents/<name>/` (project).
 fn write_profile(agents_dir: &Path, name: &str, config_toml: &str, system_md: Option<&str>) {
     let dir = agents_dir.join(name);
     fs::create_dir_all(&dir).expect("mkdir profile");
@@ -15,13 +15,14 @@ fn write_profile(agents_dir: &Path, name: &str, config_toml: &str, system_md: Op
     }
 }
 
-/// 在 `<agents_dir>/<name>.md` 写一个单文件版 profile。
+/// Write a single-file profile to `<agents_dir>/<name>.md`.
 fn write_single_file(agents_dir: &Path, name: &str, contents: &str) {
     fs::create_dir_all(agents_dir).expect("mkdir agents");
     fs::write(agents_dir.join(format!("{name}.md")), contents).expect("write .md");
 }
 
-/// 造一个含 .git 的 repo root（让 find_repo_root 命中），返回 (tmp, repo_root)。
+/// Create a repo root containing `.git` (so that `find_repo_root` hits it), returning
+/// `(tmp, repo_root)`.
 fn repo(tmp: &TempDir) -> PathBuf {
     let root = tmp.path().join("proj");
     fs::create_dir_all(root.join(".git")).expect("mkdir .git");
@@ -153,7 +154,7 @@ fn profile_hooks_parsed_with_name_and_source() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].name.as_deref(), Some("redact"));
     assert_eq!(entries[0].matcher.tool.as_deref(), Some("bash"));
-    // 项目层发现 ⇒ source = Project。
+    // Project-level discovery ⇒ source = Project.
     assert_eq!(entries[0].source, crate::types::ConfigSource::Project);
 }
 
@@ -191,7 +192,7 @@ fn single_file_profile_hooks_parsed() {
     let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
     let entries = profiles["inline"].hooks.get("after_session_enter");
     assert_eq!(entries.len(), 1);
-    // 单文件版无 name ⇒ None（装配期回退匿名）。
+    // Single-file variant without name ⇒ None (assembly-time fallback to anonymous).
     assert_eq!(entries[0].name, None);
 }
 
@@ -214,7 +215,8 @@ fn unknown_key_is_hard_error() {
 fn prompt_file_escaping_profile_dir_is_rejected() {
     let tmp = TempDir::new().expect("tmp");
     let repo_root = repo(&tmp);
-    // 在 repo root 放一个 secret，profile 想用 ../../secret.md 偷读。
+    // Place a secret in the repo root that the profile attempts to read via
+    // `../../secret.md`.
     fs::write(repo_root.join("secret.md"), "TOPSECRET").expect("write secret");
     write_profile(
         &repo_root.join(".defect/agents"),
@@ -253,7 +255,7 @@ fn subdir_without_config_toml_is_skipped() {
     assert!(profiles.contains_key("real"));
 }
 
-// --- 单文件版（+++ TOML frontmatter）-----------------------------------
+// --- single-file variant (+++ TOML frontmatter) ---
 
 #[test]
 fn discovers_single_file_profile() {
@@ -390,7 +392,7 @@ fn single_file_project_overrides_user() {
     assert_eq!(profiles["bot"].system_prompt_text, "project prompt");
 }
 
-// --- 单文件版 YAML frontmatter（--- 分隔，需 yaml feature）---------------
+// Single-file YAML frontmatter (delimited by `---`, requires the `yaml` feature)
 
 #[cfg(feature = "yaml")]
 #[test]
@@ -444,7 +446,8 @@ fn yaml_prompt_table_is_rejected() {
     }
 }
 
-/// yaml feature 关闭时，`---` 头必须以可操作错误 hard fail（不静默降级）。
+/// When the `yaml` feature is disabled, `---` frontmatter must hard-fail with an
+/// actionable error (no silent degradation).
 #[cfg(not(feature = "yaml"))]
 #[test]
 fn yaml_frontmatter_without_feature_errors() {

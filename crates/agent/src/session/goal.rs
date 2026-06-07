@@ -1,29 +1,36 @@
-//! 目标驱动循环的共享状态。
+//! Shared state for the goal-driven loop.
 //!
-//! `--goal` 模式下，agent 多轮自主跑直到目标达成。机制：
-//! - `goal_done` 工具（[`crate::tool::GoalDoneTool`]）—— AI 认为目标达成时调用，
-//!   设 [`GoalState::reached`]。
-//! - `goal-gate` hook（[`crate::hooks::builtin::GoalGate`]）—— turn 自愿停止时
-//!   （`before_turn_end`）读 [`GoalState::is_reached`]：已达成则放行结束，否则
-//!   续命（注入"继续工作"反馈）回循环顶再转一轮。
+//! In `--goal` mode, the agent runs autonomously for multiple turns until the goal is
+//! reached. The mechanism:
+//! - `goal_done` tool ([`crate::tool::GoalDoneTool`]) — called when the AI believes the
+//!   goal is reached, sets [`GoalState::reached`].
+//! - `goal-gate` hook ([`crate::hooks::builtin::GoalGate`]) — when a turn voluntarily
+//!   stops (`before_turn_end`), reads [`GoalState::is_reached`]: if reached, allows the
+//!   loop to end; otherwise, extends the turn (injects a "continue working" feedback) and
+//!   loops back for another round.
 //!
-//! 两者跨 turn 阶段共享同一份 `Arc<GoalState>`：工具在某轮写，hook 在之后某轮读。
+//! Both share the same `Arc<GoalState>` across turn phases: the tool writes in one turn,
+//! the hook reads in a later turn.
 //!
-//! ## 为何是具名结构而非通用状态袋
+//! ## Why a named struct instead of a generic state bag
 //!
-//! 照 [`crate::session::DefaultSession`] 既有规律（`background` / `compaction_slot`
-//! 等都是职责明确的具名结构，不塞万能 `HashMap<String, Value>`）。v0 只有两字段，
-//! 但是结构体——以后加 `summary` / `reached_at` / 子目标列表等往里加字段，
-//! `ToolContext` / builtin 持的是 `Arc<GoalState>`，字段增减不破接口。
+//! Following the existing pattern in [`crate::session::DefaultSession`] (where
+//! `background`, `compaction_slot`, etc. are all purpose-specific named structs, not a
+//! catch-all `HashMap<String, Value>`). v0 has only two fields, but it's a struct —
+//! future additions like `summary`, `reached_at`, sub-goal lists, etc. can be added as
+//! fields. Since `ToolContext` and builtins hold an `Arc<GoalState>`, adding or removing
+//! fields does not break the interface.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// 一次目标驱动循环的共享状态。
+/// Shared state for one goal-driven loop.
 #[derive(Debug)]
 pub struct GoalState {
-    /// `--goal` 传入的目标描述。注入 `goal-gate` 续命反馈，让模型每轮都看到目标。
+    /// The objective description passed via `--goal`. Injected into the `goal-gate`
+    /// keepalive feedback so the model sees the goal each round.
     objective: String,
-    /// 目标是否已达成。`goal_done` 工具置位；`goal-gate` hook 读取。
+    /// Whether the goal has been reached. Set by the `goal_done` tool; read by the
+    /// `goal-gate` hook.
     reached: AtomicBool,
 }
 
@@ -36,18 +43,18 @@ impl GoalState {
         }
     }
 
-    /// 目标描述。
+    /// The objective description.
     #[must_use]
     pub fn objective(&self) -> &str {
         &self.objective
     }
 
-    /// 标记目标已达成（`goal_done` 工具调用）。
+    /// Mark the objective as reached (via the `goal_done` tool call).
     pub fn mark_reached(&self) {
         self.reached.store(true, Ordering::SeqCst);
     }
 
-    /// 目标是否已达成（`goal-gate` hook 判定用）。
+    /// Whether the goal has been reached (for `goal-gate` hook evaluation).
     #[must_use]
     pub fn is_reached(&self) -> bool {
         self.reached.load(Ordering::SeqCst)

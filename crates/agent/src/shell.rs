@@ -1,17 +1,15 @@
-//! Shell 执行后端抽象。
+//! Shell execution backend abstraction.
 //!
-//! [`ShellBackend`] 是 `bash` 工具与底层进程管理之间的 trait 边界。两个 v0
-//! 实现：
-//! - `defect_tools::shell::LocalShellBackend`：直接 spawn 子进程
-//! - `defect_acp::shell::AcpShellBackend`：走 ACP `terminal/*` 反向请求
-//!   委托给客户端
+//! [`ShellBackend`] is the trait boundary between the `bash` tool and the underlying
+//! process management. Two v0 implementations:
+//! - `defect_tools::shell::LocalShellBackend`: spawns child processes directly
+//! - `defect_acp::shell::AcpShellBackend`: delegates to the client via ACP `terminal/*`
+//!   reverse requests
 //!
-//! 装配权在 `defect-acp` 的 `session/new` handler——按客户端的
-//! [`ClientCapabilities::terminal`] 协商结果选择后端，注入给
-//! [`crate::session::AgentCore::create_session`]。
-//!
+//! Assembly is handled in the `defect-acp` `session/new` handler — it selects the backend
+//! based on the client's [`ClientCapabilities::terminal`] negotiation result and injects
+//! it into [`crate::session::AgentCore::create_session`].
 
-//!
 //! [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
 
 use std::path::PathBuf;
@@ -21,11 +19,11 @@ use thiserror::Error;
 
 use crate::error::BoxError;
 
-/// terminal 句柄。在 backend 内部映射到 PID + 单调计数器（local）或 ACP
-/// schema 的 `TerminalId`（acp）。
+/// A terminal handle. Internally, in the backend, it maps to a PID + monotonic counter
+/// (local) or an ACP schema's `TerminalId` (acp).
 ///
-/// 用 newtype 而非裸 `String`：调用方在 trait 边界上看到的就是"terminal 句柄"，
-/// 不会与普通字符串混淆。
+/// A newtype rather than a bare `String`: callers see a "terminal handle" at trait
+/// boundaries, not a plain string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TerminalId(String);
 
@@ -45,97 +43,111 @@ impl From<TerminalId> for String {
     }
 }
 
-/// 一次 [`ShellBackend::output`] 的快照结果。
+/// A snapshot result of [`ShellBackend::output`].
 #[derive(Debug, Clone)]
 pub struct ShellOutput {
-    /// 截至本次调用累积的合并 stdout/stderr 文本。后端保证 UTF-8 合法性。
+    /// Accumulated combined stdout/stderr text up to this call. The backend guarantees
+    /// valid UTF-8.
     pub text: String,
-    /// 输出是否被后端按字节上限截断。
+    /// Whether the output was truncated by the backend due to a byte limit.
     pub truncated: bool,
-    /// 进程已退出时填实际退出态；仍在跑则为 `None`。
+    /// Set to the actual exit status when the process has exited, or `None` if it is
+    /// still running.
     pub exit_status: Option<TerminalExitStatus>,
 }
 
-/// terminal 进程的退出态。
+/// Exit status of a terminal process.
 #[derive(Debug, Clone)]
 pub struct TerminalExitStatus {
-    /// 进程 exit code。被信号杀掉时为 `None`，看 `signal`。
+    /// Exit code of the process. `None` if killed by a signal; see `signal`.
     ///
-    /// 内部用 `i32` 与 `BashOutput.exit_code` 一致。`AcpShellBackend` 收到
-    /// schema 的 `Option<u32>` 时用 `i32::try_from`，超过 `i32::MAX` 退化为
-    /// `-1`（实际 exit code 域是 0..=255，不会越界）。
+    /// Internally uses `i32` to match `BashOutput.exit_code`. When `AcpShellBackend`
+    /// receives
+    /// `Option<u32>` from the schema, it uses `i32::try_from`; values exceeding
+    /// `i32::MAX` degrade to
+    /// `-1` (the actual exit code range is 0..=255, so this never overflows).
     pub exit_code: Option<i32>,
-    /// 信号名（如 `SIGKILL`）。本地后端来自 `signal_name(sig)`；ACP 后端透传
-    /// schema 的 `signal: Option<String>`。
+    /// Signal name (e.g. `SIGKILL`). The local backend obtains it from
+    /// `signal_name(sig)`; the ACP backend passes through the schema's `signal:
+    /// Option<String>`.
     pub signal: Option<String>,
 }
 
-/// shell 后端 trait。
+/// Shell backend trait.
 ///
-/// v0 语义：每条命令一个独立 terminal——`create` → 跑 → `wait_for_exit`
-/// 拿退出态 → `output` 拿全量输出 → `release` 释放资源。不暴露"持久 terminal
-/// 跨 turn 复用"——交互式 terminal 工具是后续演进。
+/// v0 semantics: each command gets an independent terminal — `create` → run →
+/// `wait_for_exit` for the exit status → `output` for the full output → `release` to free
+/// resources. Persistent terminals reused across turns are not exposed; interactive
+/// terminal tooling is left for future evolution.
 ///
-/// 入参用 owned `String` / `PathBuf`：把 future 的生命周期收敛到 `&'_ self`，
-/// 避免显式生命周期参数；与 [`crate::fs::FsBackend`] 同款取舍。
+/// Parameters use owned `String` / `PathBuf` to confine the future's lifetime to `&'_
+/// self`, avoiding explicit lifetime parameters — the same trade-off as
+/// [`crate::fs::FsBackend`].
 pub trait ShellBackend: Send + Sync {
-    /// 创建 terminal 并启动命令。
+    /// Creates a terminal and starts the command.
     ///
-    /// `command` 是一整行 shell 命令（v0 由后端用 `sh -c` 跑）。`cwd` 必须是
-    /// 已校验在工作区内的绝对路径——agent 工具层负责守边界，backend 不再做
-    /// 业务校验。
+    /// `command` is a full shell command line (v0 runs it via `sh -c` on the backend).
+    /// `cwd` must be an absolute path already validated to be inside the workspace — the
+    /// agent tool layer enforces this boundary; the backend does not perform business
+    /// validation.
     fn create(
         &self,
         command: String,
         cwd: PathBuf,
     ) -> BoxFuture<'_, Result<TerminalId, ShellError>>;
 
-    /// 取 terminal 当前累积输出的快照。
+    /// Take a snapshot of the terminal's current accumulated output.
     ///
-    /// **幂等可重复调用**——后端不在此处 drain 缓冲。`exit_status = Some(_)`
-    /// 表示进程已退出，但 `output` 本身不阻塞等待退出（要阻塞等用
-    /// [`ShellBackend::wait_for_exit`]）。
+    /// **Idempotent and safe to call repeatedly** — the backend does not drain the buffer
+    /// here. `exit_status = Some(_)` indicates the process has exited, but `output`
+    /// itself does not block waiting for exit (use [`ShellBackend::wait_for_exit`] for
+    /// blocking).
     fn output(&self, id: &TerminalId) -> BoxFuture<'_, Result<ShellOutput, ShellError>>;
 
-    /// 阻塞等待 terminal 进程退出。
+    /// Blocks until the terminal process exits.
     fn wait_for_exit(
         &self,
         id: &TerminalId,
     ) -> BoxFuture<'_, Result<TerminalExitStatus, ShellError>>;
 
-    /// 释放 terminal 资源（关闭 fd / 移除内部记录）。
+    /// Release terminal resources (close file descriptors / remove internal bookkeeping).
     ///
-    /// 幂等：重复 release 同一个 `id` 不返回错误（已被释放时静默成功）。
+    /// Idempotent: releasing the same `id` multiple times does not return an error
+    /// (silently succeeds if already released).
     fn release(&self, id: &TerminalId) -> BoxFuture<'_, Result<(), ShellError>>;
 
-    /// 强制终止 terminal 进程。**不**释放资源——后续仍可调
-    /// [`ShellBackend::output`] / [`ShellBackend::wait_for_exit`]，
-    /// 释放由 [`ShellBackend::release`] 负责。
+    /// Forcefully kill the terminal process. Does **not** release resources — subsequent
+    /// calls to [`ShellBackend::output`] / [`ShellBackend::wait_for_exit`] are still
+    /// valid; releasing is handled by [`ShellBackend::release`].
     fn kill(&self, id: &TerminalId) -> BoxFuture<'_, Result<(), ShellError>>;
 }
 
-/// shell 后端错误。
+/// Errors from the shell backend.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ShellError {
-    /// 引用了不存在 / 已释放的 terminal_id。
+    /// The terminal ID refers to a non-existent or already-released terminal.
     #[error("terminal not found: {0:?}")]
     NotFound(TerminalId),
 
-    /// 后端 spawn 子进程 / 与客户端通信等失败。
+    /// Backend failed to spawn a child process or communicate with the client.
     #[error("shell backend failure: {0}")]
     Backend(#[source] BoxError),
 
-    /// 操作被拒：cwd 越界 / 客户端 deny / 权限不足等。
+    /// Operation not permitted: cwd out of bounds, client denied, insufficient
+    /// permissions, etc.
     #[error("operation not permitted: {0}")]
     NotPermitted(String),
 }
 
-/// 仅用于测试的 no-op shell 后端。所有方法返回 [`ShellError::NotPermitted`]，
-/// 让需要 `Arc<dyn ShellBackend>` 的测试场景（不实际跑 shell 工具）能跳过装配。
+/// A no-op shell backend for testing only. All methods return
+/// [`ShellError::NotPermitted`],
+/// allowing test scenarios that require an `Arc<dyn ShellBackend>` (without actually
+/// running
+/// a shell tool) to skip setup.
 ///
-/// 真实运行时用 `defect_tools::shell::LocalShellBackend` 或
-/// `defect_acp::shell::AcpShellBackend`。
+/// For real use, use `defect_tools::shell::LocalShellBackend` or
+/// `defect_acp::shell::AcpShellBackend`.
 pub struct NoopShellBackend;
 
 impl ShellBackend for NoopShellBackend {
@@ -165,7 +177,8 @@ impl ShellBackend for NoopShellBackend {
     }
 
     fn release(&self, _id: &TerminalId) -> BoxFuture<'_, Result<(), ShellError>> {
-        // 释放语义是幂等的——no-op 后端从不持有资源，直接成功。
+        // Release is idempotent — the no-op backend never holds resources, so it always
+        // succeeds.
         Box::pin(async { Ok(()) })
     }
 

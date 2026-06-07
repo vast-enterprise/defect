@@ -33,7 +33,8 @@ fn assistant_tool_use(id: &str) -> Message {
     }
 }
 
-/// 工具结果回填消息（role=User 但只含 ToolResult）——**不是**轮次起点。
+/// Tool result backfill message (role=User but only contains ToolResult) — **not** a turn
+/// start.
 fn tool_result(id: &str, text: &str) -> Message {
     Message {
         role: Role::User,
@@ -57,7 +58,8 @@ fn turn_start_requires_non_tool_result_user_content() {
 
 #[test]
 fn single_turn_has_no_earlier_history_to_summarize() {
-    // 只有一个用户轮次（开头即唯一轮次起点）→ 无更早历史，返回 None。
+    // A single user turn (the first message is the only turn start) → no earlier history,
+    // returns None.
     let messages = vec![user("only"), assistant("reply")];
     assert_eq!(select_boundary(&messages, 8_000), None);
 }
@@ -69,8 +71,9 @@ fn empty_history_returns_none() {
 
 #[test]
 fn boundary_keeps_recent_turns_within_budget() {
-    // 三个轮次，每个很小。预算够大 → 保留尽量多但 head 非空：边界落在第二个
-    // 轮次起点（index 2），head = 第一个轮次。
+    // Three turns, each very small. Budget large enough → keep as many as possible but
+    // head non-empty: boundary lands at the second turn's start (index 2), head = first
+    // turn.
     let messages = vec![
         user("turn1 user"),       // 0  turn start
         assistant("turn1 reply"), // 1
@@ -79,8 +82,9 @@ fn boundary_keeps_recent_turns_within_budget() {
         user("turn3 user"),       // 4  turn start
         assistant("turn3 reply"), // 5
     ];
-    // 预算极大 → 想全保留，但 last_start>0 时仍不能让 head 空：
-    // 算法从最新往旧累加，start==0 时 break 不记入 best，故 best 最小到 index 2。
+    // Even with a huge budget, we cannot leave `head` empty when `last_start > 0`:
+    // the algorithm accumulates from newest to oldest, breaking at `start == 0` without
+    // counting it in `best`, so `best` is at least index 2.
     let boundary = select_boundary(&messages, 1_000_000).expect("boundary");
     assert_eq!(boundary, 2);
     let (head, tail) = messages.split_at(boundary);
@@ -98,28 +102,31 @@ fn tiny_budget_keeps_only_last_turn() {
         user("turn3"),
         assistant("r3"),
     ];
-    // 预算极小：连最新轮次都装不下 → 回退到最新轮次起点 index 4。
+    // Budget too small to fit even the latest turn; fall back to the start of the latest
+    // turn at index 4.
     let boundary = select_boundary(&messages, 1).expect("boundary");
     assert_eq!(boundary, 4);
 }
 
 #[test]
 fn boundary_never_splits_tool_use_result_pair() {
-    // 轮次2 含 tool_use(assistant) + tool_result(user)。边界必须落在轮次起点，
-    // 绝不落在 tool_result 上，确保 tail 不出现孤儿 tool_result。
+    // Turn 2 contains a tool_use (assistant) + tool_result (user). The boundary must fall
+    // on a turn start, never on a tool_result, to ensure the tail does not contain an
+    // orphan tool_result.
     let messages = vec![
         user("turn1"),                // 0 start
         assistant("r1"),              // 1
-        user("turn2"),                // 2 start
+        user("turn2"),                // turn 2 start
         assistant_tool_use("call_a"), // 3
-        tool_result("call_a", "out"), // 4  <- 不是轮次起点
+        tool_result("call_a", "out"), // 4  <- not a turn start
         assistant("r2"),              // 5
     ];
     let boundary = select_boundary(&messages, 1_000_000).expect("boundary");
-    // 唯一安全的非零轮次起点是 index 2。
+    // The only safe non-zero turn start is index 2.
     assert_eq!(boundary, 2);
     let (_head, tail) = messages.split_at(boundary);
-    // tail 第一条是真实 user 轮次起点，不是孤儿 tool_result。
+    // The first element of `tail` is a real user turn start, not an orphaned
+    // `tool_result`.
     assert!(is_turn_start(tail.first().expect("tail non-empty")));
 }
 
@@ -150,11 +157,11 @@ fn extract_previous_summary_none_when_absent() {
 
 #[test]
 fn truncate_chars_respects_multibyte_boundary() {
-    let s = "héllo wörld"; // multibyte
+    let s = "héllo wörld"; // Contains multibyte characters
     let out = truncate_chars(s, 5);
     assert!(out.starts_with("héllo"));
     assert!(out.contains("truncated"));
-    // 不截断短串。
+    // Do not truncate short strings.
     assert_eq!(truncate_chars("short", 100), "short");
 }
 

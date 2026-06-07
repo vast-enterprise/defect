@@ -31,8 +31,10 @@ const PROVIDER_LITELLM: &str = "litellm";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum ProviderKind {
-    /// 内置占位 provider：把用户最近一条消息原样回送（model id `echo`）。
-    /// 无需任何外部凭据，是 `default.provider` 的兜底默认。
+    /// Built-in placeholder provider: echoes the user's most recent message back as-is
+    /// (model id `echo`).
+    /// Requires no external credentials; serves as the fallback default for
+    /// `default.provider`.
     #[default]
     Defect,
     Anthropic,
@@ -123,20 +125,23 @@ pub enum ConfigWarning {
         old: String,
         new: String,
     },
-    /// 配置文件里出现了某段，但在当前 mode 下不会生效。
+    /// A configuration section exists in the file but is inactive under the current mode.
     ///
     /// See capabilities semantic mapping.
-    /// 典型场景：写了某段配置但相应能力被关闭（例如旧版 `capabilities.search`
-    /// 段落已被废弃为 `[capabilities.web_search]`，旧键不再生效）。
+    /// Typical scenario: a configuration section is written but the corresponding
+    /// capability is disabled (e.g., the legacy `capabilities.search` section has been
+    /// deprecated in favor of `[capabilities.web_search]`, and the old key no longer
+    /// takes effect).
     InactiveSection {
         path: PathBuf,
         section: String,
         reason: String,
     },
-    /// 撞名的 MCP 工具在 session 启动期被重命名为 `mcp.<server>.<name>`。
+    /// Conflicting MCP tools are renamed to `mcp.<server>.<name>` during session startup.
     ///
-    /// See capabilities for MCP tool classification. All MCP tools are
-    /// 重命名（无视 capability mode 与 tool enabled），避免 MCP 旁路占名。
+    /// See capabilities for MCP tool classification. All MCP tools are renamed
+    /// (regardless of capability mode or tool enabled) to prevent MCP bypass name
+    /// squatting.
     McpToolRenamed {
         server: String,
         original: String,
@@ -182,10 +187,12 @@ pub struct LoadConfigOptions {
     pub cli: CliOverrides,
     pub xdg_config_home: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
-    /// `--local` 沙盒模式：忽略全局/用户层配置与用户级 agents/skills 目录，
-    /// 只认项目根 `.defect/`。`true` 时用户层一律缺席（见
+    /// `--local` sandbox mode: ignores global/user-level config and user-level
+    /// agents/skills directories,
+    /// only uses the project root `.defect/`. When `true`, user layers are always absent
+    /// (see
     /// `resolve_user_config_path` / `resolve_user_agents_dir` /
-    /// `resolve_user_skills_dir`）。
+    /// `resolve_user_skills_dir`).
     pub local: bool,
 }
 
@@ -202,8 +209,8 @@ pub struct EffectiveConfig {
     pub turn: TurnConfig,
     pub base_prompt: BasePromptConfigFile,
     pub prompt: PromptConfigFile,
-    /// 全局 capability 来源选择。`providers.<p>.capabilities` 覆写在
-    /// Overlaid during session startup.
+    /// Global capability source selection. Overridden by `providers.<p>.capabilities`
+    /// during session startup.
     pub capabilities: CapabilitiesConfig,
     pub providers: ProviderConfigs,
     pub tools: ToolsConfig,
@@ -215,28 +222,29 @@ pub struct EffectiveConfig {
     pub hooks: HooksConfig,
 }
 
-// ---------------------------------------------------------------------------
 // Hooks
-// ---------------------------------------------------------------------------
 
-/// hook 系统的有效配置：按 step `event_name` 分桶，组内按声明顺序执行 pipeline。
+/// Valid configuration for the hook system: pipelines are grouped by step `event_name`
+/// and executed in declaration order within each group.
 ///
-/// 桶的键是挂载点的 `event_name`（snake_case，如 `before_turn_end`）——与
-/// `defect_agent::hooks::step::ALL_EVENT_NAMES` 同一套名字。用 map 而非固定字段：新增挂载点时
-/// No changes needed at the config layer.
+/// Bucket keys are the mount point's `event_name` (snake_case, e.g. `before_turn_end`) —
+/// the same set of names as `defect_agent::hooks::step::ALL_EVENT_NAMES`. A map is used
+/// instead of fixed fields so that adding a new mount point requires no changes at the
+/// config layer.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HooksConfig {
-    /// `event_name` → 该事件下声明的条目（按声明顺序）。
+    /// `event_name` → entries declared under that event, in declaration order.
     pub buckets: std::collections::BTreeMap<String, Vec<HookEntry>>,
 }
 
 impl HooksConfig {
-    /// 该配置上是否声明过任何 hook。`false` 时 CLI 装配可直接走 noop 引擎。
+    /// Whether any hooks have been declared on this config. When `false`, CLI assembly
+    /// can use the noop engine directly.
     pub fn is_empty(&self) -> bool {
         self.buckets.values().all(Vec::is_empty)
     }
 
-    /// 取某事件下的条目（无则空切片）。
+    /// Returns the entries for a given event, or an empty slice if none exist.
     pub fn get(&self, event_name: &str) -> &[HookEntry] {
         self.buckets
             .get(event_name)
@@ -244,7 +252,7 @@ impl HooksConfig {
             .unwrap_or(&[])
     }
 
-    /// 在某事件下追加一条。
+    /// Appends a hook entry under the given event name.
     pub fn push(&mut self, event_name: impl Into<String>, entry: HookEntry) {
         self.buckets
             .entry(event_name.into())
@@ -253,36 +261,42 @@ impl HooksConfig {
     }
 }
 
-/// 单条 hook 配置：matcher + handler + 来源层。
+/// A single hook configuration: matcher + handler + source layer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HookEntry {
-    /// 可选的人类可读名字，仅用于 tracing / 可观测性里标识这条 hook。
-    /// `None` ⇒ 装配时回退到匿名标签（见 `defect-cli` 的 hook 装配）。
-    /// 不参与去重 / disable 匹配（那只看 matcher + handler）——纯展示用。
+    /// Optional human-readable name, used only for tracing/observability to identify this
+    /// hook.
+    /// `None` ⇒ falls back to an anonymous label at assembly time (see `defect-cli`'s
+    /// hook assembly).
+    /// Does not participate in deduplication or disable matching (that only uses matcher
+    /// + handler) — purely for display.
     pub name: Option<String>,
     pub matcher: HookMatcher,
     pub handler: HookHandlerSpec,
-    /// 该 hook 的来源层。Phase G 的 trust gating 用它判断是否需要显式信任。
+    /// The source layer of this hook. Phase G's trust gating uses it to decide whether
+    /// explicit trust is required.
     pub source: ConfigSource,
 }
 
-/// 事件 matcher。空字段 = 匹配该事件下所有触发；详见
-/// See hooks trust model.
+/// Event matcher. Empty fields match all triggers under that event; see the hooks trust
+/// model.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct HookMatcher {
-    /// 工具名精确匹配（仅 `*ToolUse*` 事件）。
+    /// Exact tool name match (only `*ToolUse*` events).
     pub tool: Option<String>,
-    /// 工具名 glob 匹配（仅 `*ToolUse*` 事件）。
+    /// Tool name glob match (only `*ToolUse*` events).
     pub tool_glob: Option<String>,
-    /// `SafetyClass` 过滤（仅 `PreToolUse`）；任一匹配即命中。空 vec = 不过滤。
+    /// `SafetyClass` filter (only for `PreToolUse`); any match triggers. Empty vec = no
+    /// filtering.
     pub safety: Vec<defect_agent::tool::SafetyClass>,
 }
 
-/// Handler 规格——v0 三种形态。
+/// Handler spec — three variants for v0.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookHandlerSpec {
-    /// 进程内 Rust handler，按名字引用 `crate::hooks::builtin::registry()`。
+    /// In-process Rust handler, referenced by name via
+    /// `crate::hooks::builtin::registry()`.
     Builtin { name: String },
     /// External command (see hooks command handler).
     Command(HookCommandSpec),
@@ -293,16 +307,17 @@ pub enum HookHandlerSpec {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookCommandSpec {
-    /// 直接 spawn argv，不经任何 shell。
+    /// Spawn `argv` directly, without any shell.
     Argv {
         argv: Vec<String>,
-        /// Windows 平台覆盖；`None` 时 fall back 到 `argv`。
+        /// Windows override; `None` falls back to `argv`.
         argv_windows: Option<Vec<String>>,
         cwd: Option<PathBuf>,
         env: BTreeMap<String, String>,
         timeout_sec: Option<u64>,
     },
-    /// 显式 shell。`shell` 字段必须存在，引擎不再"自动选 sh"。
+    /// Explicit shell. The `shell` field is required; the engine no longer auto-selects
+    /// `sh`.
     Shell {
         shell: HookShellKind,
         command: String,
@@ -319,7 +334,7 @@ pub enum HookShellKind {
     Bash,
     Pwsh,
     Cmd,
-    /// `program` + 透传 `args`（不含 command 本身）。
+    /// `program` plus passthrough `args` (excluding the command itself).
     Custom {
         program: String,
         args: Vec<String>,
@@ -329,7 +344,7 @@ pub enum HookShellKind {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HookPromptSpec {
-    /// `None` = 用 session 默认 model。
+    /// `None` = use the session's default model.
     pub model: Option<String>,
     pub system: String,
     pub render: HookPromptRender,
@@ -337,7 +352,8 @@ pub struct HookPromptSpec {
 }
 
 impl HookPromptSpec {
-    /// 跨 crate 构造入口——`#[non_exhaustive]` 后 struct literal 不能用。
+    /// Cross-crate construction entry point — struct literals are unavailable after
+    /// `#[non_exhaustive]`.
     #[must_use]
     pub fn new(
         model: Option<String>,
@@ -357,18 +373,19 @@ impl HookPromptSpec {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookPromptRender {
-    /// 直接喂 `HookEvent` 的 JSON 序列化结果。
+    /// Feed the JSON-serialized `HookEvent` directly.
     Json,
-    /// 用 handlebars 模板从 event 字段取值。
+    /// Renders a handlebars template using fields from the event.
     Template { template: String },
 }
 
-/// 全局 capability 配置入口。
+/// Top-level capability configuration entry point.
 ///
-/// 与 [`SessionCapabilitiesConfig`] 形态等价；在 `EffectiveConfig` 上保
-/// 留独立类型是为了未来追加非 session 级 capability 时不动 agent crate。
-/// 当前 P1 仅有 `web_search`（hosted-only），本地 grep/glob 工具不属于
-/// capability 层，由 `[tools.search]` 单独管理。
+/// Structurally equivalent to [`SessionCapabilitiesConfig`]; a separate type on
+/// `EffectiveConfig` is kept so that future non-session-level capabilities can be
+/// added without touching the agent crate. Currently P1 only has `web_search`
+/// (hosted-only); local grep/glob tools are not part of the capability layer and
+/// are managed separately by `[tools.search]`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CapabilitiesConfig {
@@ -376,24 +393,26 @@ pub struct CapabilitiesConfig {
 }
 
 impl CapabilitiesConfig {
-    /// 用单条 [`WebSearchCapabilityConfig`] 构造。跨 crate 调用方需要这个
-    /// 入口，因为本结构体 `#[non_exhaustive]` 后不能直接 struct literal。
+    /// Construct with a single [`WebSearchCapabilityConfig`]. Cross-crate callers need
+    /// this entry point because the struct is `#[non_exhaustive]` and cannot be built
+    /// with a struct literal directly.
     #[must_use]
     pub const fn with_web_search(web_search: WebSearchCapabilityConfig) -> Self {
         Self { web_search }
     }
 
-    /// 转成 agent 侧的 [`SessionCapabilitiesConfig`]，供
-    /// `DefaultAgentCoreBuilder::capabilities` 直接消费。
+    /// Converts to the agent-side [`SessionCapabilitiesConfig`], for direct consumption
+    /// by
+    /// `DefaultAgentCoreBuilder::capabilities`.
     #[must_use]
     pub fn to_session_capabilities(self) -> SessionCapabilitiesConfig {
         SessionCapabilitiesConfig::with_web_search(self.web_search)
     }
 }
 
-/// 单个 provider 下对全局 capability 的覆写。
+/// Overrides for global capabilities under a single provider.
 ///
-/// `None` 字段意味着「跟随全局」。详见 §5 / §13.2。
+/// A `None` field means "follow the global setting". See §5 / §13.2.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProviderCapabilityOverrides {
@@ -401,14 +420,15 @@ pub struct ProviderCapabilityOverrides {
 }
 
 impl ProviderCapabilityOverrides {
-    /// 用单条 web_search 覆写构造。`None` = 跟随全局。
+    /// Construct with a single `web_search` override. `None` means follow the global
+    /// setting.
     #[must_use]
     pub const fn with_web_search(web_search: Option<WebSearchCapabilityConfig>) -> Self {
         Self { web_search }
     }
 
-    /// 把全局 [`CapabilitiesConfig`] 与本 provider 的覆写合并。
-    /// 未覆写字段沿用全局值。
+    /// Merges the global [`CapabilitiesConfig`] with this provider's overrides.
+    /// Unset fields fall back to the global values.
     #[must_use]
     pub fn merge_into(&self, base: CapabilitiesConfig) -> CapabilitiesConfig {
         CapabilitiesConfig::with_web_search(self.web_search.unwrap_or(base.web_search))
@@ -462,15 +482,18 @@ impl ProviderConfigs {
 pub struct ToolsConfig {
     pub bash: BashToolConfig,
     pub fs: FsToolConfig,
-    /// `[tools.fetch]` 段。预留出来——P1 仅 schema 落地，工具实现在后续 PR。
+    /// The `[tools.fetch]` section. Reserved — P1 only lands the schema; the tool
+    /// implementation will follow in a later PR.
     pub fetch: FetchToolConfig,
-    /// `[tools.search]` 段。本地 `search` tool（grep/glob）的参数。
-    /// 与 `[capabilities.web_search]` 相互独立，由 `enabled` 单独决定是否注册。
+    /// The `[tools.search]` section. Parameters for the local `search` tool (grep/glob).
+    /// Independent of `[capabilities.web_search]`; registration is controlled separately
+    /// by `enabled`.
     /// See search tool config.
     pub search: SearchToolConfig,
-    /// `[tools.background]` 段。后台 subagent 进度视图配置（进度环容量 / 单 block
-    /// 正文字符上限）——主 agent 用 `inspect_background_task` 看到的"最近几个 block"。
-    /// 真相源在 agent 侧（[`BackgroundProgressConfig`]），这里直接复用。
+    /// `[tools.background]` section. Configuration for the background subagent progress
+    /// view (progress ring capacity / per-block text character limit) — the "last N
+    /// blocks" that the main agent sees via `inspect_background_task`. The source of
+    /// truth is on the agent side ([`BackgroundProgressConfig`]); this is a direct reuse.
     pub background: BackgroundProgressConfig,
 }
 
@@ -613,21 +636,24 @@ pub enum ProviderProtocol {
     OpenaiChat,
 }
 
-/// 一个模型候选的配置声明。
+/// A model candidate configuration declaration.
 ///
-/// TOML 两种写法（[`Deserialize`] 经 `untagged` 接受）：
-/// - 纯字符串 `"gpt-5.5"`：只给 id，UI 展示名 fallback 到 id；
-/// - table `{ id = "...", name = "Opus 4.8" }`：给长 id 配一个短展示名。
+/// TOML supports two forms (accepted via [`Deserialize`] with `untagged`):
+/// - Plain string `"gpt-5.5"`: only the id is given; the UI display name falls back to
+///   the id.
+/// - Table `{ id = "...", name = "Opus 4.8" }`: pairs a long id with a short display
+///   name.
 ///
-/// `name` 翻进 [`defect_agent::llm::ModelInfo::display_name`]，ACP 把它作为
-/// 模型选择器选项的 label；`None` 时 wire 层 fallback 到 id。array-of-table
-/// 形态预留了 future 字段（context_window / deprecated 等）的扩展位。
+/// `name` is mapped to [`defect_agent::llm::ModelInfo::display_name`]; the ACP uses it as
+/// the label for model selector options. When `None`, the wire layer falls back to the
+/// id. The array-of-table shape reserves extension slots for future fields (e.g.,
+/// `context_window`, `deprecated`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum ModelEntry {
-    /// 纯 id（老写法）。
+    /// A plain ID (legacy format).
     Id(String),
-    /// 带展示名的 table。
+    /// A detailed entry with a display name.
     Detailed {
         id: String,
         #[serde(default)]
@@ -636,7 +662,7 @@ pub enum ModelEntry {
 }
 
 impl ModelEntry {
-    /// 模型 id（两种形态都有）。
+    /// The model ID (present in both variants).
     #[must_use]
     pub fn id(&self) -> &str {
         match self {
@@ -645,7 +671,7 @@ impl ModelEntry {
         }
     }
 
-    /// 可选展示名（仅 table 形态可能有）。
+    /// Optional display name (only available in table form).
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         match self {
@@ -668,7 +694,7 @@ pub struct ProviderConfigFile {
     pub aws: Option<ProviderAwsConfigFile>,
     pub headers: BTreeMap<String, String>,
     pub capabilities: ProviderCapabilityOverrides,
-    /// `reasoning_effort` wire 参数。`None` = 不发送，沿用 provider 默认。
+    /// `reasoning_effort` wire parameter. `None` = do not send, use provider default.
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -679,11 +705,12 @@ pub struct ProviderAwsConfigFile {
     pub region: Option<String>,
 }
 
-/// OpenAI 兼容协议的 `reasoning_effort` 取值。
+/// Values for the `reasoning_effort` parameter in the OpenAI-compatible protocol.
 ///
-/// 与 OpenAI 官方 wire 枚举 1:1 对齐：`xhigh` 仅 `gpt-5.1-codex-max` 之后
-/// 支持，`none` 仅 `gpt-5.1` 之后支持；配置层不区分模型，原样下发由上游
-/// 校验。
+/// 1:1 mapping with the official OpenAI wire enum: `xhigh` is only supported after
+/// `gpt-5.1-codex-max`, and `none` is only supported after `gpt-5.1`. The configuration
+/// layer does not distinguish between models; values are passed through as-is and
+/// validated upstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
@@ -695,33 +722,36 @@ pub enum ReasoningEffort {
     Xhigh,
 }
 
-/// HTTP 客户端栈的 typed 配置。
+/// Typed configuration for the HTTP client stack.
 ///
-/// 仅描述用户意图（`None` 一律按"用 HTTP 栈层默认值"理解）；CLI 入口在
-/// 装配 provider 时把它翻成 `defect_http::HttpStackConfig`。
+/// Only captures user intent (`None` always means "use the HTTP stack layer default");
+/// the CLI entry point converts it to `defect_http::HttpStackConfig` when assembling the
+/// provider.
 ///
-/// 和 `defect_http::HttpStackConfig` 不直接共享类型是为了保持 crate
-/// 单向依赖：`defect-config` 不引 `defect-http`，避免 fetch tool 这类
-/// 后续消费者再次倒挂。
+/// Not sharing a type directly with `defect_http::HttpStackConfig` preserves a one-way
+/// crate dependency: `defect-config` does not depend on `defect-http`, preventing
+/// downstream consumers like fetch tool from creating a reverse dependency.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HttpClientConfig {
-    /// 单次请求总超时；`None` = 用 HTTP 栈层默认（600s）。
+    /// Total timeout for a single request; `None` means use the HTTP stack default
+    /// (600s).
     pub total_timeout_ms: Option<u64>,
-    /// transport 错误重试上限（不含首次）；`None` = 默认 2，`Some(0)` 禁用。
+    /// Maximum number of transport error retries (excluding the first attempt); `None`
+    /// means default 2, `Some(0)` disables retries.
     pub transport_retries: Option<u8>,
-    /// 重试初始 backoff；`None` = 默认 200ms。
+    /// Initial backoff for retries; `None` = default 200ms.
     pub initial_backoff_ms: Option<u64>,
-    /// `User-Agent` header 覆盖；`None` = 用编译期默认
-    /// `defect-http/{version} ({git_sha})`。
+    /// Override the `User-Agent` header; `None` uses the compile-time default
+    /// `defect-http/{version} ({git_sha})`.
     pub user_agent: Option<String>,
-    /// 代理子配置。`mode` 默认 `FromEnv`（读取 `HTTP_PROXY` 等）。
+    /// Proxy sub-configuration. `mode` defaults to `FromEnv` (reads `HTTP_PROXY` etc.).
     pub proxy: HttpProxyConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpProxyConfig {
     pub mode: HttpProxyMode,
-    /// 显式代理；仅在 `mode = Explicit` 时生效。
+    /// Explicit proxy; only effective when `mode = Explicit`.
     pub explicit: HttpProxySettings,
 }
 
@@ -774,17 +804,19 @@ pub struct OtlpTracingConfig {
 
 /// Langfuse upload configuration.
 ///
-/// 默认关闭；`enabled = true` 但缺 key 时由装配层告警并禁用（不静默成功）。
+/// Disabled by default; if `enabled = true` but keys are missing, the assembly layer
+/// warns and disables it (no silent success).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LangfuseConfig {
     pub enabled: bool,
-    /// Langfuse host，如 `https://cloud.langfuse.com`。`None` 用装配层默认。
+    /// Langfuse host, e.g. `https://cloud.langfuse.com`. `None` uses the assembly layer
+    /// default.
     pub host: Option<String>,
     pub public_key: Option<String>,
     pub secret_key: Option<String>,
-    /// 周期冲刷间隔（毫秒）。`None` 用装配层默认。
+    /// Flush interval in milliseconds. `None` uses the assembly layer default.
     pub flush_interval_ms: Option<u64>,
-    /// 单批最大事件数。`None` 用装配层默认。
+    /// Maximum number of events per batch. `None` uses the assembly layer default.
     pub max_batch: Option<usize>,
 }
 
@@ -847,9 +879,10 @@ pub(crate) struct ConfigToml {
     pub(crate) mcp: McpSection,
     #[serde(default)]
     pub(crate) http: HttpSection,
-    /// `[hooks]` 段不走 `ConfigToml::try_into`（数组语义是 append+dedupe，详见
-    /// `crate::hooks`）。这里用 `toml::Value` 吸收它，避免 `deny_unknown_fields`
-    /// 把 `[[hooks.*]]` 误判为未知段；hooks 自己的解析器做 schema 校验。
+    /// The `[hooks]` section is not processed by `ConfigToml::try_into` (its array
+    /// semantics are append+dedupe; see `crate::hooks`). We absorb it here as
+    /// `toml::Value` to prevent `deny_unknown_fields` from misidentifying `[[hooks.*]]`
+    /// as an unknown section; hooks' own parser performs schema validation.
     #[serde(default)]
     #[allow(dead_code)]
     pub(crate) hooks: Option<TomlValue>,
@@ -894,20 +927,25 @@ pub(crate) struct TurnSection {
     pub(crate) request_limit: Option<u32>,
     pub(crate) compact_threshold_tokens: Option<u64>,
     pub(crate) compact_ratio: Option<f64>,
-    /// 后台全量压缩开关（越 soft 水位异步起摘要压缩，不阻塞当轮）。
+    /// Enables background full compaction (asynchronous summarization when the soft
+    /// watermark is exceeded, without blocking the current turn).
     pub(crate) background_compact_enabled: Option<bool>,
-    /// 后台压缩 soft 水位占 `context_window` 的比例（默认 0.7）。
+    /// Background compaction soft watermark as a fraction of `context_window` (default
+    /// 0.7).
     pub(crate) compact_soft_ratio: Option<f64>,
-    /// 微压缩开关（清理较旧轮次里的超大 tool_result，不调 LLM）。
+    /// Enables micro-compaction: cleans oversized `tool_result` entries from older turns
+    /// without invoking the LLM.
     pub(crate) microcompact_enabled: Option<bool>,
-    /// 微压缩水位占 `context_window` 的比例（默认 0.6）。
+    /// Micro‑compact watermark as a fraction of `context_window` (default 0.6).
     pub(crate) microcompact_ratio: Option<f64>,
     pub(crate) max_llm_retries: Option<u32>,
     pub(crate) max_concurrent_tools: Option<usize>,
-    /// `before turn-end` hook 强制续命的硬上限。`None` ⇒ 用 agent 侧默认（3）。
+    /// Hard upper limit on forced continues from the `before turn-end` hook. `None` ⇒ use
+    /// the agent-side default (3).
     pub(crate) max_hook_continues: Option<u32>,
-    /// subagent 纵向递归深度上限。`None` ⇒ 用 agent 侧默认（4）。`0` ⇒ 禁止派发任何
-    /// subagent（顶层工具集不含 spawn_agent）。
+    /// Maximum subagent vertical recursion depth. `None` ⇒ use the agent-side default
+    /// (4). `0` ⇒ disallow dispatching any subagent (the top-level tool set does not
+    /// contain `spawn_agent`).
     pub(crate) subagent_max_depth: Option<u32>,
 }
 
@@ -964,19 +1002,23 @@ pub(crate) struct ToolsSection {
     pub(crate) bash: Option<BashToolSection>,
     pub(crate) fs: Option<FsToolSection>,
     pub(crate) fetch: Option<FetchToolSection>,
-    /// `[tools.search]`：本地 `search` tool（grep/glob）参数。是否注册仅
-    /// 取决于 `enabled`，与 `[capabilities.web_search]` 完全独立。
+    /// `[tools.search]`: parameters for the local `search` tool (grep/glob). Registration
+    /// depends solely on `enabled` and is completely independent of
+    /// `[capabilities.web_search]`.
     pub(crate) search: Option<SearchToolSection>,
-    /// `[tools.background]`：后台 subagent 进度视图（环容量 / 正文上限）。
+    /// `[tools.background]`: background subagent progress view (ring capacity / text
+    /// limit).
     pub(crate) background: Option<BackgroundToolSection>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BackgroundToolSection {
-    /// inspect 不带 recent_blocks 时默认返回多少条最近消息块。缺省 10。
+    /// Default number of recent message blocks returned when `inspect` is called without
+    /// `recent_blocks`. Defaults to 10.
     pub(crate) default_recent_blocks: Option<usize>,
-    /// 单 block 自由正文（assistant/thought/工具结果）的字符上限。缺省 0 = 只留摘要/元信息。
+    /// Character limit for free-form body text in a single block (assistant/thought/tool
+    /// result). Default 0 = keep only summary/metadata.
     pub(crate) block_text_limit: Option<usize>,
 }
 

@@ -144,8 +144,8 @@ models = ["gpt-4.1-mini", "gpt-4.1", "o4-mini"]
     assert_eq!(model_ids, vec!["gpt-4.1-mini", "gpt-4.1", "o4-mini"]);
 }
 
-/// `models` 接受裸字符串与 `{ id, name }` table 混用：前者展示名 `None`
-/// （UI fallback 到 id），后者带展示名。
+/// `models` accepts a mix of bare strings and `{ id, name }` tables: bare strings have
+/// display name `None` (UI falls back to `id`), while tables provide a display name.
 #[test]
 fn provider_models_accept_id_and_named_table() {
     let tmp = TempDir::new().expect("tmp");
@@ -180,7 +180,8 @@ models = [
     assert_eq!(models[1].id(), "gpt-4.1");
     assert_eq!(models[1].name(), Some("GPT 4.1"));
 
-    // allowed_models 白名单仍只含 id（展示名不参与白名单匹配）。
+    // The allowed_models allowlist still only contains IDs (display names are not used
+    // for allowlist matching).
     assert_eq!(
         loaded.effective.turn.allowed_models.as_deref(),
         Some(["gpt-4.1-mini", "gpt-4.1"].map(String::from).as_slice())
@@ -527,8 +528,10 @@ file = "prompts/base.md"
 
 #[test]
 fn shared_project_layer_can_set_provider_and_endpoint() {
-    // 设计宗旨是最小化：不再帮用户审查仓库共享配置是否劫持流量/凭据。
-    // 仓库内 .defect/config.toml 与本地层一样，可设 provider / base_url 等。
+    // Design principle is minimalism: we no longer audit shared repository configs for
+    // traffic/credential hijacking.
+    // The in-repo `.defect/config.toml`, like the local layer, can set `provider`,
+    // `base_url`, etc.
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
@@ -702,8 +705,8 @@ enabled_servers = ["missing"]
 
 #[test]
 fn custom_provider_name_accepted_but_unknown_field_rejected() {
-    // flatten 让 `[providers.<任意名>]` 开放，但内层 ProviderSection 的
-    // deny_unknown_fields still validates field names.
+    // flatten makes `[providers.<any-name>]` open, but the inner `ProviderSection`'s
+    // `deny_unknown_fields` still validates field names.
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
@@ -749,7 +752,8 @@ bogus = "value"
 "#,
     );
 
-    // 未知 key 现在直接报错（不再是 warning），且错误带上声明它的文件路径。
+    // Unknown keys now cause a hard error (instead of a warning), and the error includes
+    // the file path where the key was declared.
     let err = load_config(test_options(&tmp)).expect_err("unknown key must fail");
     match err {
         ConfigError::Invalid { path, message } => {
@@ -858,7 +862,8 @@ fn http_section_default_proxy_is_from_env() {
 
 #[test]
 fn shared_project_layer_can_set_http_proxy() {
-    // 最小化：仓库共享配置可设 http.proxy（与其它 http 字段一视同仁）。
+    // Minimal: shared project config can set http.proxy (treated the same as other http
+    // fields).
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
@@ -936,7 +941,7 @@ fn capabilities_web_search_default_is_disabled() {
         loaded.effective.capabilities.web_search.mode,
         WebSearchCapabilityMode::Disabled
     );
-    // 三个 provider 的覆写默认为 None（未声明覆写）。
+    // The override for all three providers defaults to `None` (no override declared).
     assert!(
         loaded
             .effective
@@ -1071,7 +1076,7 @@ mode = "disabled"
 
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
-    // Anthropic 没有覆写，merge 后回落到全局 delegate。
+    // Anthropic does not override, so after merge it falls back to the global delegate.
     let anthropic_session = loaded
         .effective
         .providers
@@ -1084,7 +1089,7 @@ mode = "disabled"
         WebSearchCapabilityMode::Delegate
     );
 
-    // DeepSeek 覆写为 disabled，应当压过全局 delegate。
+    // DeepSeek overrides to disabled, which should override the global delegate.
     let deepseek_session = loaded
         .effective
         .providers
@@ -1175,7 +1180,7 @@ fn tools_background_defaults_when_absent() {
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
     let bg = &loaded.effective.tools.background;
-    // 默认：最近 10 条、正文上限 0（鸟瞰、不灌子 turn 正文）。
+    // Default: last 10 blocks, body limit 0 (bird's-eye view, no turn body).
     assert_eq!(bg.default_recent_blocks, 10);
     assert_eq!(bg.block_text_limit, 0);
 }
@@ -1203,9 +1208,7 @@ items = ["cli"]
     );
 }
 
-// ---------------------------------------------------------------------------
-// hooks
-// ---------------------------------------------------------------------------
+// Hooks
 
 #[test]
 fn parses_hooks_section_full_shape() {
@@ -1433,7 +1436,8 @@ max_batch = 50
 
 #[test]
 fn shared_project_config_can_set_langfuse() {
-    // 最小化：不再剥离仓库共享配置里的 langfuse 段，原样生效。
+    // Minimize: keep the `langfuse` section from the shared repo config as-is, without
+    // stripping it.
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");
@@ -1545,7 +1549,8 @@ compact_ratio = 0.8
 
 #[test]
 fn disabled_tier_skips_ordering_check() {
-    // soft 比例倒挂，但 background_compact 关闭 → 该档不参与排序约束 → 应放行。
+    // Soft ratio is inverted, but `background_compact` is disabled, so this tier is
+    // excluded from ordering constraints and should be allowed.
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("git");

@@ -1,34 +1,37 @@
-//! `fetch` 工具的输出渲染。
+//! Output rendering for the `fetch` tool.
 //!
 //! Content rendering for fetch responses.
 //!
-//! 渲染矩阵：
+//! Rendering matrix:
 //!
-//! | `format`   | content-type            | 行为                                    |
+//! | `format`   | content-type            | behavior                                |
 //! |------------|-------------------------|-----------------------------------------|
-//! | markdown   | text/html / xhtml       | html → markdown（`html_to_markdown` 关时返回原 HTML + warning） |
-//! | markdown   | text/markdown / text/*  | 原文                                    |
-//! | markdown   | binary / 未知            | Err(`unsupported content-type`)         |
-//! | html       | text/html / xhtml       | 原文                                    |
-//! | html       | 非 HTML                  | Err(`not HTML`)                         |
-//! | text       | text/html               | 抽 body 文本（去标签）                  |
-//! | text       | text/*                   | 原文                                    |
-//! | text       | binary                   | Err(`binary content-type`)              |
+//! | markdown | text/html / xhtml | html → markdown (returns raw HTML + warning when
+//! `html_to_markdown` is off) |
+//! | markdown   | text/markdown / text/*  | as-is                                   |
+//! | markdown   | binary / unknown        | Err(`unsupported content-type`)         |
+//! | html       | text/html / xhtml       | as-is                                   |
+//! | html       | non-HTML                | Err(`not HTML`)                         |
+//! | text       | text/html               | extract body text (strip tags)          |
+//! | text       | text/*                  | as-is                                   |
+//! | text       | binary                  | Err(`binary content-type`)              |
 
 use defect_config::{FetchFormat, FetchToolConfig};
 
-/// HTML→markdown / 原文返回的统一入口。
+/// Unified entry point for HTML→markdown / raw-text return.
 ///
-/// Failure: `Err(reason)` — the upper layer wraps the reason as
-/// `ToolError::Execution`.
+/// # Errors
+///
+/// Returns `Err(reason)` — the caller wraps the reason as `ToolError::Execution`.
 pub(super) fn render(
     body: &[u8],
     content_type: Option<&str>,
     format: FetchFormat,
     config: &FetchToolConfig,
 ) -> Result<String, String> {
-    // 空 body 没有渲染歧义——3xx 不跟随 / 204 / HEAD-like 响应都走这里，
-    // 直接返回空字符串而不是按 content-type 报"unsupported"。
+    // An empty body has no rendering ambiguity — 3xx without redirect following, 204, and
+    // HEAD-like responses all reach this point. Return an empty string directly instead
+    // of reporting "unsupported" based on content-type.
     if body.is_empty() {
         return Ok(String::new());
     }
@@ -75,8 +78,9 @@ fn render_text(body: &[u8], mime: MainType, raw_ct: Option<&str>) -> Result<Stri
     match mime {
         MainType::Html => {
             let html = body_as_str(body)?;
-            // 简易"去标签"：把 HTML 转成 markdown 后再剥掉残留 markdown 语法
-            // 本来就不是富文本，能给出可读 plain text 即可。
+            // Simple tag stripping: convert HTML to Markdown, then remove any remaining
+            // Markdown syntax.
+            // Since the content is not rich text, readable plain text is sufficient.
             let md =
                 htmd::convert(html).map_err(|e| format!("html-to-text conversion failed: {e}"))?;
             Ok(strip_markdown(&md))
@@ -109,7 +113,7 @@ enum MainType {
 }
 
 fn parse_main_type(content_type: &str) -> MainType {
-    // 取 ';' 之前的主类型，去空格并小写。
+    // Take the main type before ';', trim whitespace, and lowercase it.
     let head = content_type
         .split(';')
         .next()
@@ -131,21 +135,23 @@ fn parse_main_type(content_type: &str) -> MainType {
     MainType::Binary
 }
 
-/// 极简 markdown→plain text：去掉常见标记。
+/// Minimal markdown→plain text: strip common markers.
 ///
-/// 这不是合规的 markdown 解析器——`format = "text"` + HTML 输入是「LLM
-/// 想要纯文本」的兜底路径，能正确剥掉链接 / 标题标记即可。
+/// This is not a compliant markdown parser — `format = "text"` + HTML input is the
+/// fallback path for "LLM wants plain text"; it only needs to correctly strip link
+/// and heading markers.
 fn strip_markdown(md: &str) -> String {
     let mut out = String::with_capacity(md.len());
     let mut chars = md.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '#' | '*' | '_' | '`' | '>' => {
-                // 跳过紧邻的同字符（## / ** / __ / ``` / >>）。
+                // Skip consecutive identical characters (## / ** / __ / ``` / >>).
                 while chars.peek() == Some(&c) {
                     chars.next();
                 }
-                // markdown 标题前缀往往跟一个空格——保留它即可。
+                // Markdown heading prefixes are usually followed by a space — just keep
+                // it.
             }
             '[' => {
                 // [text](url) → text

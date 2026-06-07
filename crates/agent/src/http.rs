@@ -1,15 +1,14 @@
 //! HTTP fetch backend abstraction.
 //!
-//! [`HttpClient`] is the trait boundary between the `fetch` tool and the
-//! underlying HTTP stack. The concrete implementation comes from [`defect-http`];
-//! during session assembly the CLI injects `Arc<dyn HttpClient>` into
-//! [`crate::session::AgentCore`], propagated through [`crate::tool::ToolContext`]
-//! to tools.
+//! [`HttpClient`] is the trait boundary between the `fetch` tool and the underlying HTTP
+//! stack. The concrete implementation comes from [`defect-http`]; during session assembly
+//! the CLI injects `Arc<dyn HttpClient>` into [`crate::session::AgentCore`], propagated
+//! through [`crate::tool::ToolContext`] to tools.
 //!
-//! Unlike [`crate::fs::FsBackend`] / [`crate::shell::ShellBackend`] — HTTP
-//! 没有 per-client capability 协商，所以 [`HttpClient`] 是进程级共享而非
-//! per-session 装配；只是借同一份 `Arc<dyn …>` 注入模式，避免引入新的
-//! 注入路径。
+//! Unlike [`crate::fs::FsBackend`] / [`crate::shell::ShellBackend`], HTTP has no
+//! per-client capability negotiation, so [`HttpClient`] is shared at the process level
+//! rather than assembled per session; it simply reuses the same `Arc<dyn …>` injection
+//! pattern to avoid introducing a new injection path.
 //!
 //! [`defect-http`]: ../../../crates/http
 
@@ -20,84 +19,97 @@ use thiserror::Error;
 
 use crate::error::BoxError;
 
-/// 一次 HTTP fetch 请求。
+/// An HTTP fetch request.
 ///
-/// v0 仅 `GET`——`fetch` 工具的 schema 也只暴露读取语义，不暴露 method /
-/// header / body / auth。
+/// v0 is `GET`-only — the `fetch` tool's schema also exposes only read semantics, not
+/// method / header / body / auth.
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
-    /// 绝对 `http://` / `https://` URL。其它 scheme 由 fetch 工具层提前拒绝。
+    /// Absolute `http://` / `https://` URL. Other schemes are rejected early by the fetch
+    /// tool layer.
     pub url: String,
-    /// 单次请求总超时；`None` 让 backend 用栈层默认。
+    /// Per-request total timeout; `None` lets the backend use the stack-level default.
     pub timeout: Option<Duration>,
-    /// 是否跟随 3xx Location。`false` 时把 3xx 当终态返回。
+    /// Whether to follow 3xx `Location` redirects. When `false`, treat 3xx responses as
+    /// terminal.
     pub follow_redirects: bool,
-    /// 最多 follow 几跳；`follow_redirects = false` 时被忽略。
+    /// Maximum number of redirect hops to follow; ignored when `follow_redirects` is
+    /// `false`.
     pub max_redirects: u32,
-    /// body 累积上限——超出即截断，`HttpResponse::truncated = true`。
+    /// Maximum accumulated body size; if exceeded the body is truncated and
+    /// `HttpResponse::truncated` is set to `true`.
     pub max_response_bytes: u64,
 }
 
-/// 一次成功获取的响应。
+/// A response that was fetched successfully.
 ///
-/// `status` 是 final response（follow 后）的状态码，`final_url` 同理。
+/// `status` is the status code of the final response (after following redirects);
+/// `final_url` is analogous.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub status: u16,
-    /// `content-type` header 原文（去掉 boundary / charset 等参数前的主类型由
-    /// 工具层自行解析）；`None` 表示 server 没设。
+    /// The raw `content-type` header value (the tool layer should strip parameters like
+    /// boundary/charset to get the main type); `None` if the server did not set it.
     pub content_type: Option<String>,
-    /// 已截断到 `max_response_bytes` 之内的 body。
+    /// Body truncated to `max_response_bytes`.
     pub body: Vec<u8>,
-    /// server 实际下发的字节数（不含截断后丢掉的——backend 在截断时停止读，
-    /// 不准确，作为提示用）。
+    /// Number of bytes the server actually sent (excluding bytes discarded by truncation
+    /// — the backend stops reading when truncating, so this is approximate and for
+    /// reference only).
     pub bytes_received: u64,
-    /// `true` 表示 body 因为超过 `max_response_bytes` 被截断。
+    /// `true` if the body was truncated because it exceeded `max_response_bytes`.
     pub truncated: bool,
-    /// follow 的跳数。0 表示首次响应即终态。
+    /// Number of redirects followed. 0 means the first response was final.
     pub redirects: u32,
-    /// follow 完后的最终 URL；不 follow 则与 `request.url` 相同。
+    /// The final URL after following redirects; if no redirects were followed, this is
+    /// the same as `request.url`.
     pub final_url: String,
 }
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum HttpClientError {
-    /// URL 无法解析（scheme 错、host 缺失等）。
+    /// The URL could not be parsed (e.g., invalid scheme, missing host).
     #[error("invalid URL: {0}")]
     InvalidUrl(String),
 
-    /// 单次请求总超时触发。
+    /// The request timed out as a whole.
     #[error("http request timed out")]
     Timeout,
 
-    /// 超过 `max_redirects` 跳。携带实际尝试的跳数。
+    /// Exceeded `max_redirects` redirects. Contains the actual number of redirects
+    /// attempted.
     #[error("too many redirects ({0})")]
     TooManyRedirects(u32),
 
-    /// transport 层错误（DNS / connect / TLS / IO）；source 是底层 error。
+    /// Transport-layer error (DNS / connect / TLS / IO); source is the underlying error.
     #[error("http transport error: {0}")]
     Transport(#[source] BoxError),
 }
 
-/// HTTP fetch 后端 trait。
+/// HTTP fetch backend trait.
 ///
-/// 实现者必须满足以下契约：
-/// - `fetch` 必须在内部实现 `req.timeout` 的总超时（含 connect / read body）；
-///   超时返回 [`HttpClientError::Timeout`]。
-/// - 当 `req.follow_redirects = true` 时按 RFC 7231 follow 3xx，最多
-///   `req.max_redirects` 跳；超过则 [`HttpClientError::TooManyRedirects`]。
-/// - 读 body 时累加到 `req.max_response_bytes` 即停止，并在响应里设
-///   `truncated = true`。
-/// - HTTP status 任何值（含 4xx/5xx）都视为成功（[`HttpResponse::status`]
-///   照实带回），只有 transport / decode 失败才返回 `Err`。
+/// Implementors must satisfy the following contract:
+/// - `fetch` must internally enforce the total timeout from `req.timeout` (including
+///   connect and read body);
+///   on timeout, return [`HttpClientError::Timeout`].
+/// - When `req.follow_redirects = true`, follow 3xx responses per RFC 7231, up to
+///   `req.max_redirects` hops; exceeding that returns
+///   [`HttpClientError::TooManyRedirects`].
+/// - When reading the body, stop after accumulating `req.max_response_bytes` and set
+///   `truncated = true` on the response.
+/// - Any HTTP status (including 4xx/5xx) is considered a success
+///   ([`HttpResponse::status`]
+///   is returned as-is); only transport or decode failures should return `Err`.
 pub trait HttpClient: Send + Sync {
     fn fetch(&self, req: HttpRequest) -> BoxFuture<'_, Result<HttpResponse, HttpClientError>>;
 }
 
-/// 测试 / `echo` provider 的占位实现。任何 `fetch` 调用都返回
-/// [`HttpClientError::Transport`]——让需要 `Arc<dyn HttpClient>` 的装配
-/// 路径能跳过真实 HTTP 栈构造。
+/// A placeholder implementation for testing or an `echo` provider. Every `fetch` call
+/// returns
+/// [`HttpClientError::Transport`], allowing assembly paths that require `Arc<dyn
+/// HttpClient>`
+/// to skip constructing a real HTTP stack.
 pub struct NoopHttpClient;
 
 impl HttpClient for NoopHttpClient {

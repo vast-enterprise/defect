@@ -1,9 +1,10 @@
-//! subagent / `--profile` 装配接线测试。
+//! Tests for subagent / `--profile` assembly wiring.
 //!
-//! 验证 CLI 装配层（`tools::build_process_tools_with_subagents` /
-//! `filter_tools_by_allowlist`）正确把发现到的 profile 暴露成 `spawn_agent`
-//! 工具、空 profile 时不暴露、顶层白名单裁剪生效。嵌套 turn 的执行语义由
-//! `defect-agent` 侧的 spawn_agent 测试覆盖。
+//! Verifies that the CLI assembly layer (`tools::build_process_tools_with_subagents` /
+//! `filter_tools_by_allowlist`) correctly exposes discovered profiles as `spawn_agent`
+//! tools, does not expose them when the profile is empty, and that top-level allowlist
+//! filtering takes effect. Nested turn execution semantics are covered by the
+//! `spawn_agent` tests on the `defect-agent` side.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,7 +23,7 @@ use tempfile::TempDir;
 use crate::hooks::HookEngineCtx;
 use crate::tools::{build_process_tools_with_subagents, filter_tools_by_allowlist, project_skills};
 
-/// 大多数 subagent 测试不涉及 skill——传一份空索引。
+/// Most subagent tests don't involve skills — pass an empty index.
 fn no_skills() -> BTreeMap<String, SkillEntry> {
     BTreeMap::new()
 }
@@ -42,7 +43,8 @@ fn echo_registry() -> Arc<ProviderRegistry> {
     )
 }
 
-/// 造一个最小的 repo + 加载默认配置（echo provider）。返回 (tmp, config, opts)。
+/// Create a minimal repo and load the default config (echo provider). Returns (tmp,
+/// config, opts).
 fn setup() -> (TempDir, LoadedConfig, LoadConfigOptions) {
     let tmp = TempDir::new().expect("tmp");
     let repo = tmp.path().join("repo");
@@ -81,9 +83,11 @@ fn policy() -> Arc<dyn SandboxPolicy> {
     Arc::new(AskWritesPolicy::new())
 }
 
-/// 测试包装：用默认 builtin 注册表 + echo 模型上下文装配工具集并 unwrap。
-/// profile 的 `[hooks]` 装配错误会在此 panic（测试里 profile 都不带 hooks，或
-/// 显式测装配失败时直接调底层函数）。
+/// Test wrapper: assembles the toolset using the default builtin registry and echo model
+/// context, then unwraps.
+/// Any `[hooks]` assembly errors in the profile will panic here (test profiles never
+/// include hooks, or
+/// assembly failures are tested explicitly by calling the lower-level function directly).
 fn assemble(
     config: &LoadedConfig,
     profiles: &BTreeMap<String, ProfileSpec>,
@@ -131,7 +135,7 @@ fn spawn_agent_registered_when_profiles_exist() {
     );
     let names: Vec<String> = tools.schemas().into_iter().map(|s| s.name).collect();
     assert!(names.contains(&"spawn_agent".to_string()), "got: {names:?}");
-    // base 工具仍在。
+    // Base tools are still present.
     assert!(names.contains(&"read_file".to_string()));
 }
 
@@ -199,7 +203,7 @@ fn top_level_profile_filters_tools_by_allowlist() {
     let profiles = discover(&opts);
     let spec = &profiles["reader"];
 
-    // 顶层 --profile：base 裁成白名单子集。
+    // Top-level --profile: base trimmed to an allowlist subset.
     let base = crate::tools::build_process_tools(&config);
     let filtered = filter_tools_by_allowlist(&base, &spec.tool_allow).expect("filter");
     let names: Vec<String> = filtered.schemas().into_iter().map(|s| s.name).collect();
@@ -248,7 +252,7 @@ fn skill_tool_registered_when_skills_exist() {
         .as_array()
         .expect("enum");
     assert!(enum_vals.iter().any(|v| v == "code-review"));
-    // base 工具仍在；没有 profile ⇒ 不挂 spawn_agent。
+    // Base tools still present; no profile → spawn_agent not attached.
     let names: Vec<String> = tools.schemas().into_iter().map(|s| s.name).collect();
     assert!(names.contains(&"read_file".to_string()));
     assert!(
@@ -275,9 +279,10 @@ fn skill_tool_absent_when_no_skills() {
     assert!(!names.contains(&"skill".to_string()), "got: {names:?}");
 }
 
-/// 发现到 skill 时，主 session 引擎自动挂载 skill-manifest（after_session_enter，
-/// 注入 L1 清单 + always-on body）与 skill-triggers（before_ingest，按 prompt
-/// 激活）——无需用户在 `[hooks]` 里手写。
+/// When a skill is detected, the main session engine automatically mounts
+/// `skill-manifest` (after session enter, injecting the L1 manifest + always-on body) and
+/// `skill-triggers` (before ingest, activated by prompt) — no manual entry in `[hooks]`
+/// is needed.
 #[test]
 fn main_session_auto_mounts_skill_hooks() {
     use defect_agent::hooks::HookCtx;
@@ -319,7 +324,7 @@ fn main_session_auto_mounts_skill_hooks() {
         .build()
         .expect("rt");
 
-    // after_session_enter：注入了 L1 清单 + always-on body。
+    // after_session_enter: injects the L1 manifest and always-on body.
     let mut enter = AfterSessionEnter {
         cwd: "/".to_string(),
         source: SessionSource::New,
@@ -344,7 +349,8 @@ fn main_session_auto_mounts_skill_hooks() {
         "always-on body missing"
     );
 
-    // before_ingest：prompt 提及 .sql 路径 → sql skill 被前插提示。
+    // When the prompt mentions a `.sql` path, the SQL skill is prepended before
+    // ingestion.
     let mut ingest = BeforeIngest {
         source: IngestSource::User,
         input: vec![agent_client_protocol_schema::ContentBlock::from(
@@ -355,7 +361,7 @@ fn main_session_auto_mounts_skill_hooks() {
         &mut ingest,
         HookCtx::new(&session_id, cwd, tokio_util::sync::CancellationToken::new()),
     ));
-    // 原始块保留 + 前插了一条 sql 提示。
+    // Original block retained, with a SQL hint prepended.
     let texts: Vec<&str> = ingest
         .input
         .iter()

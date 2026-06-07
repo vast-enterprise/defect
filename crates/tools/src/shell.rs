@@ -1,17 +1,20 @@
-//! 本地进程的 [`ShellBackend`] 实现。
+//! A [`ShellBackend`] implementation for local processes.
 //!
-//! 与历史上 `bash` 工具内联的 `tokio::process::Command` 流程同源，但把
-//! 进程管理 / 缓冲读 / 退出同步搬到 backend 层，让 `BashTool` 只通过
-//! [`ShellBackend`] trait — local shell execution backend.
+//! Originates from the same inline `tokio::process::Command` flow historically used in
+//! the `bash` tool, but moves process management, buffered reads, and exit
+//! synchronization into the backend layer so that `BashTool` interacts only through the
+//! [`ShellBackend`] trait — a local shell execution backend.
 //!
-//! 内部数据结构：
+//! Internal data structures:
 //!
 //! - `LocalShellBackend.terminals: Mutex<HashMap<TerminalId, Arc<TerminalState>>>`
-//!   全局 terminal 表
-//! - `TerminalState` 持有 output 缓冲、`exit` 状态、`exit_notify`、`kill_notify`
-//! - 每个 terminal 启动一个 **reader task**：阻塞读 stdout/stderr → 进 buffer
-//!   → 同步等 `kill_notify` 或两端 EOF → `child.wait()` → 写 `exit` →
-//!   `notify_waiters()`。Child 由 reader task 独占持有，避免锁竞争。
+//!   Global terminal table.
+//! - `TerminalState` holds the output buffer, `exit` status, `exit_notify`, and
+//!   `kill_notify`.
+//! - Each terminal spawns a **reader task**: blocks reading stdout/stderr → writes into
+//!   buffer → waits on `kill_notify` or both EOFs → calls `child.wait()` → writes `exit`
+//!   → calls `notify_waiters()`. The child is exclusively owned by the reader task to
+//!   avoid lock contention.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,8 +31,8 @@ use tokio::sync::Notify;
 
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
-/// 本地 shell 后端：每条命令 spawn 一个 `sh -c` 子进程，状态托管在 `terminals`
-/// 表里直至 `release`。
+/// Local shell backend: each command spawns a `sh -c` child process, with state managed
+/// in the `terminals` table until `release`.
 pub struct LocalShellBackend {
     terminals: Mutex<HashMap<TerminalId, Arc<TerminalState>>>,
 }
@@ -59,16 +62,17 @@ impl Default for LocalShellBackend {
     }
 }
 
-/// 单个 terminal 的运行态。reader task 与 `output` / `wait_for_exit` /
-/// `kill` 都通过 `Arc<TerminalState>` 共享访问。
+/// Runtime state for a single terminal. The reader task and `output` / `wait_for_exit` /
+/// `kill` all share access via `Arc<TerminalState>`.
 struct TerminalState {
     output: Mutex<OutputBuffer>,
     exit: Mutex<Option<TerminalExitStatus>>,
     exit_notify: Notify,
-    /// `kill` 调用置位；reader task 在 select 里观察到后调 `Child::start_kill()`。
-    /// 用 `notify_one()` 缓冲一个 permit，避免 reader task 还没注册 waiter 时
-    /// 信号丢失（`notify_waiters` 只唤醒已注册等待者）。reader task 用 `killed`
-    /// 标志去重，多次 kill 等价于一次。
+    /// Set by `kill`; the reader task observes it in a `select` and calls
+    /// `Child::start_kill()`. Uses `notify_one()` to buffer a permit, preventing signal
+    /// loss when the reader task has not yet registered a waiter (`notify_waiters` only
+    /// wakes already-registered waiters). The reader task deduplicates via a `killed`
+    /// flag, so multiple kills are equivalent to one.
     kill_notify: Notify,
 }
 
@@ -165,8 +169,9 @@ impl ShellBackend for LocalShellBackend {
                         return Ok(status.clone());
                     }
                 }
-                // notified() 只对**之后**的 notify_waiters 生效——所以先注册
-                // 再做 already-set 二次探测，避免错过 race。
+                // `notified()` only observes `notify_waiters` calls made **after** it is
+                // registered – so register first, then double-check for an already-set
+                // value to avoid a race.
                 let notified = state.exit_notify.notified();
                 tokio::pin!(notified);
                 {
@@ -193,8 +198,9 @@ impl ShellBackend for LocalShellBackend {
                     .map_err(|_| ShellError::Backend(BoxError::new(PoisonedTable)))?;
                 guard.remove(&id)
             };
-            // 通知 reader task：如果还在跑，让它收尾。reader task 持有的 Child
-            // 在 task 退出后 drop，触发 kill_on_drop 兜底。
+            // Notify the reader task to wind down if it is still running. The `Child`
+            // held by the reader task will be dropped when the task exits, triggering the
+            // `kill_on_drop` fallback.
             if let Some(state) = removed {
                 state.kill_notify.notify_one();
             }
@@ -229,10 +235,12 @@ async fn reader_task(
             _ = state.kill_notify.notified(), if !killed => {
                 killed = true;
                 let _ = child.start_kill();
-                // 继续 drain：start_kill 之后子进程会 SIGKILL，pipe fd 关闭，
-                // 两个 next_line 自然 EOF。注意 `sh -c "sleep N"` 这类命令会
-                // 因 sh 没 exec 而把 sleep 留下；调用方有责任在 shell 命令里
-                // `exec` 真正长跑的部分（或接受 release 时 kill_on_drop 兜底）。
+                // Continue draining: after `start_kill`, the child process receives
+                // SIGKILL, the pipe fds close, and both `next_line` calls will naturally
+                // return EOF. Note that commands like `sh -c "sleep N"` leave `sleep`
+                // alive because `sh` does not `exec` it; the caller is responsible for
+                // `exec`-ing the long-running part in the shell command (or accepting
+                // that `kill_on_drop` will handle it on release).
             }
             line = stdout_lines.next_line(), if stdout_open => {
                 match line {
@@ -258,8 +266,9 @@ async fn reader_task(
             }
         }
     }
-    // 已 kill 的情况下 killed 也代表"被外部要求终止"——下面 wait 的退出态
-    // 反映实际信号（SIGKILL/SIGTERM 等）。
+    // When already killed, `killed` also means "terminated by external request" — the
+    // exit status from the `wait` below reflects the actual signal (SIGKILL/SIGTERM,
+    // etc.).
     let _ = killed;
 
     let wait_result = child.wait().await;
@@ -342,7 +351,8 @@ fn build_command(command: &str) -> Command {
     cmd
 }
 
-/// 1 MiB 上限的 append-only buffer。超额字节 drop 但记入 `truncated`。
+/// An append-only buffer with a 1 MiB cap. Excess bytes are dropped but counted in
+/// `truncated`.
 struct OutputBuffer {
     bytes: Vec<u8>,
     truncated: u64,
@@ -380,8 +390,8 @@ impl OutputBuffer {
     }
 }
 
-/// 单调递增的 terminal id 生成器。前缀加进程启动时的 nanos，避免与未来
-/// 持久化场景的旧 id 冲突。
+/// A monotonically increasing terminal ID generator. The prefix includes the nanos at
+/// process start to avoid conflicts with old IDs from future persistence scenarios.
 fn next_terminal_id() -> TerminalId {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     static PREFIX: OnceLock<String> = OnceLock::new();

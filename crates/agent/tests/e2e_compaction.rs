@@ -1,14 +1,15 @@
-//! 端到端压缩测试：mock provider 触发上下文压缩，断言历史被「摘要 + 保留尾部」
-//! 重建、发了 `ContextCompressed` 事件、且压缩子请求被正确识别。
+//! End-to-end compression test: a mock provider triggers context compression. Asserts
+//! that history is rebuilt as "summary + retained tail", that a `ContextCompressed` event
+//! is emitted, and that the compression sub-request is correctly identified.
 //!
-//! 触发路径：
-//! - `model_info` 报一个很小的 `context_window`，配默认 `compact_ratio=0.85`
-//!   推出极低阈值；
-//! - 经 `load_session` 预置多轮历史，使 `select_boundary` 有 ≥2 个轮次起点、
-//!   能切出非空 head；
-//! - turn 开始即 `maybe_compact` → 触发 → provider 收到一个
-//!   `tool_choice=None` 的摘要子请求，回一段摘要文本；
-//! - 压缩后正常 turn 继续，provider EndTurn。
+//! Trigger path:
+//! - `model_info` reports a very small `context_window`; with the default
+//!   `compact_ratio=0.85` this yields an extremely low threshold.
+//! - `load_session` pre-populates multiple turns of history so that `select_boundary` has
+//!   ≥2 turn boundaries and can split off a non-empty head.
+//! - At the start of a turn, `maybe_compact` triggers → the provider receives a
+//!   summarization sub-request with `tool_choice=None` and returns a summary text.
+//! - After compression, the normal turn continues and the provider returns `EndTurn`.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -42,11 +43,13 @@ fn caps() -> Capabilities {
     }
 }
 
-/// 记录 provider 收到的每次请求，区分摘要子请求（`tool_choice=None`）与普通 turn。
+/// Records each request received by the provider, distinguishing summary sub-requests
+/// (`tool_choice=None`) from normal turns.
 struct RecordingProvider {
-    /// 每次 complete 收到的 (tool_choice_is_none, message_count)。
+    /// (tool_choice_is_none, message_count) received per `complete` call.
     seen: Mutex<Vec<(bool, usize)>>,
-    /// model_info 报告的 context_window——决定三档压缩阈值。
+    /// The `context_window` reported by `model_info` – determines the three compression
+    /// thresholds.
     context_window: u64,
 }
 
@@ -81,8 +84,9 @@ impl LlmProvider for RecordingProvider {
     }
 
     fn model_info(&self, model_id: &str) -> Option<ModelInfo> {
-        // context_window 决定三档阈值。默认 100 → hard=floor(100*0.85)=85，
-        // 预置历史轻松越过，触发同步压缩。
+        // `context_window` determines three threshold tiers. Default 100 → hard =
+        // floor(100 * 0.85) = 85, which the preset history easily exceeds, triggering
+        // synchronous compression.
         Some(ModelInfo {
             id: model_id.to_string(),
             display_name: None,
@@ -106,7 +110,7 @@ impl LlmProvider for RecordingProvider {
 
         Box::pin(async move {
             let chunks: Vec<Result<ProviderChunk, ProviderError>> = if is_summarize {
-                // 摘要子请求：回一段结构化摘要文本。
+                // Summarize sub-request: return a structured summary text.
                 vec![
                     Ok(ProviderChunk::MessageStart {
                         id: "sum-1".to_string(),
@@ -120,7 +124,7 @@ impl LlmProvider for RecordingProvider {
                     }),
                 ]
             } else {
-                // 压缩后的正常 turn：直接 EndTurn。
+                // Compressed normal turn: directly emit EndTurn.
                 vec![
                     Ok(ProviderChunk::MessageStart {
                         id: "turn-1".to_string(),
@@ -163,8 +167,9 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
     let provider = Arc::new(RecordingProvider::new());
     let provider_dyn = provider.clone() as Arc<dyn LlmProvider>;
 
-    // 预置多轮历史：3 个用户轮次，每个带大段文本以越过阈值。
-    let big = "x".repeat(400); // ~100 token each via chars/4
+    // Pre-seed multi-turn history: 3 user turns, each with a large text block to exceed
+    // the threshold.
+    let big = "x".repeat(400); // ~100 tokens each via chars/4
     let history = vec![
         text_msg(Role::User, &format!("turn one {big}")),
         text_msg(Role::Assistant, "reply one"),
@@ -189,7 +194,8 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
         }))
         .config(TurnConfig {
             model: "rec-001".to_string(),
-            // 用默认 compact_ratio=0.85；不设绝对阈值，走 ratio 推算。
+            // Use default compact_ratio=0.85; no absolute threshold, rely on ratio-based
+            // inference.
             ..TurnConfig::default()
         })
         .build();
@@ -212,7 +218,7 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
         .expect("turn");
     assert!(matches!(stop, StopReason::EndTurn));
 
-    // 收事件直到 TurnEnded，捕获是否发了 ContextCompressed。
+    // Consume events until TurnEnded, capturing whether ContextCompressed was emitted.
     let mut got_compressed = false;
     let mut compressed_before_after = None;
     while let Some(ev) = events.next().await {
@@ -233,7 +239,8 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
     let (before, after) = compressed_before_after.expect("before/after");
     assert!(after < before, "compaction should shrink token estimate");
 
-    // provider 应先收到一个摘要子请求（tool_choice=None），再收到压缩后的正常 turn。
+    // The provider should first receive a summarization sub-request (`tool_choice=None`),
+    // then the compressed normal turn.
     let seen = provider.seen.lock().expect("seen poisoned").clone();
     assert!(
         seen.iter().any(|(is_sum, _)| *is_sum),
@@ -243,16 +250,20 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
         .iter()
         .find(|(is_sum, _)| !*is_sum)
         .expect("expected a normal turn request after compaction");
-    // 压缩后历史 = [合成 assistant 摘要] + 保留尾部 + 本轮新 user prompt。
-    // 尾部预算极小（clamp(85/4,2k,8k)=2k 够大 → 实际由轮次数决定），但 head 非空，
-    // 故重建后的消息数应明显少于原始 6 轮历史 + 新 prompt = 7。
+    // After compaction, the history is: [synthesized assistant summary] + retained tail +
+    // current user prompt.
+    // The tail budget is very small (clamp(85/4, 2k, 8k) = 2k, which is large enough →
+    // actually determined by the number of turns), but the head is non-empty,
+    // so the reconstructed message count should be significantly less than the original
+    // 6-turn history + new prompt = 7.
     assert!(
         normal.1 <= 7,
         "compacted request should not exceed original message count, saw {}",
         normal.1
     );
 
-    // 重建后的历史首条应是合成的 assistant 摘要消息（带 SUMMARY 前缀）。
+    // The first entry in the rebuilt history should be the synthetic assistant summary
+    // message (prefixed with SUMMARY).
     let snap = session.history_snapshot();
     let first = snap.first().expect("non-empty history");
     assert_eq!(first.role, Role::Assistant, "summary message is assistant");
@@ -265,19 +276,24 @@ async fn compaction_rebuilds_history_with_summary_and_tail() {
     assert!(has_summary_text, "first message should carry the summary");
 }
 
-/// 后台压缩路径：估算落在 soft 水位 `[soft, hard)` 区间时，turn **不**同步压缩，
-/// 而是异步起一次后台摘要压缩；本轮请求带满历史，压缩落地在随后（这里轮询历史
-/// 直到首条变成合成摘要）。
+/// Background compaction path: when the estimated size falls in the soft zone `[soft,
+/// hard)`, the turn does **not** compact synchronously; instead it kicks off an
+/// asynchronous background summary compaction. This turn sends the full history, and
+/// compaction takes effect later (here we poll history until the first message becomes a
+/// synthetic summary).
 #[tokio::test]
 async fn background_compaction_runs_off_turn_critical_path() {
-    // 预置历史 ≈ 314 token（3×102 大 user + 3×2 小 reply）+ 新 prompt ~2 ≈ 316。
-    // 取 context_window=405 → micro=floor(405*0.6)=243, soft=283, hard=344。
-    // 估算 ~316 ∈ [283, 344) 的 soft 带（两侧各 ~30 余量）：本轮异步起后台压缩。
-    // 历史无大 tool_result（纯文本轮次）→ 微压缩无可清理项 → 跳过，落到 soft。
+    // Preset history ≈ 314 tokens (3×102 large user + 3×2 small reply) + new prompt ~2 ≈
+    // 316.
+    // Set context_window=405 → micro=floor(405*0.6)=243, soft=283, hard=344.
+    // Estimate ~316 ∈ [283, 344) soft band (~30 margin on each side): this turn starts
+    // async background compaction.
+    // History has no large tool_result (plain-text turns) → micro-compression has nothing
+    // to clean → skipped, falls into soft.
     let provider = Arc::new(RecordingProvider::with_context_window(405));
     let provider_dyn = provider.clone() as Arc<dyn LlmProvider>;
 
-    let big = "x".repeat(400); // ~100 token each
+    let big = "x".repeat(400); // ~100 tokens each
     let history = vec![
         text_msg(Role::User, &format!("turn one {big}")),
         text_msg(Role::Assistant, "reply one"),
@@ -322,9 +338,11 @@ async fn background_compaction_runs_off_turn_critical_path() {
         .expect("turn");
     assert!(matches!(stop, StopReason::EndTurn));
 
-    // 本轮 turn 走 soft 带 → 异步起后台压缩，**不**阻塞本轮：故本轮的正常请求
-    // 看到的是未压缩的满历史（首条仍是原始 user 轮，不是摘要）。
-    // 后台压缩随后落地——轮询历史直到首条变成合成摘要（带 SUMMARY 前缀）。
+    // This turn uses a soft trigger → background compaction starts asynchronously and
+    // does **not** block this turn. Therefore, the normal request in this turn sees the
+    // full uncompressed history (the first entry is still the original user turn, not a
+    // summary). The background compaction lands later — poll the history until the first
+    // entry becomes a synthetic summary (with a SUMMARY prefix).
     let mut compacted = false;
     for _ in 0..50 {
         let snap = session.history_snapshot();
@@ -344,7 +362,7 @@ async fn background_compaction_runs_off_turn_critical_path() {
         "background compaction should eventually rebuild history with a summary"
     );
 
-    // provider 必收到过一个摘要子请求（tool_choice=None）。
+    // The provider must have received a summarize sub-request (`tool_choice=None`).
     let seen = provider.seen.lock().expect("seen poisoned").clone();
     assert!(
         seen.iter().any(|(is_sum, _)| *is_sum),

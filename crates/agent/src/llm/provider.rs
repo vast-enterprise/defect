@@ -1,4 +1,4 @@
-//! [`LlmProvider`] trait — the main LLM vendor integration signature.
+//! [`LlmProvider`] trait — the primary LLM vendor integration interface.
 
 use std::pin::Pin;
 
@@ -11,60 +11,66 @@ use super::error::ProviderError;
 use super::model::{ModelInfo, ProviderInfo};
 use super::request::CompletionRequest;
 
-/// provider 流式生成的事件流。类型擦除以便 `dyn LlmProvider` 直接可用。
+/// A type-erased stream of events produced by a provider during streaming generation,
+/// enabling direct use with `dyn LlmProvider`.
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<ProviderChunk, ProviderError>> + Send>>;
 
-/// LLM provider 抽象。
+/// LLM provider abstraction.
 ///
-/// 取消语义：[`LlmProvider::complete`] 接收一个 [`CancellationToken`]，
-/// 调用方可在任意时刻 `cancel()` 终止此次调用与下游流。drop 返回的
-/// stream 同样视为取消。
+/// Cancellation semantics: [`LlmProvider::complete`] receives a [`CancellationToken`];
+/// the caller may call `cancel()` at any point to abort the call and the downstream
+/// stream. Dropping the returned stream also counts as cancellation.
 pub trait LlmProvider: Send + Sync {
-    /// 厂商元信息（厂商名、API 风格、tracing 标签等）。
+    /// Provider metadata (vendor name, API style, tracing labels, etc.).
     fn info(&self) -> ProviderInfo;
 
-    /// 厂商级能力矩阵。模型级差异通过
-    /// [`super::ModelCapabilityOverrides`] 表达，主循环按需合并。
+    /// Provider-level capability matrix. Model-level differences are expressed via
+    /// [`super::ModelCapabilityOverrides`] and merged on demand by the main loop.
     fn capabilities(&self) -> Capabilities;
 
-    /// provider adapter 自报家门的 hosted capability 集合。
+    /// The set of hosted capabilities that this provider adapter advertises.
     ///
-    /// 与 [`Self::capabilities`] 不同——前者是模型属性，这里是当前
-    /// adapter 实现状态：能否把 hosted web_search / fetch 等通过 wire 暴露
-    /// 给模型。session 启动期会读这个值与
-    /// `capabilities.web_search.mode` 一起做 hosted web search 的能力来源裁决。
+    /// Unlike [`Self::capabilities`] (which describes model-level properties), this
+    /// reflects the current adapter implementation state: whether it can expose hosted
+    /// `web_search`, `fetch`, etc. to the model over the wire. During session startup,
+    /// this value is read together with `capabilities.web_search.mode` to determine the
+    /// source of hosted web search capabilities.
     ///
-    /// 默认实现返回全 `false`，新 provider 不需要主动覆盖。
-    /// 真支持 hosted 的 adapter（Anthropic / OpenAI Responses）应
-    /// 显式 override 此方法。
+    /// The default implementation returns all `false`; new providers do not need to
+    /// override it. Adapters that truly support hosted capabilities (Anthropic / OpenAI
+    /// Responses) should explicitly override this method.
     fn hosted_capabilities(&self) -> HostedCapabilities {
         HostedCapabilities::default()
     }
 
-    /// 列出此 provider 当前可用的模型。
+    /// Lists the models currently available from this provider.
     ///
-    /// 实现可能产生网络调用（如 OpenAI `/v1/models`），结果应在
-    /// provider 内部缓存以供 [`Self::model_info`] 同步查询。
+    /// The implementation may make network calls (e.g., OpenAI `/v1/models`); results
+    /// should be cached inside the provider for synchronous lookup by
+    /// [`Self::model_info`].
     ///
     /// # Errors
     ///
-    /// 网络错误、鉴权错误、服务端错误等均映射为 [`ProviderError`]。
+    /// Network errors, authentication errors, server errors, etc., are all mapped to
+    /// [`ProviderError`].
     fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>>;
 
-    /// 同步查询某个模型的元信息。
+    /// Synchronously query metadata for a given model.
     ///
-    /// 用于主循环裁剪 context 时的快路径，**不应触发网络调用**。
-    /// 若 provider 缓存里没有，返回 `None`；调用方可决定是先调
-    /// [`Self::list_models`] 再重试，还是按未知模型处理。
+    /// This is a fast path for context trimming in the main loop; **must not trigger a
+    /// network call**.
+    /// Returns `None` if the provider's cache does not contain the model. The caller may
+    /// then decide to call [`Self::list_models`] and retry, or treat it as an unknown
+    /// model.
     fn model_info(&self, model_id: &str) -> Option<ModelInfo>;
 
-    /// 启动一次流式生成。
+    /// Start a streaming generation.
     ///
     /// # Errors
     ///
-    /// 鉴权失败、参数非法、传输错误、服务端错误等均映射为
-    /// [`ProviderError`]。流中产生的错误通过流上的 `Err` 项传递，
-    /// 不通过此返回值。
+    /// Authentication failures, invalid parameters, transport errors, server errors, etc.
+    /// are all mapped to [`ProviderError`]. Errors produced within the stream are
+    /// delivered via the stream's `Err` variant, not through this return value.
     fn complete(
         &self,
         req: CompletionRequest,

@@ -1,8 +1,9 @@
-//! [`AcpShellBackend`]：把 `bash` 工具的 shell 执行委托给 ACP 客户端。
+//! [`AcpShellBackend`] delegates shell execution of the `bash` tool to the ACP client.
 //!
-//! ACP 反向请求 `terminal/create` / `terminal/output` / `terminal/wait_for_exit`
-//! / `terminal/release` / `terminal/kill` 由 agent 发起、client 处理（zed /
-//! vscode 这类有集成终端 UI 的客户端在这条委托链上让命令在客户端 PTY 里跑）。
+//! ACP reverse requests (`terminal/create`, `terminal/output`, `terminal/wait_for_exit`,
+//! `terminal/release`, `terminal/kill`) are initiated by the agent and handled by the
+//! client. In this delegation chain, clients with integrated terminal UIs (such as Zed or
+//! VS Code) run commands in the client's PTY.
 //!
 //! ACP shell backend — delegates shell execution to the client via ACP.
 
@@ -18,13 +19,15 @@ use defect_agent::error::BoxError;
 use defect_agent::shell::{ShellBackend, ShellError, ShellOutput, TerminalExitStatus, TerminalId};
 use futures::future::BoxFuture;
 
-/// 委托模式 shell 后端。
+/// Delegation-pattern shell backend.
 ///
-/// 持有 ACP 反向通道 [`ConnectionTo<Client>`] + session id + workspace root：
-/// - `cx`：把请求送给客户端的句柄；本身是 `Arc<...>` newtype，clone 廉价
-/// - `session_id`：每条反向请求都要带，客户端用它在多 session 场景里路由
-/// - `workspace_root`：agent 自己守工作区边界，避免依赖客户端兜底
-///   （agent guards the workspace boundary independently）。
+/// Holds an ACP reverse channel [`ConnectionTo<Client>`] + session id + workspace root:
+/// - `cx`: handle for sending requests to the client; it is an `Arc<...>` newtype, cheap
+///   to clone
+/// - `session_id`: required on every reverse request; the client uses it to route in
+///   multi-session scenarios
+/// - `workspace_root`: the agent guards the workspace boundary independently, avoiding
+///   reliance on the client as a fallback.
 pub struct AcpShellBackend {
     cx: ConnectionTo<Client>,
     session_id: SessionId,
@@ -41,8 +44,8 @@ impl AcpShellBackend {
     }
 
     fn acp_terminal_id(id: &TerminalId) -> AcpTerminalId {
-        // schema 的 TerminalId 是 Arc<str> newtype；从 &str 走标准库
-        // `From<&str> for Arc<str>` 拷贝一份。
+        // The schema's `TerminalId` is an `Arc<str>` newtype; copy via the standard
+        // library `From<&str> for Arc<str>`.
         AcpTerminalId::new(id.as_str())
     }
 }
@@ -54,14 +57,16 @@ impl ShellBackend for AcpShellBackend {
         cwd: PathBuf,
     ) -> BoxFuture<'_, Result<TerminalId, ShellError>> {
         Box::pin(async move {
-            // 与 fs 一致：agent 自己再守一道边界——bash 工具层已校验过 workdir，
-            // 这里再校验一次让 backend 的安全保证对称（详见 docs §5 "双层栅栏"）。
-            // 注意：fs 的 `resolve_workspace_path` 是按"目标文件 + 父目录"模型
-            // 设计的（split 出 file_name），不能直接套到 directory cwd 上。
+            // Consistent with `fs`: the agent enforces a second boundary — the bash tool
+            // layer already validates `workdir`, and this additional check makes the
+            // backend's safety guarantees symmetric (see docs §5 "double fence").
+            // Note: `fs`'s `resolve_workspace_path` is designed for a "target file +
+            // parent directory" model (splitting out `file_name`), so it cannot be
+            // directly applied to a directory `cwd`.
             let abs_cwd = resolve_workspace_dir(&self.workspace_root, &cwd)?;
 
-            // v0：所有 shell 命令都走 `sh -c <command>`，与 LocalShellBackend
-            // 对齐（详见 docs §2.1 "command + args 分离"）。
+            // v0: all shell commands go through `sh -c <command>`, matching
+            // `LocalShellBackend` (see docs §2.1 "command + args separation").
             let req = CreateTerminalRequest::new(self.session_id.clone(), "/bin/sh")
                 .args(vec!["-c".into(), command])
                 .cwd(abs_cwd);
@@ -137,10 +142,10 @@ impl ShellBackend for AcpShellBackend {
     }
 }
 
-/// ACP schema 的 `TerminalExitStatus`（`exit_code: Option<u32>`）→ agent
-/// 内部的 [`TerminalExitStatus`]（`exit_code: Option<i32>`）。
-/// exit code 标准值域 0..=255，i32 域
-/// 足够装下；超过 i32::MAX 的退化为 -1。
+/// Maps ACP schema's `TerminalExitStatus` (`exit_code: Option<u32>`) to the agent's
+/// internal [`TerminalExitStatus`] (`exit_code: Option<i32>`).
+/// Standard exit codes are in 0..=255, which fits in `i32`; values exceeding `i32::MAX`
+/// are degraded to -1.
 fn map_acp_exit_status(s: agent_client_protocol::schema::TerminalExitStatus) -> TerminalExitStatus {
     TerminalExitStatus {
         exit_code: s.exit_code.map(|n| i32::try_from(n).unwrap_or(-1)),
@@ -148,17 +153,19 @@ fn map_acp_exit_status(s: agent_client_protocol::schema::TerminalExitStatus) -> 
     }
 }
 
-/// 客户端返回的 wire `Error` → [`ShellError::Backend`]。透传 wire `code` /
-/// `message` 到 [`BoxError`] 的 source，让 LLM 在 tool_result 里能拿到原文
-/// 排障。与 `acp::fs::map_wire_error` 同款取舍。
+/// Maps a wire `Error` returned by the client into [`ShellError::Backend`]. Forwards the
+/// wire `code` / `message` as the source of the [`BoxError`] so the LLM can access the
+/// original text in `tool_result` for debugging. Same trade-off as
+/// `acp::fs::map_wire_error`.
 fn map_wire_error(err: agent_client_protocol::Error) -> ShellError {
     ShellError::Backend(BoxError::new(err))
 }
 
-/// 把请求 cwd 解析到工作区内的绝对目录路径，并校验未越界。与
-/// `defect_agent::fs::resolve_workspace_path` 同款思路，但目标本身就是
-/// directory（cwd），不需要再 split 出 file_name——因此整个目标 canonicalize，
-/// 再 starts_with 检查根。
+/// Resolves the requested cwd to an absolute path within the workspace and validates that
+/// it does not escape. Same approach as
+/// `defect_agent::fs::resolve_workspace_path`, but since the target is already a
+/// directory (cwd), there is no need to split off a file_name — so the entire target is
+/// canonicalized and then checked with `starts_with` against the root.
 fn resolve_workspace_dir(
     workspace_root: &std::path::Path,
     requested: &std::path::Path,

@@ -1,12 +1,13 @@
-//! Tracing layer：在 `tracing::trace` 级别打 method/uri/status/elapsed。
+//! Tracing layer that logs method, URI, status, and elapsed time at `tracing::trace`
+//! level.
 //!
-//! v0 不用 `tower-http` 的 `TraceLayer`——它会把 `Response<B>` 包成
-//! `Response<ResponseBody<B, _>>` 来挂 body chunk hook，跟我们
-//! `BoxCloneSyncService<_, http::Response<hyper::body::Incoming>, _>`
-//! 的签名打架。我们这层只看 status / elapsed，不需要 body chunk
-//! 钩子，自起一份更简单。
+//! v0 does not use `tower-http`'s `TraceLayer` — it wraps `Response<B>` into
+//! `Response<ResponseBody<B, _>>` to attach a body-chunk hook, which conflicts with our
+//! `BoxCloneSyncService<_, http::Response<hyper::body::Incoming>, _>` signature. This
+//! layer only cares about status and elapsed time, so it doesn't need a body-chunk hook;
+//! rolling our own is simpler.
 //!
-//! 用法：`RUST_LOG=defect_http=trace`。
+//! Usage: `RUST_LOG=defect_http=trace`.
 
 use std::future::Future;
 use std::pin::Pin;

@@ -70,14 +70,14 @@ fn schema_has_name_enum_and_catalog() {
     ]));
     let schema = tool.schema();
     assert_eq!(schema.name, "skill");
-    // catalog 进 description（L1 清单）。
+    // Catalog the skills into the description (L1 checklist).
     assert!(
         schema
             .description
             .contains("- code-review: review Rust diffs")
     );
     assert!(schema.description.contains("- debug: find bugs"));
-    // name enum 含发现到的名字（BTreeMap ⇒ 稳定有序）。
+    // The `name` enum contains the discovered names (BTreeMap ⇒ stable ordering).
     let enum_vals = schema.input_schema["properties"]["name"]["enum"]
         .as_array()
         .expect("enum array");
@@ -98,7 +98,7 @@ fn loads_body_and_directory_hint() {
     let text = completed_text(&events).expect("completed text");
     assert!(text.contains("# Skill: code-review"));
     assert!(text.contains("Run clippy then summarize."));
-    // 目录提示让模型能拼资源文件绝对路径。
+    // The directory hint allows the model to construct absolute paths to resource files.
     assert!(text.contains("/skills/code-review"));
 }
 

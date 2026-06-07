@@ -1,30 +1,33 @@
-//! Skill 发现与解析。
+//! Skill discovery and parsing.
 //!
-//! Skill 是用户为 agent 配置的可复用提示片段——一段 markdown body，加上同目录
-//! 下可选的 `scripts/` / `refs/` 资源文件。模型在需要时通过 `skill` 工具按名
-//! 拉取 body 进上下文（progressive disclosure 的 L2）。设计见
-//! Skill configuration types.
+//! Skills are reusable prompt fragments that users configure for an agent: a markdown
+//! body, plus optional `scripts/` / `refs/` resource files in the same directory. When
+//! needed, the model pulls a skill's body into context by name via the `skill` tool
+//! (progressive disclosure L2). See Skill configuration types for the design.
 //!
-//! ## 文件形态（对齐 Anthropic / Codex 的 Agent Skills open standard）
+//! ## File layout (aligned with the Anthropic / Codex Agent Skills open standard)
 //!
-//! `<agents-or-skills-dir>/skills/<name>/SKILL.md`，frontmatter（`+++` ⇒ TOML，
-//! `---` ⇒ YAML）之后正文即 skill body。skill 名 = 目录名。目录内可同级放
-//! `scripts/` / `refs/` 子目录，模型用普通 `bash` / `read_file` 工具按需读取
-//! （L3）——本模块只解析 `SKILL.md`，不扫描资源文件。
+//! `<agents-or-skills-dir>/skills/<name>/SKILL.md` — the skill body follows the
+//! frontmatter (`+++` ⇒ TOML, `---` ⇒ YAML). The skill name is the directory name. The
+//! directory may contain sibling `scripts/` / `refs/` subdirectories; the model reads
+//! them on demand using ordinary `bash` / `read_file` tools (L3). This module only parses
+//! `SKILL.md` and does not scan resource files.
 //!
-//! 与 subagent profile（[`crate::profiles`]）共用 frontmatter 解析
-//! （[`crate::frontmatter`]）与分层发现骨架，但**语义不同**：
-//! - profile 是"派生一个隔离子 agent 执行任务"（`spawn_agent` 的 `task`）；
-//! - skill 是"把一段说明注入当前对话"（`skill` 工具的 `name`）。
+//! Shares frontmatter parsing ([`crate::frontmatter`]) and the layered discovery skeleton
+//! with subagent profiles ([`crate::profiles`]), but the **semantics differ**:
+//! - A profile "spawns an isolated sub-agent to execute a task" (`spawn_agent`'s `task`);
+//! - A skill "injects instructions into the current conversation" (`skill` tool's
+//!   `name`).
 //!
-//! ## 分层发现
+//! ## Layered discovery
 //!
-//! 与主配置 / profile 同构：
-//! - 用户层 `<XDG_CONFIG_HOME>/defect/skills/`（或 `~/.config/defect/skills/`）
-//! - 项目层 `<repo_root>/.defect/skills/`
+//! Same structure as the main config / profiles:
+//! - User layer: `<XDG_CONFIG_HOME>/defect/skills/` (or `~/.config/defect/skills/`)
+//! - Project layer: `<repo_root>/.defect/skills/`
 //!
-//! 跨层同名时**项目层覆盖用户层**（整体替换，不 merge——body 是不可分的
-//! markdown，按字段合并没有自然语义）。
+//! When the same name exists in both layers, the **project layer overrides the user
+//! layer** (full replacement, not merged — the body is an indivisible markdown block, so
+//! field-level merging has no natural semantics).
 
 use std::collections::BTreeMap;
 use std::env;
@@ -38,77 +41,92 @@ use crate::frontmatter::{parse_frontmatter, split_frontmatter};
 use crate::loader::find_repo_root;
 use crate::types::{ConfigError, LoadConfigOptions};
 
-/// skill 项目层目录（相对 repo root）。对位 [`crate::profiles`] 的
-/// `PROJECT_AGENTS_RELATIVE`（`.defect/agents`）。
+/// Project-level skill directory (relative to repo root). Mirrors [`crate::profiles`]'s
+/// `PROJECT_AGENTS_RELATIVE` (`.defect/agents`).
 const PROJECT_SKILLS_RELATIVE: &str = ".defect/skills";
-/// skill 用户层目录（相对 XDG_CONFIG_HOME）。
+/// User-level skill directory (relative to `XDG_CONFIG_HOME`).
 const USER_SKILLS_RELATIVE: &str = "defect/skills";
-/// 每个 skill 目录里必有的清单文件名（对齐 Anthropic / Codex open standard）。
+/// Mandatory manifest filename inside every skill directory (aligned with the Anthropic /
+/// Codex open standard).
 const SKILL_MANIFEST_FILE: &str = "SKILL.md";
-/// skill `description` 建议长度上限——超出仅 warn，不截断（进 L1 清单的成本
-/// 控制，参考 Anthropic 的实践）。
+/// Soft length limit for skill `description` — exceeding it only warns, does not truncate
+/// (cost control for inclusion in the L1 manifest, following Anthropic's practice).
 const DESCRIPTION_SOFT_LIMIT: usize = 200;
 
-/// 一个解析好的 skill。
+/// A parsed skill.
 ///
-/// 由 [`discover_skills`] 产出；`skill` 工具消费它——`name` / `description` 进
-/// 工具 schema 的清单，`body` 在模型按名拉取时作为 tool result，`dir` 让模型
-/// 知道资源文件（`scripts/` / `refs/`）的绝对路径根。`always` / `triggers`
-/// 驱动自动激活（见 [`SkillTriggers`]），CLI 装配时投影到 agent 侧 `SkillEntry`。
+/// Produced by [`discover_skills`]; consumed by the `skill` tool — `name` / `description`
+/// go into the tool schema's manifest, `body` is returned as the tool result when the
+/// model fetches by name, and `dir` gives the model the absolute root for resource files
+/// (`scripts/` / `refs/`). `always` / `triggers` drive automatic activation (see
+/// [`SkillTriggers`]), and are projected into the agent-side `SkillEntry` during CLI
+/// assembly.
 #[derive(Debug, Clone)]
 pub struct SkillSpec {
-    /// skill 名（= 目录名）。`skill` 工具的 `name` enum 取值。
+    /// Skill name (directory name). Value of the `name` enum in the `skill` tool.
     pub name: String,
-    /// skill 目录的绝对路径，供 `skill` 工具回填给模型拼资源文件路径。
+    /// Absolute path to the skill directory, used by the `skill` tool to backfill
+    /// resource file paths for the model.
     pub dir: PathBuf,
-    /// 选择期描述——进 L1 清单让模型决定是否加载。必填。
+    /// Selection-phase description – included in the L1 manifest so the model can decide
+    /// whether to load it. Required.
     pub description: String,
-    /// `SKILL.md` 去 frontmatter 后的 body 全文（L2 加载时的内容）。
+    /// The full body of `SKILL.md` after stripping the frontmatter (content loaded at
+    /// L2).
     pub body: String,
-    /// `always: true` ⇒ body 在 session 启动直接注入 system prompt（always-on）。
+    /// `always: true` ⇒ body is injected directly into the system prompt at session start
+    /// (always-on).
     pub always: bool,
-    /// 自动激活触发条件（globs 已在解析期编译成 GlobSet / keywords）。复用 agent
-    /// 侧类型，CLI 投影时直接 clone。
+    /// Auto-activation trigger conditions (globs are compiled into `GlobSet`/keywords
+    /// during parsing). Reuses the agent-side type; CLI projection clones directly.
     pub triggers: SkillTriggers,
 }
 
-/// `SKILL.md` frontmatter 的原始反序列化形态。
+/// Raw deserialization form of `SKILL.md` frontmatter.
 ///
-/// 保留 `deny_unknown_fields`（与 [`crate::profiles`] 一致）抓必填项拼写错
-/// （`naem` / `desciption` 这类 typo 不会被静默放过）；Agent Skills
-/// open-standard 的 `always` / `triggers` 已**接入消费**（自动激活，见
-/// ), `allowed_tools` is still an explicit placeholder
-/// （v1 做 tool gating）。
+/// Keeps `deny_unknown_fields` (consistent with [`crate::profiles`]) to catch
+/// misspellings of required fields (typos like `naem` / `desciption` are not silently
+/// ignored). The `always` / `triggers` fields from the Agent Skills open standard are now
+/// consumed (auto-activation, see ), while `allowed_tools` remains an explicit
+/// placeholder (for v1 tool gating).
 ///
-/// 显式列出（而非 deny / 而非完全放开）的取舍：deny 会把"用户已写好的
-/// Anthropic / Codex 格式 skill 扔进来就能用"（§2.1）这个卖点废掉；完全放开
-/// 又丢了 typo 保护。显式列出文档已承诺的字段两头兼顾——已接入的字段从
-/// "被忽略"变"被消费"，对用户文件向后兼容。
+/// Trade-off of explicit listing (vs. deny vs. fully open): deny would break the selling
+/// point that "users can drop in an existing Anthropic / Codex-format skill and it just
+/// works" (§2.1); fully open loses typo protection. Explicitly listing the documented
+/// fields balances both — consumed fields go from "ignored" to "consumed", with backward
+/// compatibility for user files.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SkillManifestToml {
-    /// 必填，且必须与目录名一致——清单展示与 `skill` 工具入参用同一个名字，
-    /// 不一致会让模型按清单里的名字调用却找不到。
+    /// Required, and must match the directory name — the manifest display and the `skill`
+    /// tool argument use the same name; a mismatch would cause the model to look up the
+    /// skill by the manifest name and fail to find it.
     name: String,
-    /// 必填——进 L1 清单。缺失即 serde 报 "missing field `description`"，被
-    /// [`discover_skills`] 包成带文件路径的 hard error。
+    /// Required – goes into the L1 manifest. If missing, serde reports "missing field
+    /// `description`", which [`discover_skills`] wraps into a hard error with the file
+    /// path.
     description: String,
-    /// `true` ⇒ 该 skill 的 body 在 session 启动直接拼进 system prompt
-    /// （always-on，见 §5.1）。
+    /// `true` means this skill's body is directly appended to the system prompt at
+    /// session start (always-on, see §5.1).
     #[serde(default)]
     always: Option<bool>,
-    /// 自动激活触发条件（按文件 glob / prompt 关键字，见 §4.3）。
+    /// Automatic activation trigger conditions (by file glob or prompt keyword; see
+    /// §4.3).
     #[serde(default)]
     triggers: Option<SkillTriggersToml>,
-    /// 占位：v1 用于让 ACP 客户端做 tool gating（参考 Anthropic `allowed-tools`，
-    /// 故同时接受连字符写法）。v0 解析后不消费。
+    /// Placeholder: v1 uses this for ACP client tool gating (inspired by Anthropic's
+    /// `allowed-tools`, so the hyphenated form is also accepted). v0 parses it but does
+    /// not consume it.
     #[serde(default, alias = "allowed-tools")]
-    #[allow(dead_code, reason = "open-standard 占位字段，v0 解析但不消费")]
+    #[allow(
+        dead_code,
+        reason = "open-standard placeholder field; v0 parses but does not consume it"
+    )]
     allowed_tools: Option<Vec<String>>,
 }
 
-/// `[triggers]` 子表：自动激活条件。`globs` 在 [`parse_skill`] 里编译成
-/// [`globset::GlobSet`]（坏 glob fail-fast）。
+/// `[triggers]` sub-table: auto-activation conditions. `globs` is compiled into a
+/// [`globset::GlobSet`] in [`parse_skill`] (bad globs fail fast).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SkillTriggersToml {
@@ -118,24 +136,26 @@ struct SkillTriggersToml {
     keywords: Vec<String>,
 }
 
-/// 发现并解析所有可用 skill。
+/// Discover and parse all available skills.
 ///
-/// 先扫用户层、再扫项目层；同名 skill 项目层覆盖用户层。任一 skill 的
-/// `SKILL.md` 解析失败 / frontmatter 缺失 / `name` 与目录名不符，都是 hard
-/// error（fail loud，不静默跳过坏 skill——与 `profiles` 模块同款，区别于
-/// 旧设计稿的 warn-and-skip）。目录里非 skill 的杂项（无 `SKILL.md` 的子目录、
-/// 非目录项）静默跳过。
+/// User-level skills are scanned first, then project-level skills; a project-level skill
+/// with the same name overrides the user-level one. For any skill, a failed `SKILL.md`
+/// parse, missing frontmatter, or a `name` that does not match the directory name is a
+/// hard error (fail loud, do not silently skip bad skills — same as the `profiles`
+/// module, unlike the old design's warn-and-skip). Non-skill items in the directory
+/// (subdirectories without `SKILL.md`, non-directory entries) are silently skipped.
 ///
 /// # Errors
-/// - [`ConfigError::Io`]：读 `SKILL.md` 失败
-/// - [`ConfigError::Invalid`]：`SKILL.md` 缺 frontmatter、解析失败、缺
-///   `name` / `description`、或 `name` ≠ 目录名
+/// - [`ConfigError::Io`]: reading `SKILL.md` failed
+/// - [`ConfigError::Invalid`]: `SKILL.md` missing frontmatter, parse failure, missing
+///   `name` / `description`, or `name` ≠ directory name
 pub fn discover_skills(
     opts: &LoadConfigOptions,
 ) -> Result<BTreeMap<String, SkillSpec>, ConfigError> {
     let mut skills = BTreeMap::new();
 
-    // 用户层先，项目层后——后写覆盖先写，实现"项目覆盖用户"。
+    // User-layer first, project-layer second — later writes overwrite earlier ones, so
+    // project settings override user settings.
     if let Some(user_dir) = resolve_user_skills_dir(opts) {
         scan_skills_dir(&user_dir, &mut skills)?;
     }
@@ -146,16 +166,18 @@ pub fn discover_skills(
     Ok(skills)
 }
 
-/// 扫一个 `skills/` 目录，把其中每个 skill 解析成 [`SkillSpec`] 写入 `out`
-/// （跨层同名时本层覆盖先前层——调用方按 用户→项目 顺序传入实现"项目覆盖
-/// 用户"）。目录不存在 ⇒ no-op。
+/// Scan a `skills/` directory, parse each skill into a [`SkillSpec`], and write it into
+/// `out` (when the same name appears across layers, the current layer overwrites previous
+/// ones — the caller passes directories in user→project order to implement "project
+/// overrides user"). If the directory does not exist, this is a no-op.
 fn scan_skills_dir(
     skills_dir: &Path,
     out: &mut BTreeMap<String, SkillSpec>,
 ) -> Result<(), ConfigError> {
     let entries = match std::fs::read_dir(skills_dir) {
         Ok(entries) => entries,
-        // 目录不存在是常态（用户没建任何 skill）——不是错误。
+        // It is normal for the directory to not exist (the user has not created any
+        // skills) — this is not an error.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
             return Err(ConfigError::Io {
@@ -172,12 +194,12 @@ fn scan_skills_dir(
         })?;
         let path = entry.path();
         if !path.is_dir() {
-            // skill 只走 dir-per-skill 形态——非目录项跳过。
+            // Skills only use the dir-per-skill layout — skip non-directory entries.
             continue;
         }
         let manifest_path = path.join(SKILL_MANIFEST_FILE);
         if !manifest_path.is_file() {
-            // 没有 SKILL.md 的子目录不是 skill——跳过，不报错。
+            // Subdirectories without a SKILL.md are not skills — skip silently.
             continue;
         }
         let Some(dir_name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
@@ -190,8 +212,8 @@ fn scan_skills_dir(
     Ok(())
 }
 
-/// 解析一个 skill 目录：读 `SKILL.md`，切 frontmatter，校验 `name` 与目录名
-/// 一致，body 即 frontmatter 之后的正文。
+/// Parse a skill directory: read `SKILL.md`, split the frontmatter, verify that `name`
+/// matches the directory name, and treat the body as the content after the frontmatter.
 fn parse_skill(dir: &Path, manifest_path: &Path, dir_name: &str) -> Result<SkillSpec, ConfigError> {
     let raw = std::fs::read_to_string(manifest_path).map_err(|err| ConfigError::Io {
         path: manifest_path.to_path_buf(),
@@ -230,8 +252,9 @@ fn parse_skill(dir: &Path, manifest_path: &Path, dir_name: &str) -> Result<Skill
         );
     }
 
-    // triggers：把 globs 编译成 GlobSet（坏 glob 当场 hard fail，带 skill 路径），
-    // keywords 原样保留。无 [triggers] 子表 ⇒ 默认空触发。
+    // Process triggers: compile `globs` into a `GlobSet` (invalid globs hard-fail
+    // immediately, with the skill path), and keep `keywords` as-is. No `[triggers]` table
+    // means default empty triggers.
     let triggers = match manifest.triggers {
         Some(t) => SkillTriggers {
             globs: compile_globs(&t.globs, manifest_path)?,
@@ -250,9 +273,11 @@ fn parse_skill(dir: &Path, manifest_path: &Path, dir_name: &str) -> Result<Skill
     })
 }
 
-/// 把 `triggers.globs` 编译成 [`globset::GlobSet`]。空 ⇒ `None`（无 glob 触发）。
-/// 任一 glob 非法 ⇒ [`ConfigError::Invalid`]，带 `SKILL.md` 路径与 globset 错误
-/// （fail loud，不静默吞坏 glob）。
+/// Compiles `triggers.globs` into a [`globset::GlobSet`]. Empty input ⇒ `None` (no glob
+/// triggers).
+/// Any invalid glob ⇒ [`ConfigError::Invalid`] with the `SKILL.md` path and the globset
+/// error
+/// (fails loudly, does not silently swallow bad globs).
 fn compile_globs(
     globs: &[String],
     manifest_path: &Path,
@@ -275,11 +300,12 @@ fn compile_globs(
     Ok(Some(set))
 }
 
-/// 解析用户层 `skills/` 目录。与 [`crate::profiles`] 的 `resolve_user_agents_dir`
-/// 同源优先级（XDG_CONFIG_HOME → HOME/.config）；找不到时返回 `None`（用户没设
-/// XDG/HOME 时用户层 skill 直接缺席，不 hard error）。
+/// Resolves the user-level `skills/` directory. Follows the same priority as
+/// [`crate::profiles`]'s `resolve_user_agents_dir` (`XDG_CONFIG_HOME` → `HOME/.config`);
+/// returns `None` when not found (if neither `XDG_CONFIG_HOME` nor `HOME` is set, user
+/// skills are simply absent, not a hard error).
 fn resolve_user_skills_dir(opts: &LoadConfigOptions) -> Option<PathBuf> {
-    // `--local`：忽略用户级 skills 目录。
+    // `--local`: ignore the user-level skills directory.
     if opts.local {
         return None;
     }

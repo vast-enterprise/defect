@@ -1,21 +1,22 @@
-//! Anthropic Messages 协议层单测。
+//! Unit tests for the Anthropic Messages protocol layer.
 //!
-//! 重点覆盖：
-//! - `encode_request` 字段映射（model / system / tools / tool_choice /
-//!   thinking / sampling / messages 的 4 种 content）
-//! - `decode_stream` SSE 状态机：
-//!   - 单 tool_use 完整路径（Start→ArgsDelta→Stop→ToolUseEnd→message_delta）
-//!   - 两个 tool_use 并发（不同 index）的 ArgsDelta 交错
-//!   - thinking + signature_delta 交替
-//!   - `event: error` 终止流
-//!   - `event: ping` 被吞
-//!   - 单条 SSE JSON 解析失败 → `Malformed`，流不终止
-//!   - 流末未收到 stop → `ProtocolViolation`
-//!   - cancel 触发 → 流静默终结
+//! Key coverage:
+//! - `encode_request` field mapping (model / system / tools / tool_choice /
+//!   thinking / sampling / messages with 4 content types)
+//! - `decode_stream` SSE state machine:
+//!   - Single tool_use full path (Start→ArgsDelta→Stop→ToolUseEnd→message_delta)
+//!   - Interleaved ArgsDelta for two concurrent tool_use (different indices)
+//!   - Alternating thinking + signature_delta
+//!   - `event: error` terminates the stream
+//!   - `event: ping` is swallowed
+//!   - Single SSE JSON parse failure → `Malformed`, stream continues
+//!   - Missing stop at end of stream → `ProtocolViolation`
+//!   - Cancel triggers silent stream termination
 //!
-//! 测试通过 [`decode_stream_generic`] 喂 `futures::stream::iter` 构造的
-//! `Stream<Item = Result<Sse, _>>`，避开 toac `SseBody::new` 的 pub-crate
-//! 限制；运行期 [`decode_stream`] 走的是同一份解码核心，覆盖等价。
+//! Tests feed a `Stream<Item = Result<Sse, _>>` constructed via
+//! [`decode_stream_generic`] with `futures::stream::iter`, bypassing the
+//! pub-crate restriction on `SseBody::new`; at runtime [`decode_stream`] uses
+//! the same decoding core, so coverage is equivalent.
 
 use defect_agent::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderErrorKind, Role,
@@ -30,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::wire::anthropic::components as wire;
 
-// ---------- helpers ------------------------------------------------------
+// Helpers
 
 #[derive(Debug, thiserror::Error)]
 #[error("test sse never errors")]
@@ -48,8 +49,8 @@ fn make_sse_events(events: &[(&str, &str)]) -> Vec<Sse> {
         .collect()
 }
 
-/// 直接喂 `Vec<Sse>` 给 `process_sse` —— 测试不走 hyper body，避免引入
-/// 整套 transport，专门测状态机本身。
+/// Feed `Vec<Sse>` directly into `process_sse` — the test avoids the hyper body and the
+/// entire transport layer, focusing solely on the state machine.
 fn run_state_machine(
     events: &[(&str, &str)],
 ) -> (DecoderState, Vec<Result<ProviderChunk, ProviderError>>) {
@@ -58,8 +59,8 @@ fn run_state_machine(
     for sse in make_sse_events(events) {
         let mut buf = Vec::new();
         process_sse(&mut state, sse, &mut buf);
-        // process_sse 内部把多 chunk 反序压栈给 poll_next 用 pop()——
-        // 这里测试要按时间序还原，反转一次。
+        // process_sse pushes multiple chunks onto a stack in reverse order for poll_next
+        // to pop; here we reverse them back to chronological order for testing.
         buf.reverse();
         out.extend(buf);
         if state.fatal {
@@ -69,8 +70,9 @@ fn run_state_machine(
     (state, out)
 }
 
-/// 把若干 `(event, data)` 装进一个 `Stream<Item = Result<Sse, NeverError>>`，
-/// 喂给 [`decode_stream_generic`] 来端到端地走 [`AnthropicSseDecoder`]。
+/// Packages several `(event, data)` pairs into a `Stream<Item = Result<Sse, NeverError>>`
+/// and feeds it to [`decode_stream_generic`] for an end-to-end run through
+/// [`AnthropicSseDecoder`].
 async fn run_decode_stream_generic(
     events: &[(&str, &str)],
     cancel: CancellationToken,
@@ -86,7 +88,7 @@ fn ok_chunks(results: Vec<Result<ProviderChunk, ProviderError>>) -> Vec<Provider
     results.into_iter().map(|r| r.expect("err chunk")).collect()
 }
 
-// ---------- encode_request ----------------------------------------------
+// ---------- encode_request ----------
 
 #[test]
 fn encode_minimal_request() {
@@ -244,7 +246,7 @@ fn encode_request_tool_uses_and_results() {
         Some(&["path".to_string()][..])
     );
 
-    // assistant tool_use round-trip
+    // Round-trip assistant tool_use
     let assistant = match &w.messages[0].content {
         wire::MessageParamContent::MessageParamContentVariant1(v) => v,
         _ => panic!("expected list content"),
@@ -257,7 +259,7 @@ fn encode_request_tool_uses_and_results() {
     assert_eq!(tu.input.get("path"), Some(&json!("/tmp/a")));
     assert!(tu.cache_control.is_some());
 
-    // user tool_result round-trip
+    // Tool result round-trip
     let user = match &w.messages[1].content {
         wire::MessageParamContent::MessageParamContentVariant1(v) => v,
         _ => panic!("expected list content"),
@@ -332,8 +334,8 @@ fn encode_multimodal_tool_result_emits_text_and_image_blocks() {
 
 // ---------- thinking round-trip (signature gating) ---------------------
 
-/// 编码一条带 [`MessageContent::Thinking`] 的 assistant message，返回
-/// content blocks 列表用于断言 ThinkingBlockParam 的存在/缺失。
+/// Encodes an assistant message containing [`MessageContent::Thinking`] and returns a
+/// list of content blocks for asserting the presence or absence of `ThinkingBlockParam`.
 fn encode_with_thinking(text: &str, signature: Option<&str>) -> Vec<wire::ContentBlockParam> {
     let req = CompletionRequest {
         model: "claude-opus-4-7".into(),
@@ -368,7 +370,7 @@ fn encode_with_thinking(text: &str, signature: Option<&str>) -> Vec<wire::Conten
 #[test]
 fn encode_thinking_with_signature_emits_thinking_block_param() {
     let blocks = encode_with_thinking("step 1", Some("sig-abc"));
-    // 期望两个 block：thinking + text。
+    // Expect two blocks: thinking + text.
     assert_eq!(blocks.len(), 2);
     let wire::ContentBlockParam::ThinkingBlockParam(t) = &blocks[0] else {
         panic!("expected thinking block first, got {:?}", blocks[0]);
@@ -379,9 +381,10 @@ fn encode_thinking_with_signature_emits_thinking_block_param() {
 
 #[test]
 fn encode_thinking_without_signature_skips_thinking_block_param() {
-    // 跨 provider 切回 Anthropic：上一轮是 OpenAI/DeepSeek 出的 thinking
-    // 文本，没有 signature。Anthropic wire 上 signature 是 required，
-    // 整块跳过——只保留 text。
+    // When switching back to Anthropic from another provider: the previous turn's
+    // thinking text came from OpenAI/DeepSeek and has no signature. Since `signature` is
+    // required on the Anthropic wire, the entire thinking block is skipped — only the
+    // text is kept.
     let blocks = encode_with_thinking("step 1", None);
     assert_eq!(blocks.len(), 1);
     assert!(matches!(
@@ -390,7 +393,7 @@ fn encode_thinking_without_signature_skips_thinking_block_param() {
     ));
 }
 
-// ---------- decode_stream / state machine -------------------------------
+// decode_stream / state machine
 
 const MODEL_START: &str = r#"{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-opus-4-7","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":42,"output_tokens":1}}}"#;
 
@@ -432,7 +435,7 @@ fn decode_text_then_tool_use() {
     assert!(state.stopped);
     let chunks = ok_chunks(results);
 
-    // 期望序列：MessageStart, Usage(input=42), TextDelta x2, ToolUseStart,
+    // Expected sequence: MessageStart, Usage(input=42), TextDelta x2, ToolUseStart,
     // ArgsDelta x2, ToolUseEnd, Stop(ToolUse), Usage(output=3)
     let mut iter = chunks.into_iter();
     assert!(
@@ -596,7 +599,8 @@ fn decode_error_event_terminates() {
 
 #[test]
 fn decode_malformed_json_continues() {
-    // 一条坏 data 在中间，状态机应该 yield Malformed 而后继续。
+    // A bad data item in the middle; the state machine should yield Malformed and then
+    // continue.
     let bad = r#"{not json}"#;
     let events = [
         ("message_start", MODEL_START),
@@ -622,7 +626,7 @@ fn decode_malformed_json_continues() {
     assert!(saw_text);
 }
 
-// ---------- decode_stream_generic 端到端：经过 AnthropicSseDecoder ----
+// ---------- decode_stream_generic end-to-end: via AnthropicSseDecoder ----
 
 #[tokio::test]
 async fn decode_stream_end_to_end_text_path() {
@@ -651,7 +655,7 @@ async fn decode_stream_protocol_violation_when_no_stop() {
         ("content_block_start", TEXT_START_0),
         ("content_block_delta", TEXT_DELTA_0),
         ("content_block_stop", TEXT_STOP_0),
-        // 没有 message_delta
+        // no message_delta
     ];
     let chunks = run_decode_stream_generic(&events, CancellationToken::new()).await;
     let last = chunks.last().expect("chunks");
@@ -668,8 +672,8 @@ async fn decode_stream_cancel_terminates_silently() {
         ("content_block_delta", TEXT_DELTA_0),
     ];
     let cancel = CancellationToken::new();
-    cancel.cancel(); // 一上来就取消
+    cancel.cancel(); // Cancel immediately.
     let chunks = run_decode_stream_generic(&events, cancel).await;
-    // 立即取消 → 流应该立刻结束，不 yield 任何 Err（Canceled）。
+    // Cancel immediately → the stream should end at once, yielding no `Err(Canceled)`.
     assert!(chunks.iter().all(|r| r.is_ok()), "expected no Err chunks");
 }

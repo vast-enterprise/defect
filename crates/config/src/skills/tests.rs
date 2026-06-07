@@ -4,14 +4,15 @@ use std::fs;
 
 use tempfile::TempDir;
 
-/// 在 `<skills_dir>/<name>/SKILL.md` 写一个 skill。
+/// Write a skill to `<skills_dir>/<name>/SKILL.md`.
 fn write_skill(skills_dir: &Path, name: &str, skill_md: &str) {
     let dir = skills_dir.join(name);
     fs::create_dir_all(&dir).expect("mkdir skill");
     fs::write(dir.join("SKILL.md"), skill_md).expect("write SKILL.md");
 }
 
-/// 造一个含 .git 的 repo root（让 find_repo_root 命中），返回 repo_root。
+/// Create a repo root containing a `.git` directory (so that `find_repo_root` matches),
+/// and return the path.
 fn repo(tmp: &TempDir) -> PathBuf {
     let root = tmp.path().join("proj");
     fs::create_dir_all(root.join(".git")).expect("mkdir .git");
@@ -137,8 +138,9 @@ fn empty_when_no_skills_dirs() {
     assert!(skills.is_empty());
 }
 
-/// open-standard 字段：`always` / `triggers` 已接入消费，`allowed_tools` 仍占位
-/// （写了不报错，吃得下 Anthropic / Codex 格式 skill）。
+/// open-standard fields: `always` / `triggers` are consumed; `allowed_tools` is still a
+/// placeholder (writing it does not error, and the parser accepts Anthropic /
+/// Codex-format skills).
 #[test]
 fn always_and_triggers_are_consumed() {
     let tmp = TempDir::new().expect("tmp");
@@ -161,7 +163,7 @@ fn always_and_triggers_are_consumed() {
     let s = &skills["code-review"];
     assert_eq!(s.description, "review Rust diffs");
     assert_eq!(s.body, "# Review body");
-    // always / keywords 已消费；globs 编译成 GlobSet 并能匹配。
+    // always / keywords consumed; globs compiled into a `GlobSet` and can match.
     assert!(s.always);
     assert_eq!(s.triggers.keywords, vec!["clippy", "lint"]);
     let set = s.triggers.globs.as_ref().expect("globs compiled");
@@ -169,7 +171,7 @@ fn always_and_triggers_are_consumed() {
     assert!(!set.is_match("Cargo.toml"));
 }
 
-/// 无 `[triggers]` 子表 ⇒ 默认空触发（globs=None，keywords 空），always=false。
+/// No `[triggers]` table → empty triggers (globs=None, keywords empty), always=false.
 #[test]
 fn no_triggers_defaults_to_empty() {
     let tmp = TempDir::new().expect("tmp");
@@ -186,7 +188,8 @@ fn no_triggers_defaults_to_empty() {
     assert!(s.triggers.keywords.is_empty());
 }
 
-/// 坏 glob 必须在解析期 hard fail（fail loud，不静默吞）。
+/// Invalid trigger globs must hard-fail at parse time (fail loud, not silently
+/// swallowed).
 #[test]
 fn invalid_trigger_glob_is_hard_error() {
     let tmp = TempDir::new().expect("tmp");
@@ -205,7 +208,7 @@ fn invalid_trigger_glob_is_hard_error() {
     }
 }
 
-/// Anthropic 用连字符 `allowed-tools`——alias 应当也吃得下。
+/// Anthropic uses a hyphen in `allowed-tools` — the alias should also be accepted.
 #[test]
 fn allowed_tools_hyphen_alias_parses() {
     let tmp = TempDir::new().expect("tmp");
@@ -242,7 +245,7 @@ fn non_dir_entry_is_skipped() {
     let repo_root = repo(&tmp);
     let skills_dir = repo_root.join(".defect/skills");
     fs::create_dir_all(&skills_dir).expect("mkdir");
-    // 一个散落的 .md 文件不是 skill（skill 只走 dir-per-skill）。
+    // A loose .md file is not a skill (skills are dir-per-skill only).
     fs::write(skills_dir.join("loose.md"), "+++\nname=\"x\"\n+++\n").expect("write");
     write_skill(
         &skills_dir,
@@ -255,7 +258,7 @@ fn non_dir_entry_is_skipped() {
     assert!(skills.contains_key("real"));
 }
 
-// --- YAML frontmatter（--- 分隔，需 yaml feature）------------------------
+// --- YAML frontmatter (delimited by `---`, requires the `yaml` feature) ---
 
 #[cfg(feature = "yaml")]
 #[test]
@@ -274,7 +277,8 @@ fn discovers_yaml_frontmatter_skill() {
     assert_eq!(s.body, "# Review");
 }
 
-/// yaml feature 关闭时，`---` 头必须以可操作错误 hard fail（不静默降级）。
+/// When the `yaml` feature is disabled, `---` frontmatter must hard-fail with an
+/// actionable error (no silent degradation).
 #[cfg(not(feature = "yaml"))]
 #[test]
 fn yaml_frontmatter_without_feature_errors() {

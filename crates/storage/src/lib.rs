@@ -1,7 +1,7 @@
-//! 会话持久化。
+//! Session persistence.
 //!
-//! v0 起步以 jsonl 形式落盘会话恢复日志，支持 append 与回放；后续按需演进到
-//! snapshot + sqlite 等带索引的存储。
+//! v0 starts by writing session recovery logs as JSONL on disk, supporting append and
+//! replay; later evolves on demand to snapshot + sqlite or other indexed storage.
 
 #![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 
@@ -30,7 +30,7 @@ const JOURNAL_FILENAME: &str = "journal.jsonl";
 const SNAPSHOT_FILENAME: &str = "snapshot.json";
 const STORAGE_SCHEMA_VERSION: u32 = 1;
 
-/// Session 创建后的落盘观察器。
+/// Observer for session persistence after creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageObserver {
     sessions_root: PathBuf,
@@ -47,19 +47,22 @@ impl StorageObserver {
         &self.sessions_root
     }
 
-    /// 找出 `cwd` 下最近活跃的 session id（用于 `--resume` 不带 id 时）。
+    /// Find the most recently active session id under `cwd` (used when `--resume` is
+    /// given without an id).
     ///
-    /// 扫 `sessions_root` 下每个 session 目录，读 `meta.json` 取 `cwd`，匹配
-    /// 给定 `cwd`（规整后逐字节比较）的候选里按 `journal.jsonl` 最后修改时间
-    /// 取最新者。没有匹配返回 `Ok(None)`。
+    /// Scans each session directory under `sessions_root`, reads `meta.json` to get the
+    /// `cwd`, and among candidates matching the given `cwd` (canonicalized, byte-for-byte
+    /// comparison) picks the one with the latest `journal.jsonl` modification time.
+    /// Returns `Ok(None)` if no match is found.
     ///
-    /// 单个 session 目录损坏（meta 读不出 / 解析失败）跳过而非整体失败——
-    /// 一份坏存档不该让 resume 完全不可用。
+    /// If a single session directory is corrupted (meta unreadable or parse failure), it
+    /// is skipped rather than failing the entire operation — a bad archive should not
+    /// make resume completely unusable.
     ///
     /// # Errors
     ///
-    /// `sessions_root` 存在但无法枚举时返回错误；目录不存在按"无候选"
-    /// （`Ok(None)`）处理。
+    /// Returns an error if `sessions_root` exists but cannot be enumerated; if the
+    /// directory does not exist, it is treated as "no candidates" (`Ok(None)`).
     pub fn latest_session_id_for_cwd(&self, cwd: &Path) -> Result<Option<SessionId>, StorageError> {
         let target = fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
         let entries = match fs::read_dir(&self.sessions_root) {
@@ -76,13 +79,14 @@ impl StorageObserver {
             }
             let store = SessionStore::new(entry.path());
             let Ok(meta) = store.load_meta() else {
-                continue; // 坏存档 / 无 meta：跳过
+                continue; // Corrupted or missing meta; skip
             };
             let meta_cwd = fs::canonicalize(&meta.cwd).unwrap_or_else(|_| meta.cwd.clone());
             if meta_cwd != target {
                 continue;
             }
-            // 活跃度按 journal 最后修改时间排；取不到时间的退到 UNIX_EPOCH。
+            // Activity is ordered by the journal's last modification time, falling back
+            // to UNIX_EPOCH if the time cannot be obtained.
             let mtime = fs::metadata(store.journal_path())
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
@@ -167,57 +171,58 @@ impl SessionLoader for StorageObserver {
     }
 }
 
-/// 单个 session 的落盘目录。
+/// Directory on disk for a single session.
 ///
-/// 真相源是 `meta.json` + `journal.jsonl`；`snapshot.json` 保留为后续
-/// resume 加速口子。
+/// The source of truth is `meta.json` + `journal.jsonl`; `snapshot.json` is kept as a
+/// future optimization for faster resume.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionStore {
     root: PathBuf,
 }
 
 impl SessionStore {
-    /// 绑定一个 session 目录。
+    /// Binds a session directory.
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
-    /// 在 `sessions_root/<session_id>/` 下创建一个 store。
+    /// Creates a store under `sessions_root/<session_id>/`.
     #[must_use]
     pub fn for_session(sessions_root: impl AsRef<Path>, session_id: &SessionId) -> Self {
         Self::new(sessions_root.as_ref().join(session_id.0.as_ref()))
     }
 
-    /// session 目录路径。
+    /// Returns the session directory path.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// `meta.json` 路径。
+    /// Path to `meta.json`.
     #[must_use]
     pub fn meta_path(&self) -> PathBuf {
         self.root.join(META_FILENAME)
     }
 
-    /// `journal.jsonl` 路径。
+    /// Path to `journal.jsonl`.
     #[must_use]
     pub fn journal_path(&self) -> PathBuf {
         self.root.join(JOURNAL_FILENAME)
     }
 
-    /// `snapshot.json` 路径。
+    /// Path to `snapshot.json`.
     #[must_use]
     pub fn snapshot_path(&self) -> PathBuf {
         self.root.join(SNAPSHOT_FILENAME)
     }
 
-    /// 将当前恢复态写入 `snapshot.json`。
+    /// Writes the current recovery state to `snapshot.json`.
     ///
     /// # Errors
     ///
-    /// 目录创建失败、序列化失败、临时文件写入失败、或原子替换失败。
+    /// Returns an error if directory creation, serialization, temporary file writing, or
+    /// atomic replacement fails.
     pub fn write_snapshot(&self, snapshot: &StoredSnapshot) -> Result<(), StorageError> {
         ensure_supported_schema(snapshot.schema_version)?;
         fs::create_dir_all(&self.root)?;
@@ -233,11 +238,11 @@ impl SessionStore {
         Ok(())
     }
 
-    /// 初始化 session 目录与元数据文件。
+    /// Initializes the session directory and metadata file.
     ///
     /// # Errors
     ///
-    /// 创建目录失败、序列化失败、已存在且覆盖写入失败等。
+    /// Returns an error if directory creation, serialization, or file writing fails.
     pub fn init(&self, meta: &SessionMeta) -> Result<(), StorageError> {
         fs::create_dir_all(&self.root)?;
         let encoded = serde_json::to_vec_pretty(meta)?;
@@ -249,11 +254,12 @@ impl SessionStore {
         Ok(())
     }
 
-    /// 追加一条恢复日志记录。
+    /// Appends a recovery journal record.
     ///
     /// # Errors
     ///
-    /// 目录不存在、打开文件失败、序列化失败、或写入/flush 失败。
+    /// Returns an error if the directory does not exist, the file cannot be opened,
+    /// serialization fails, or writing/flushing fails.
     pub fn append_record(&self, record: &StoredRecord) -> Result<(), StorageError> {
         ensure_supported_schema(record.schema_version)?;
         let mut file = OpenOptions::new()
@@ -267,11 +273,12 @@ impl SessionStore {
         Ok(())
     }
 
-    /// 读取 `meta.json`。
+    /// Reads `meta.json`.
     ///
     /// # Errors
     ///
-    /// 文件不存在、内容不是合法 JSON、或 schema 不支持。
+    /// Returns an error if the file does not exist, the content is not valid JSON, or the
+    /// schema is unsupported.
     pub fn load_meta(&self) -> Result<SessionMeta, StorageError> {
         let bytes = fs::read(self.meta_path())?;
         let meta = serde_json::from_slice::<SessionMeta>(&bytes)?;
@@ -279,11 +286,12 @@ impl SessionStore {
         Ok(meta)
     }
 
-    /// 读取 `snapshot.json`，文件不存在时返回 `Ok(None)`。
+    /// Reads `snapshot.json`, returning `Ok(None)` if the file does not exist.
     ///
     /// # Errors
     ///
-    /// 文件存在但内容不合法、或 schema 不支持时返回错误。
+    /// Returns an error if the file exists but its contents are invalid, or if the schema
+    /// is unsupported.
     pub fn load_snapshot(&self) -> Result<Option<StoredSnapshot>, StorageError> {
         let path = self.snapshot_path();
         let bytes = match fs::read(path) {
@@ -296,14 +304,17 @@ impl SessionStore {
         Ok(Some(snapshot))
     }
 
-    /// 顺序读取当前可用的 journal 记录。
+    /// Reads the available journal records sequentially.
     ///
-    /// 如果存在 `snapshot.json`，只读取 snapshot 之后的 tail；否则从 0 开始读取。
-    /// 如果文件尾有崩溃残留的半行，v0 直接返回错误；后续可演进成自动截尾。
+    /// If a `snapshot.json` exists, reads only the tail after the snapshot; otherwise
+    /// reads from 0.
+    /// If a crash leaves a partial line at the end of the file, v0 returns an error
+    /// directly; this may later evolve to automatic truncation.
     ///
     /// # Errors
     ///
-    /// 文件不存在、逐行解析失败、schema 不支持、或记录序号不连续。
+    /// File not found, line parsing failure, unsupported schema, or non-contiguous record
+    /// sequence numbers.
     pub fn replay_records(&self) -> Result<Vec<StoredRecord>, StorageError> {
         let start_seq = self
             .load_snapshot()?
@@ -311,11 +322,13 @@ impl SessionStore {
         self.replay_records_from(start_seq)
     }
 
-    /// 顺序回放从指定序号开始的恢复日志 tail。
+    /// Replays the recovery journal tail sequentially, starting from the given sequence
+    /// number.
     ///
     /// # Errors
     ///
-    /// 文件不存在、逐行解析失败、schema 不支持、或记录序号不连续。
+    /// File not found, line parsing failure, unsupported schema, or non‑contiguous record
+    /// sequence numbers.
     pub fn replay_records_from(&self, start_seq: u64) -> Result<Vec<StoredRecord>, StorageError> {
         let file = File::open(self.journal_path())?;
         let reader = BufReader::new(file);
@@ -350,14 +363,16 @@ impl SessionStore {
         Ok(records)
     }
 
-    /// 计算下一条恢复日志应使用的序号。
+    /// Computes the next sequence number to use for a recovery journal entry.
     ///
-    /// 如果存在 `snapshot.json`，只校验并扫描 snapshot 之后的 journal tail；
-    /// 否则要求 journal 从 0 开始连续。
+    /// If a `snapshot.json` exists, only validates and scans the journal tail after the
+    /// snapshot;
+    /// otherwise requires the journal to be contiguous from 0.
     ///
     /// # Errors
     ///
-    /// 文件不存在、逐行解析失败、schema 不支持、或 tail 序号不连续。
+    /// Returns an error if the file does not exist, line parsing fails, the schema is
+    /// unsupported, or the tail sequence numbers are not contiguous.
     pub fn next_record_seq(&self) -> Result<u64, StorageError> {
         let start_seq = self
             .load_snapshot()?
@@ -369,11 +384,12 @@ impl SessionStore {
         Ok(last.seq.saturating_add(1))
     }
 
-    /// 将当前恢复态写成 snapshot。
+    /// Write the current recovery state as a snapshot.
     ///
     /// # Errors
     ///
-    /// 回放失败、读取下一序号失败、或写入 snapshot 失败。
+    /// Replaying the state, reading the next sequence number, or writing the snapshot
+    /// fails.
     pub fn refresh_snapshot(&self) -> Result<StoredSnapshot, StorageError> {
         let state = self.replay_state()?;
         let snapshot = StoredSnapshot::new(self.next_record_seq()?, state.to_snapshot_state());
@@ -381,14 +397,16 @@ impl SessionStore {
         Ok(snapshot)
     }
 
-    /// 用最新 snapshot 覆盖已被快照包含的 journal 前缀。
+    /// Overwrite the journal prefix already covered by the latest snapshot.
     ///
-    /// 该方法不应和同一个 session 的事件写入并发调用；当前 v0 调用方需要在
-    /// session 空闲时显式触发 compaction。
+    /// This method must not be called concurrently with event writes for the same
+    /// session; in v0 the caller must explicitly trigger compaction when the session is
+    /// idle.
     ///
     /// # Errors
     ///
-    /// 回放失败、snapshot 写入失败、journal tail 读取失败、或 journal 重写失败。
+    /// Replay failure, snapshot write failure, journal tail read failure, or journal
+    /// rewrite failure.
     pub fn compact_journal_to_snapshot(&self) -> Result<StoredSnapshot, StorageError> {
         let snapshot = self.refresh_snapshot()?;
         let tail = self.replay_records_from(snapshot.next_seq)?;
@@ -396,11 +414,12 @@ impl SessionStore {
         Ok(snapshot)
     }
 
-    /// 回放恢复日志并折叠出可恢复的历史状态。
+    /// Replays the recovery journal and folds it into a recoverable historical state.
     ///
     /// # Errors
     ///
-    /// 底层 replay 失败、或记录序列无法折叠成语义一致的历史时返回错误。
+    /// Returns an error if the underlying replay fails, or if the record sequence cannot
+    /// be folded into a semantically consistent history.
     pub fn replay_state(&self) -> Result<ReplayState, StorageError> {
         let Some(snapshot) = self.load_snapshot()? else {
             let mut state = ReplayState::default();
@@ -435,7 +454,7 @@ impl SessionStore {
     }
 }
 
-/// `meta.json` 的稳定元数据。
+/// Stable metadata for `meta.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub schema_version: u32,
@@ -445,7 +464,7 @@ pub struct SessionMeta {
 }
 
 impl SessionMeta {
-    /// 构造 v0 元数据。
+    /// Constructs v0 metadata.
     #[must_use]
     pub fn new(session_id: SessionId, cwd: PathBuf, mcp_servers: Vec<McpServer>) -> Self {
         Self {
@@ -457,7 +476,7 @@ impl SessionMeta {
     }
 }
 
-/// `journal.jsonl` 的单行恢复记录。
+/// A single recovery record in `journal.jsonl`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredRecord {
     pub schema_version: u32,
@@ -465,7 +484,7 @@ pub struct StoredRecord {
     pub record: SessionRecord,
 }
 
-/// `snapshot.json` 的持久化快照。
+/// Persistent snapshot of `snapshot.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredSnapshot {
     pub schema_version: u32,
@@ -473,7 +492,7 @@ pub struct StoredSnapshot {
     pub state: SnapshotState,
 }
 
-/// 可快照化的恢复态。
+/// Snapshot-able recovery state.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotState {
     pub history: Vec<Message>,
@@ -481,7 +500,7 @@ pub struct SnapshotState {
     pub last_turn_ended: bool,
 }
 
-/// session 恢复日志记录。
+/// Records for session recovery.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionRecord {
@@ -500,7 +519,7 @@ pub enum SessionRecord {
     },
 }
 
-/// 由事件流回放出的 session 恢复态。
+/// Session recovery state replayed from the event stream.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReplayState {
     pub history: Vec<Message>,
@@ -533,7 +552,7 @@ impl ReplayState {
         }
     }
 
-    /// 将当前恢复态投影为持久化 snapshot。
+    /// Project the current replay state into a persistent snapshot.
     #[must_use]
     pub fn to_snapshot_state(&self) -> SnapshotState {
         self.into()
@@ -561,7 +580,7 @@ impl From<&ReplayState> for SnapshotState {
 }
 
 impl StoredSnapshot {
-    /// 以当前 schema 构造一个持久化快照。
+    /// Constructs a persistent snapshot using the current schema.
     #[must_use]
     pub fn new(next_seq: u64, state: SnapshotState) -> Self {
         Self {
@@ -619,10 +638,11 @@ impl RecordProjector {
             }
             AgentEvent::ToolCallStarted { id, name, fields } => {
                 append_if_some(&mut records, self.flush_tool_results());
-                // 空 name 的 ToolCallStarted 是失败标记事件（tool-not-found /
-                // denied 等的 wire 信号），不是真实工具调用——持久化成 ToolUse
-                // 会让 name 为空，resume 时被 provider 拒（`tool_use.name` 至少 1
-                // 字符）。这类事件不入历史。
+                // A `ToolCallStarted` with an empty `name` is a failure marker event (a
+                // wire signal for tool-not-found / denied, etc.), not a real tool call.
+                // Persisting it as a `ToolUse` would leave `name` empty, which the
+                // provider rejects on resume because `tool_use.name` must be at least 1
+                // character. Such events are excluded from history.
                 if !name.is_empty() {
                     self.current_assistant()
                         .tool_uses
@@ -753,7 +773,7 @@ fn tool_call_output(fields: &ToolCallUpdateFields) -> ToolResultBody {
 }
 
 impl StoredRecord {
-    /// 以当前 schema 构造一条恢复日志记录。
+    /// Constructs a recovery log record using the current schema.
     #[must_use]
     pub fn new(seq: u64, record: SessionRecord) -> Self {
         Self {

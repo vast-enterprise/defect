@@ -1,6 +1,6 @@
-//! `read_file` 工具：读 UTF-8 文本文件。
+//! `read_file` tool: reads a UTF-8 text file.
 //!
-//! Read tool — reads a file with optional offset/limit window.
+//! Read tool — reads a file with an optional offset/limit window.
 
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -102,9 +102,12 @@ struct ReadArgs {
 struct ReadFileOutput {
     bytes: u64,
     lines_returned: u32,
-    /// 本窗口起始行号（offset）。为 LLM 在 chunked-read 时拼装位置。
+    /// Start line number (offset) of this window. Used by the LLM to reassemble positions
+    /// during chunked reads.
     start_line: u32,
-    /// `true` 表示后端按 limit 截断；准确判断需要二次读，v0 用近似（行数 == limit 即可能截断）。
+    /// `true` if the backend truncated by `limit`; exact detection requires a second
+    /// read, so v0 uses a heuristic (lines returned == limit implies possible
+    /// truncation).
     truncated: bool,
 }
 
@@ -169,8 +172,9 @@ async fn run_read(
         Err(err) => return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(err))),
     };
 
-    // 图片：按扩展名识别，走 read_bytes → base64 → ContentBlock::Image。
-    // offset/limit 对图片无意义，忽略。
+    // For images, detect by extension and convert via `read_bytes` → base64 →
+    // `ContentBlock::Image`.
+    // `offset`/`limit` are meaningless for images and are ignored.
     if let Some(mime) = image_mime(&parsed.path) {
         return run_read_image(parsed.path, mime, cancel, fs).await;
     }
@@ -217,12 +221,13 @@ struct ReadImageOutput {
     mime: String,
 }
 
-/// 读图片：取原始字节 → base64 → 作为 [`ContentBlock::Image`] 返回。
+/// Reads an image: fetches raw bytes → base64 → returns as a [`ContentBlock::Image`].
 ///
-/// 不做 `looks_binary` 拒绝（那条是给文本路径的）；大小上限由后端
-/// [`FsBackend::read_bytes`] 自己的阈值兜底。委托后端（ACP）的
-/// `read_bytes` 默认返回 `NotPermitted`——此时报 [`ToolError::Execution`]，
-/// 让模型从错误文本得知委托环境不支持读图片。
+/// Does not reject with `looks_binary` (that check is for text paths); size limits are
+/// handled by the backend's own threshold in [`FsBackend::read_bytes`]. The delegated
+/// backend (ACP) `read_bytes` returns `NotPermitted` by default — in that case, a
+/// [`ToolError::Execution`] is raised so the model learns from the error text that the
+/// delegated environment does not support reading images.
 async fn run_read_image(
     path: String,
     mime: &'static str,
@@ -256,7 +261,8 @@ async fn run_read_image(
     ToolEvent::Completed(fields)
 }
 
-/// 按扩展名（大小写不敏感）映射图片 MIME。非图片返回 `None`。
+/// Maps a file extension (case-insensitive) to an image MIME type. Returns `None` for
+/// non-image extensions.
 fn image_mime(path: &str) -> Option<&'static str> {
     let ext = std::path::Path::new(path)
         .extension()

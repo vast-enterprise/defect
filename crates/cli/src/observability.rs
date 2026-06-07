@@ -1,7 +1,9 @@
-//! 把 `defect-config` 的 typed Langfuse 配置翻译成 `defect-obs` 的上报观察器。
+//! Translates a typed Langfuse config from `defect-config` into an observer for
+//! `defect-obs`.
 //!
-//! 翻译 + 校验放 CLI 装配期：`defect-obs` 不依赖 `defect-config`（保持单向依赖），
-//! 而“enabled 但缺 key”这类策略校验天然属于装配层。
+//! Translation and validation happen at CLI assembly time: `defect-obs` does not depend
+//! on `defect-config` (preserving a one-way dependency), and policy checks like "enabled
+//! but missing key" naturally belong in the assembly layer.
 //!
 //! Observability setup — tracing and Langfuse integration.
 
@@ -13,15 +15,18 @@ use defect_obs::langfuse::{
     DEFAULT_FLUSH_INTERVAL, DEFAULT_HOST, DEFAULT_MAX_BATCH, LangfuseSetup, build_observer,
 };
 
-/// 按 typed Langfuse 配置构造上报观察器。
+/// Builds an observer from a typed `LangfuseConfig`.
 ///
-/// 返回 `Ok(None)` 表示未启用（配置缺失 / `enabled = false`）——此时调用方
-/// 不挂观察器。`enabled = true` 但缺 `public_key` / `secret_key` 时**告警并
-/// 禁用**（返回 `Ok(None)`），不报错、不静默成功，符合显式校验约定。
+/// Returns `Ok(None)` when the observer is not enabled (config missing or `enabled =
+/// false`) — the caller should not attach an observer. When `enabled = true` but
+/// `public_key` / `secret_key` are missing, a warning is emitted and the observer is
+/// **disabled** (returns `Ok(None)`). This does not error or silently succeed, matching
+/// the explicit validation contract.
 ///
 /// # Errors
 ///
-/// 当 HTTP 栈构造失败（TLS roots / 代理 URL 解析）时返回错误。
+/// Returns an error if the HTTP stack fails to build (e.g., TLS roots or proxy URL
+/// parsing).
 pub fn build_langfuse_observer(
     config: Option<&LangfuseConfig>,
     http_stack_config: defect_http::HttpStackConfig,

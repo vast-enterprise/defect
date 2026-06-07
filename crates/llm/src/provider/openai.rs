@@ -1,7 +1,8 @@
-//! OpenAI 兼容接口 provider。
+//! OpenAI-compatible API provider.
 //!
-//! 通过 `base_url` 参数对接 OpenAI 官方与所有遵循 Chat Completions
-//! 协议的兼容服务（DeepSeek、Qwen、本地 vllm 等）。bearer token + SSE。
+//! Connects to OpenAI's official API and any service that follows the Chat Completions
+//! protocol (DeepSeek, Qwen, local vllm, etc.) via the `base_url` parameter. Uses bearer
+//! token authentication and SSE streaming.
 //!
 //! OpenAI provider implementation — field mapping and request building.
 
@@ -43,12 +44,12 @@ const PROJECT_ENV: &str = "OPENAI_PROJECT";
 
 pub(crate) type Client = ApiClient<HttpStack>;
 
-/// OpenAI provider 配置。
+/// OpenAI provider configuration.
 ///
-/// `api_key` / `base_url` / `organization` / `project` 可显式提供，否则
-/// 从环境变量读取。`capabilities_override` 用于兼容厂商（如 DeepSeek
-/// 把 `thinking` 翻成 `Supported`）。`http` 配置 transport 层，默认见
-/// [`HttpStackConfig::default`].
+/// `api_key` / `base_url` / `organization` / `project` can be provided explicitly,
+/// otherwise they are read from environment variables. `capabilities_override` is used
+/// for vendor compatibility (e.g., DeepSeek maps `thinking` to `Supported`). `http`
+/// configures the transport layer; see [`HttpStackConfig::default`] for defaults.
 #[derive(Debug, Default, Clone)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
@@ -60,8 +61,9 @@ pub struct OpenAiConfig {
     pub display_name: String,
     pub headers: HashMap<HeaderName, HeaderValue>,
     pub capabilities_override: Option<Capabilities>,
-    /// `reasoning_effort` 覆盖。`Some(_)` 时无视 [`crate::protocol::openai_chat`]
-    /// 默认从 `ThinkingConfig` 推导出的等级，强制写入 wire。
+    /// Overrides `reasoning_effort`. When `Some(_)`, ignores the level derived from
+    /// [`crate::protocol::openai_chat`]'s default `ThinkingConfig` and forces it onto the
+    /// wire.
     pub reasoning_effort: Option<ReasoningEffort>,
     pub chat_dialect: ChatDialect,
     pub http: HttpStackConfig,
@@ -176,7 +178,8 @@ impl OpenAiProvider {
         })
     }
 
-    // 仅 deepseek provider 复用底层 client；openai 单独编译时无调用点。
+    // Only the deepseek provider reuses the underlying client; when compiled alone,
+    // openai has no call site.
     #[cfg(feature = "provider-deepseek")]
     pub(crate) fn client(&self) -> Client {
         self.client.clone()
@@ -190,8 +193,9 @@ fn default_openai_capabilities() -> Capabilities {
         thinking: FeatureSupport::Unsupported,
         vision: FeatureSupport::Supported,
         prompt_cache: FeatureSupport::Supported,
-        // OpenAI 官方 o1 / o3 不通过 wire 暴露 thinking 文本，无可回放；
-        // 兼容厂商（DeepSeek 等）单独覆盖。
+        // OpenAI's official o1/o3 models do not expose thinking text over the wire, so
+        // there is nothing to echo; compatible providers (DeepSeek, etc.) override this
+        // individually.
         thinking_echo: ThinkingEcho::Forbidden,
     }
 }
@@ -310,21 +314,21 @@ impl OpenAiProvider {
         }
     }
 
-    /// 解析当前请求的 thinking 回放策略：先看 per-model override，再 fallback
-    /// 到 provider-level capability。详见
-    /// See thinking round-trip design.
+    /// Resolve the thinking echo strategy for the current request: first check the
+    /// per-model override, then fall back to the provider-level capability. See the
+    /// thinking round-trip design.
     fn thinking_echo_for_model(&self, model_id: &str) -> ThinkingEcho {
         self.model_info(model_id)
             .and_then(|m| m.capabilities_overrides.thinking_echo)
             .unwrap_or(self.capabilities.thinking_echo)
     }
 
-    /// 发送一个 Chat Completions SSE 请求，并返回原始事件流。
+    /// Sends a Chat Completions SSE request and returns the raw event stream.
     ///
     /// # Errors
     ///
-    /// 当请求被取消、transport 失败、服务端返回非 200 SSE、或返回已知
-    /// OpenAI 错误体时返回错误。
+    /// Returns an error if the request is cancelled, the transport fails, the server
+    /// returns a non-200 SSE response, or a known OpenAI error body is returned.
     pub(crate) async fn start_chat_completion_stream(
         &self,
         req: CompletionRequest,
@@ -394,10 +398,11 @@ impl OpenAiProvider {
 
 // ---------- header injection adapter ------------------------------------
 
-/// 给 op 装上可选的 `OpenAI-Organization` / `OpenAI-Project` 头。
+/// Attaches optional `OpenAI-Organization` / `OpenAI-Project` headers to the op.
 ///
-/// toac 的生成 op 不接受任意 header，参考 [`toac::WithAccept`] 自起一个
-/// 最小 wrapper。空值不发，发出空字符串会被有些兼容厂商当成非法值。
+/// `toac`'s generated op does not accept arbitrary headers; this is a minimal wrapper
+/// inspired by [`toac::WithAccept`]. Null values are omitted; sending an empty string is
+/// treated as invalid by some compatible vendors.
 #[derive(Debug, Clone)]
 struct WithOpenAiHeaders<Op> {
     op: Op,
@@ -451,8 +456,8 @@ impl<Op> WithOpenAiHeaders<Op> {
 
 // ---------- response header helpers -------------------------------------
 
-/// OpenAI 用 `x-request-id` header 传 request id；HTTP/2 / 部分代理还会
-/// 顺便带 `request-id`，两者都收。
+/// OpenAI sends the request ID via the `x-request-id` header; HTTP/2 and some proxies may
+/// also include a `request-id` header, so we accept both.
 fn extract_request_id(headers: &http::HeaderMap) -> Option<String> {
     headers
         .get("x-request-id")
@@ -461,8 +466,9 @@ fn extract_request_id(headers: &http::HeaderMap) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// 解析 RFC 7231 `Retry-After` header。OpenAI 在 429 上偶尔发整数秒，
-/// 也偶尔发 HTTP-date；先按整数秒尝试，date 形态留给上层退避兜底。
+/// Parse the RFC 7231 `Retry-After` header. OpenAI sometimes sends an integer number of
+/// seconds on 429 responses, and sometimes an HTTP-date; try integer seconds first, and
+/// leave the date form for the caller's backoff fallback.
 fn extract_retry_after(headers: &http::HeaderMap) -> Option<Duration> {
     let v = headers.get(http::header::RETRY_AFTER)?.to_str().ok()?;
     v.trim().parse::<u64>().ok().map(Duration::from_secs)
@@ -483,14 +489,16 @@ impl WithRequestIdOpt for ProviderError {
 
 // ---------- error mapping -----------------------------------------------
 
-/// 把 [`CallError<HttpStackError>`] 翻成 [`ProviderError`]。
+/// Maps [`CallError<HttpStackError>`] to [`ProviderError`].
 ///
-/// 关键分支：[`HttpStackError::Timeout`] 单独翻成
-/// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
-/// Decision — this was previously missing; see HTTP retry semantics.
-/// [`HttpStackError::ProxyConnect`] / [`HttpStackError::Config`] 都按
-/// transport 错处理（结构化原因写进 `Display`，turn-loop 拿到的就是
-/// transport-flavor 的 backoff 重试）。
+/// Key branches: [`HttpStackError::Timeout`] is mapped to
+/// [`ProviderErrorKind::Timeout`] and the phase is forwarded to the turn-loop §7 for
+/// retry
+/// decision — this was previously missing; see HTTP retry semantics.
+/// [`HttpStackError::ProxyConnect`] / [`HttpStackError::Config`] are both treated as
+/// transport errors (the structured reason is written into `Display`, so the turn-loop
+/// receives
+/// a transport-flavor backoff retry).
 pub(crate) fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {
@@ -511,10 +519,11 @@ pub(crate) fn call_error_to_provider(err: CallError<HttpStackError>) -> Provider
     }
 }
 
-/// 把 [`HttpStackError`] 携带的 [`defect_http::TimeoutPhase`] 翻成
-/// agent 层的 [`TimeoutPhase`]。两者形态一致（都是 `Connect / ReadHeaders /
-/// ReadBody / Idle / Total`），但分属不同 crate，避免 layer 实现耦合到
-/// LLM 错误模型。v0 实际只产 `Total`，其余 arm 是为后续分阶段超时占位。
+/// Maps the [`defect_http::TimeoutPhase`] carried by [`HttpStackError`] to the
+/// agent-layer [`TimeoutPhase`]. Both enums have the same variants (`Connect /
+/// ReadHeaders / ReadBody / Idle / Total`) but live in different crates, preventing the
+/// layer implementation from coupling to the LLM error model. v0 only ever produces
+/// `Total`; the remaining arms are placeholders for future per-phase timeouts.
 fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
     match phase {
         defect_http::TimeoutPhase::Connect => TimeoutPhase::Connect,
@@ -522,13 +531,14 @@ fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
         defect_http::TimeoutPhase::ReadBody => TimeoutPhase::ReadBody,
         defect_http::TimeoutPhase::Idle => TimeoutPhase::Idle,
         defect_http::TimeoutPhase::Total => TimeoutPhase::Total,
-        // 上游 `#[non_exhaustive]`：未来新增 phase 时退到 Total——不爆栈、
-        // 不丢信息（turn-loop §7 对所有 phase 走相同 Backoff 路径）。
+        // Upstream `#[non_exhaustive]`: fall back to `Total` when new phases are added in
+        // the future — no stack overflow, no information loss (turn-loop §7 uses the same
+        // backoff path for all phases).
         _ => TimeoutPhase::Total,
     }
 }
 
-/// 把 wire `OpenAiErrorResponse` + HTTP status 翻成 [`ProviderError`]。
+/// Converts a wire `OpenAiErrorResponse` + HTTP status into a [`ProviderError`].
 ///
 /// Mapping table — see OpenAI provider design.
 fn error_response(
@@ -617,8 +627,8 @@ fn contains_max_tokens(msg: &str) -> bool {
         || lower.contains("max_completion_tokens")
 }
 
-/// 从形如 `model: gpt-foo` 这类错误信息里抠 model id。
-/// 抠不出就返回 None，调用方按 `"unknown"` 兜底。
+/// Extracts the model id from error messages like `model: gpt-foo`.
+/// Returns `None` if extraction fails; callers should fall back to `"unknown"`.
 fn extract_model(msg: &str) -> Option<String> {
     let lower = msg.to_ascii_lowercase();
     let idx = lower.find("model")?;
@@ -637,17 +647,17 @@ fn extract_model(msg: &str) -> Option<String> {
     }
 }
 
-// ---------- hardcoded model table ---------------------------------------
+// Hardcoded model table
 
-/// v0 硬编码模型表。
+/// v0 hardcoded model table.
 ///
-/// `/v1/models` 在不同兼容厂商间 schema 差异大（OpenAI 只发 `id` /
-/// `created` / `owned_by`，DeepSeek 不发 `context_window`，Together 字段
-/// 又不一样），但 `id` 全家共享。这里维护一份小表，给已知 OpenAI 系列
-/// 模型补 `context_window` / `max_output_tokens` / `capabilities_overrides`
-/// 等常用字段；上游列表里没有的 id 直接保持 `None`。
+/// The `/v1/models` schema varies significantly across compatible providers (OpenAI only
+/// sends `id` / `created` / `owned_by`, DeepSeek omits `context_window`, Together has
+/// different fields), but `id` is shared by all. This table provides known OpenAI-series
+/// models with common fields like `context_window`, `max_output_tokens`, and
+/// `capabilities_overrides`; IDs not present in the upstream list remain `None`.
 ///
-/// 表项数据来源：OpenAI 官方文档 + DeepSeek 官方文档（截至 2025）。
+/// Data sources: OpenAI official docs + DeepSeek official docs (as of 2025).
 fn hardcoded_models() -> &'static [HardcodedModel] {
     &[
         HardcodedModel {
@@ -726,8 +736,9 @@ fn hardcoded_models() -> &'static [HardcodedModel] {
                 vision: None,
                 prompt_cache: None,
                 parallel_tool_calls: None,
-                // v4-flash thinking 模式同 v4-pro：上一轮 reasoning_content
-                // 必须回放，否则 400 "must be passed back to the API"。
+                // v4-flash thinking mode behaves like v4-pro: the previous round's
+                // `reasoning_content` must be echoed back, otherwise a 400 "must be
+                // passed back to the API" error occurs.
                 thinking_echo: Some(ThinkingEcho::Required),
             }),
         },
@@ -741,9 +752,10 @@ fn hardcoded_models() -> &'static [HardcodedModel] {
                 vision: None,
                 prompt_cache: None,
                 parallel_tool_calls: None,
-                // v4-pro 走 https://api.deepseek.com/anthropic 端点（Anthropic
-                // 协议），不走 /v1/chat/completions——这条 echo 配置仅在用户
-                // 把 v4-pro 接到 OpenAI 兼容路径时生效。
+                // v4-pro uses the `https://api.deepseek.com/anthropic` endpoint
+                // (Anthropic protocol), not `/v1/chat/completions` — this echo
+                // configuration only takes effect when the user connects v4-pro to an
+                // OpenAI-compatible path.
                 thinking_echo: Some(ThinkingEcho::Required),
             }),
         },
@@ -773,9 +785,10 @@ fn hardcoded_lookup(model_id: &str) -> Option<ModelInfo> {
         })
 }
 
-/// 用上游列表为骨干，硬编码表为补丁：上游有的就拿上游 id，硬编码表
-/// 命中就把元信息往里补；硬编码表里有但上游没列出的 id 也合进来
-/// （兼容厂商 `/v1/models` 缺失主流模型时的兜底）。
+/// Use the upstream list as the backbone and the hardcoded table as a patch: for IDs
+/// present in both, keep the upstream ID and fill in metadata from the hardcoded table;
+/// for IDs only in the hardcoded table, merge them in as well (a fallback when the
+/// vendor's `/v1/models` omits mainstream models).
 fn merge_with_hardcoded(upstream: Vec<ModelInfo>) -> Vec<ModelInfo> {
     let mut by_id: HashMap<String, ModelInfo> =
         upstream.into_iter().map(|m| (m.id.clone(), m)).collect();

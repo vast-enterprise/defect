@@ -1,11 +1,12 @@
-//! 端到端冒烟：用 [`Channel::duplex`] 在进程内对接一个 ACP 客户端 / 服务端，
-//! 服务端走我们 CLI 同款的装配（`--provider deepseek`），让 prompt 真正走到
-//! DeepSeek `/v1/chat/completions` 并把流式 `agent_message_chunk` 打回客户端。
+//! End-to-end smoke test: uses [`Channel::duplex`] to connect an ACP client and server
+//! in-process. The server is assembled the same way as our CLI (`--provider deepseek`),
+//! so the prompt actually reaches DeepSeek `/v1/chat/completions` and streams
+//! `agent_message_chunk` back to the client.
 //!
-//! 用法：
+//! Usage:
 //!
 //! ```bash
-//! # 凭证从 .env 读（仓库根目录）；或 export DEEPSEEK_API_KEY=...
+//! # Credentials are read from .env (repo root); or export DEEPSEEK_API_KEY=...
 //! cargo run -p defect-cli --example deepseek_e2e
 //! ```
 
@@ -51,7 +52,8 @@ async fn main() -> anyhow::Result<()> {
             .insert(Arc::new(BashTool::new()))
             .build(),
     );
-    // OpenPolicy 让 bash 在 e2e 里直放——这是 smoke 脚本，不测权限交互。
+    // OpenPolicy allows bash to pass through directly in e2e — this is a smoke test, not
+    // testing permission interactions.
     let core = DefaultAgentCore::builder()
         .provider(provider)
         .process_tools(tools)
@@ -63,10 +65,11 @@ async fn main() -> anyhow::Result<()> {
         .build();
     let agent: Arc<dyn AgentCore> = Arc::new(core);
 
-    // server 用 channel_b（agent 视角），client 用 channel_a（client 视角）。
+    // The server uses `channel_b` (agent's perspective), and the client uses `channel_a`
+    // (client's perspective).
     let (channel_a, channel_b) = Channel::duplex();
 
-    // 把 server task spawn 出去；client driver 跑完后让它自然退出。
+    // Spawn the server task; let it exit naturally after the client driver finishes.
     let server_handle = tokio::spawn(serve_on(agent, channel_b));
 
     let updates: Arc<Mutex<Vec<SessionUpdate>>> = Arc::new(Mutex::new(Vec::new()));
@@ -77,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
         .name("deepseek-e2e-client")
         .on_receive_notification(
             async move |notif: SessionNotification, _cx| {
-                // 实时把 chunk 打到 stdout，方便肉眼看流式有没有真的在出。
+                // Stream chunks to stdout so you can visually verify streaming is
+                // working.
                 match &notif.update {
                     SessionUpdate::AgentMessageChunk(chunk) => {
                         if let ContentBlock::Text(t) = &chunk.content {

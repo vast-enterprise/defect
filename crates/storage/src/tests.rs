@@ -801,7 +801,7 @@ fn latest_session_id_for_cwd_picks_newest_matching() {
     fs::create_dir_all(&cwd_a).expect("mkdir a");
     fs::create_dir_all(&cwd_b).expect("mkdir b");
 
-    // 三个 session：两个在 cwd_a，一个在 cwd_b。
+    // Three sessions: two in `cwd_a`, one in `cwd_b`.
     for (id, cwd) in [
         ("sess-old", &cwd_a),
         ("sess-new", &cwd_a),
@@ -813,7 +813,7 @@ fn latest_session_id_for_cwd_picks_newest_matching() {
         store.init(&meta).expect("init");
     }
 
-    // 让 sess-new 的 journal 比 sess-old 新（重写以更新 mtime）。
+    // Make sess-new's journal newer than sess-old's (rewrite to update mtime).
     let new_store = SessionStore::for_session(dir.path(), &SessionId::new("sess-new"));
     std::thread::sleep(std::time::Duration::from_millis(20));
     fs::write(new_store.journal_path(), b"").expect("touch journal");
@@ -824,7 +824,7 @@ fn latest_session_id_for_cwd_picks_newest_matching() {
         .expect("some match");
     assert_eq!(latest.0.as_ref(), "sess-new");
 
-    // 不匹配的 cwd → None。
+    // Mismatched cwd → None.
     let none = observer
         .latest_session_id_for_cwd(&dir.path().join("project-c"))
         .expect("scan ok");

@@ -1,6 +1,5 @@
-//! `bash` 内置工具：跑一条非交互 shell 命令、合并 stdout/stderr、单帧返回。
-//!
-//! Bash tool — runs a shell command, streams stdout/stderr, supports timeout and cancellation.
+//! Bash built-in tool: runs a non-interactive shell command, merges stdout/stderr,
+//! returns a single frame.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -28,7 +27,8 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
 const TITLE_TRUNC: usize = 80;
 
-/// v0 内置 bash 工具。无内部状态——单例 `Arc::new(BashTool::new())` 即可。
+/// Built-in bash tool for v0. No internal state — a singleton `Arc::new(BashTool::new())`
+/// suffices.
 pub struct BashTool {
     schema: ToolSchema,
     default_timeout_ms: u64,
@@ -100,15 +100,17 @@ struct BashArgs {
 
 #[derive(Debug, Serialize)]
 struct BashOutput {
-    /// `None` 时表示子进程被信号杀掉或超时；查 `signal` / `timed_out`。
+    /// `None` when the child process was killed by a signal or timed out; check `signal`
+    /// / `timed_out`.
     exit_code: Option<i32>,
-    /// 子进程被信号终止时给出信号名，如 `SIGKILL`；否则 `None`。
+    /// The signal name (e.g. `SIGKILL`) if the child process was terminated by a signal;
+    /// `None` otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     signal: Option<String>,
     timed_out: bool,
-    /// 因 1 MiB cap 被 drop 的字节数（≥0）。
+    /// Bytes dropped due to the 1 MiB cap (≥0).
     truncated_bytes: u64,
-    /// 实测耗时（毫秒）。spawn 失败时不写。
+    /// Actual elapsed time in milliseconds. Not written when spawn fails.
     duration_ms: u64,
 }
 
@@ -118,7 +120,7 @@ impl Tool for BashTool {
     }
 
     fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
-        // Always Destructive — v0 does not parse command text.
+        // Always destructive — v0 does not parse the command text.
         SafetyClass::Destructive
     }
 
@@ -163,8 +165,8 @@ impl Tool for BashTool {
     }
 }
 
-/// 一次完整的 bash 调用：解析 args、resolve workdir、走 [`ShellBackend`]、
-/// 装配最终输出。返回单一 [`ToolEvent`]——`Completed` 或 `Failed`。
+/// A complete bash invocation: parse args, resolve workdir, go through [`ShellBackend`],
+/// assemble the final output. Returns a single [`ToolEvent`] — `Completed` or `Failed`.
 async fn run_bash(
     args: serde_json::Value,
     session_cwd: PathBuf,
@@ -202,7 +204,8 @@ async fn run_bash(
     };
 
     let result = run_command(shell.clone(), &terminal_id, &cancel, timeout, started).await;
-    // release 在所有出口幂等触发——backend 保证重复 release 同一个 id 不报错。
+    // Release is idempotent at all exit points — the backend guarantees that releasing
+    // the same id multiple times does not error.
     let _ = shell.release(&terminal_id).await;
     result
 }
@@ -220,15 +223,16 @@ async fn run_command(
     let timeout_at = tokio::time::sleep(Duration::from_millis(timeout));
     tokio::pin!(timeout_at);
 
-    // wait_fut 必须能"在 cancel 出口活下去"。ACP 反向请求一旦发出，response
-    // 必须能交付给在世的 oneshot::Receiver；若我们 drop wait_fut，server 把
-    // "无人接收"映射成 internal_error 并撕掉整条连接（详见
-    // `agent_client_protocol::jsonrpc::incoming_actor::dispatch_dispatch` 里
-    // `router.respond_with_result(result)?`）。
+    // wait_fut must survive the cancel branch. Once an ACP reverse request is sent, the
+    // response must be delivered to a live `oneshot::Receiver`; if we drop `wait_fut`,
+    // the server maps "no receiver" to an internal error and tears down the entire
+    // connection (see `router.respond_with_result(result)?` in
+    // `agent_client_protocol::jsonrpc::incoming_actor::dispatch_dispatch`).
     //
-    // 做法：把 wait_fut 装成 `'static` 的 self-owning future（闭包持 Arc<shell>
-    // 与 id），cancel 分支用 [`tokio::spawn`] 把它 detach 走继续 drain 响应；
-    // timeout 分支保留"先 kill 再 drain"语义，此时同一个 fut 直接 await 即可。
+    // Solution: make `wait_fut` a `'static` self-owning future (the closure holds
+    // `Arc<shell>` and `id`). In the cancel branch, use [`tokio::spawn`] to detach it and
+    // continue draining the response; in the timeout branch, preserve the "kill then
+    // drain" semantics by awaiting the same future directly.
     let mut wait_fut: Pin<
         Box<dyn futures::Future<Output = Result<TerminalExitStatus, ShellError>> + Send>,
     > = {
@@ -261,10 +265,11 @@ async fn run_command(
     };
 
     if canceled {
-        // 先发 kill 让进程尽快收尾；wait_fut 不能 drop（reverse-request 路径
-        // 的 oneshot 必须有人接），detach 出去 await，让运行时在响应到达时
-        // 仍有活的 receiver。LocalShellBackend 的 future 是 in-process 通知，
-        // detach 也无副作用。
+        // First send `kill` so the process finishes promptly; `wait_fut` cannot be
+        // dropped (the oneshot on the reverse-request path must have a receiver), so
+        // detach it to `await` elsewhere, keeping a live receiver in the runtime when the
+        // response arrives. For `LocalShellBackend` the future is an in-process
+        // notification, so detaching has no side effects.
         let _ = shell.kill(terminal_id).await;
         tokio::spawn(async move {
             let _ = wait_fut.await;
@@ -272,7 +277,7 @@ async fn run_command(
         return ToolEvent::Failed(ToolError::Canceled);
     }
 
-    // 超时路径：先 kill，再 wait_for_exit + output 拿最终输出。
+    // Timeout path: kill first, then wait_for_exit + output to get the final output.
     let exit_status = match exit_status {
         Some(status) => Some(status),
         None => {
@@ -339,7 +344,7 @@ async fn run_command(
     ToolEvent::Completed(fields)
 }
 
-/// Canonicalize 工作目录并校验它在 session cwd 子树内。
+/// Canonicalize the working directory and verify it is within the session cwd subtree.
 fn resolve_workdir(session_cwd: &Path, requested: Option<&str>) -> Result<PathBuf, ToolError> {
     let target = match requested {
         None => session_cwd.to_path_buf(),

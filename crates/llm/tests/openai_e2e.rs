@@ -1,12 +1,12 @@
-//! OpenAI provider 端到端集测：以 wiremock 充当 OpenAI Chat Completions
-//! 兼容后端，让 `OpenAiProvider` 跑完整 agent turn。
+//! End-to-end integration tests for the OpenAI provider, using wiremock as a compatible
+//! backend for OpenAI Chat Completions so that `OpenAiProvider` runs a full agent turn.
 //!
 //! Integration tests for OpenAI provider:
 //! - list_models round-trip + hardcoded merge
-//! - text-only turn（含 stream + `[DONE]` 终止符）
-//! - tool_calls 完整路径（两轮 LLM 调用闭环）
-//! - auth 头投放
-//! - cancel 中断
+//! - text-only turn (including stream + `[DONE]` terminator)
+//! - tool_calls full path (two-round LLM call loop)
+//! - auth header injection
+//! - cancel interruption
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +27,7 @@ const TEST_API_KEY: &str = "test-openai-key";
 const TEST_AUTH_HEADER: &str = "Bearer test-openai-key";
 const MODEL_ID: &str = "gpt-test-001";
 
-// ---- raw chat.completion.chunk JSON（与协议层 tests 同源）---------------
+// ---- raw chat.completion.chunk JSON (same source as protocol-layer tests) ---
 
 const TEXT_CHUNK_1: &str = r#"{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}"#;
 const TEXT_CHUNK_2: &str = r#"{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-test-001","choices":[{"index":0,"delta":{"content":"hello "},"logprobs":null,"finish_reason":null}]}"#;
@@ -40,8 +40,9 @@ fn provider_for(server_uri: &str) -> Arc<dyn LlmProvider> {
     let cfg = OpenAiConfig {
         api_key: Some(TEST_API_KEY.to_string()),
         api_key_env: None,
-        // base_url 已经包含 /v1 前缀（wire spec server 也是这样）。
-        // wiremock 不需要这个前缀，所以 base_url 直接指 server.uri()。
+        // base_url already includes the `/v1` prefix (as does the wire spec server).
+        // wiremock does not need this prefix, so base_url points directly to
+        // `server.uri()`.
         base_url: Some(server_uri.to_string()),
         organization: None,
         project: None,
@@ -56,8 +57,8 @@ fn provider_for(server_uri: &str) -> Arc<dyn LlmProvider> {
     Arc::new(OpenAiProvider::new(cfg).expect("provider")) as Arc<dyn LlmProvider>
 }
 
-/// 把若干个裸 JSON 块（每个对应一行 SSE `data:`）+ 一个 `[DONE]` 终止帧
-/// 编成 OpenAI 格式 SSE wire 字节串。
+/// Encodes several raw JSON chunks (each corresponding to one SSE `data:` line) plus an
+/// optional `[DONE]` termination frame into an OpenAI-format SSE wire byte string.
 fn openai_sse_body(chunks: &[&str], include_done: bool) -> Vec<u8> {
     let mut events: Vec<(&str, &str)> = chunks.iter().map(|c| ("", *c)).collect();
     if include_done {
@@ -94,15 +95,16 @@ async fn list_models_round_trip() {
 
     let provider = provider_for(&server.uri());
     let models = provider.list_models().await.expect("list models");
-    // 上游有 gpt-test-001（未在 hardcoded 表里），但 hardcoded 表会再补
-    // 一些已知模型（gpt-4o、o1...）。这里只断言上游 id 在结果里。
+    // The upstream provides `gpt-test-001` (not in the hardcoded table), but the
+    // hardcoded table will add some known models (gpt-4o, o1...). Here we only assert
+    // that the upstream id is present in the result.
     assert!(
         models.iter().any(|m| m.id == "gpt-test-001"),
         "expected upstream id in merged list"
     );
 }
 
-// ---------- text-only turn ----------------------------------------------
+// text-only turn
 
 #[tokio::test]
 async fn turn_with_text_only_response() {
@@ -171,9 +173,10 @@ async fn turn_with_tool_use_two_rounds() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(move |req: &Request| {
-            // 用请求体里 messages 是否含 role=tool 来判断"已经回过 tool_result"。
-            // 第 1 轮只有 system + user；第 2 轮多了 assistant(tool_calls) +
-            // tool(tool_result)。
+            // Determine whether a tool result has already been returned by checking if
+            // any message in the request body has `role: "tool"`.
+            // Round 1 contains only system + user messages; round 2 adds assistant (with
+            // tool_calls) and tool (with tool_result).
             let body: Value = serde_json::from_slice(&req.body).expect("body json");
             let has_tool_msg = body
                 .get("messages")
@@ -219,14 +222,15 @@ async fn turn_with_tool_use_two_rounds() {
     assert!(finished, "expected ToolCallFinished");
 }
 
-// ---------- auth header investment --------------------------------------
+// ---------- auth header tests --------------------------------------
 
 #[tokio::test]
 async fn missing_bearer_header_results_in_404() {
     let server = start_mock_server().await;
 
-    // 只匹配错误的 token 才返回 200；真正的请求带 "Bearer test-openai-key"
-    // 永远不命中，落到默认 404，验证 provider 真的把 Authorization 发了。
+    // Only match the wrong token to return 200; the real request carries "Bearer
+    // test-openai-key" and never matches, falling through to the default 404, verifying
+    // that the provider actually sends the Authorization header.
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(header("authorization", "Bearer wrong-key"))
@@ -253,7 +257,7 @@ async fn missing_bearer_header_results_in_404() {
     assert!(res.is_err(), "expected error when auth header didn't match");
 }
 
-// ---------- cancel mid-stream -------------------------------------------
+// Cancel mid-stream
 
 #[tokio::test]
 async fn cancel_during_stream_terminates_turn_silently() {

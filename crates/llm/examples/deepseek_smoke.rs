@@ -1,28 +1,32 @@
-//! DeepSeek provider 真端点冒烟。
+//! DeepSeek provider smoke test against the real endpoint.
 //!
-//! 用法：
+//! Usage:
 //!
 //! ```bash
 //! DEEPSEEK_API_KEY=sk-... \
 //!   cargo run -p defect-llm --example deepseek_smoke -- [scenario]
 //! ```
 //!
-//! `[scenario]` ∈ `list-models | text | tool | thinking | thinking-tool | cache-smoke | all`，
-//! 默认 `all`。
+//! `[scenario]` ∈ `list-models | text | tool | thinking | thinking-tool | cache-smoke |
+//! all`,
+//! defaults to `all`.
 //!
-//! 可选 env：
-//! - `DEEPSEEK_BASE_URL`：覆盖默认 `https://api.deepseek.com`
-//! - `DEEPSEEK_MODEL`：覆盖默认模型 `deepseek-v4-flash`
-//! - `RUST_LOG=defect_llm=debug` 打开协议层调试日志
+//! Optional env:
+//! - `DEEPSEEK_BASE_URL`: override default `https://api.deepseek.com`
+//! - `DEEPSEEK_MODEL`: override default model `deepseek-v4-flash`
+//! - `RUST_LOG=defect_llm=debug` enable protocol-level debug logging
 //!
-//! `thinking-tool` 场景验证 thinking + tool_use 多轮 round-trip：
-//! v4 系列在 thinking 模式下要求把上一轮 `reasoning_content` 回放回去，
-//! 否则第二轮（送 tool_result 时）400
-//! "reasoning_content must be passed back to the API"。本场景跑一个会
-//! 触发工具调用的 prompt，agent core 在一个 turn 内自动闭环：第一轮
-//! LLM 出 thinking + tool_use → 工具执行 → 第二轮把 thinking + tool_result
-//! 一起送回。失败说明 [`MessageContent::Thinking`] 的 echo 路径没拼对。
-//! 模型不在 `list_models` 返回里时 SKIP，不 FAIL。
+//! The `thinking-tool` scenario validates a multi-turn round-trip of thinking + tool_use:
+//! v4 series in thinking mode requires echoing back the previous turn's
+//! `reasoning_content`;
+//! otherwise the second turn (when sending tool_result) gets a 400
+//! "reasoning_content must be passed back to the API". This scenario runs a prompt that
+//! triggers a tool call, and the agent core auto-closes within one turn: first turn
+//! LLM outputs thinking + tool_use → tool execution → second turn sends thinking +
+//! tool_result
+//! together. Failure indicates the echo path for [`MessageContent::Thinking`] is
+//! incorrect.
+//! SKIP (not FAIL) if the model is not in the `list_models` response.
 
 mod common;
 
@@ -49,8 +53,9 @@ const TOOL_PROMPT: &str = "Please call the `echo` tool with msg=\"hello from smo
      then briefly summarize what the tool returned.";
 const THINKING_PROMPT: &str = "Think step by step: a farmer has 17 sheep and all but 9 die. How many are left? \
      Show your reasoning briefly, then give the final number.";
-// 让模型必须先 thinking、必须用工具、再给文本——这样第二轮请求里
-// 的 assistant message 一定带 reasoning_content（否则服务端拒）。
+// Force the model to think first, then use a tool, then produce text — this ensures the
+// assistant message in the second turn includes `reasoning_content` (otherwise the server
+// rejects it).
 const THINKING_TOOL_PROMPT: &str = "Think briefly about which message to echo, then call \
      the `echo` tool with msg=\"hello from thinking-tool\", and after it returns \
      summarize what came back in one sentence.";
@@ -228,7 +233,8 @@ async fn scenario_thinking_tool_multi_turn(
         Ok(t) => t,
         Err(e) => {
             let msg = e.to_string();
-            // 模型未上线时 SKIP 而非 FAIL（避免 CI 因上游清单变动而红）。
+            // Skip rather than fail when the model is not yet online (avoids CI turning
+            // red due to upstream manifest changes).
             if msg.contains("ModelNotFound") || msg.contains("model_not_found") {
                 return Ok(Some(format!(
                     "model {model} not available on DeepSeek API; \
@@ -255,9 +261,10 @@ async fn scenario_thinking_tool_multi_turn(
     if text.trim().is_empty() {
         return Err("empty assistant text after tool turn".to_string());
     }
-    // 走到这里说明：第一轮带 thinking + tool_use → tool_result 注入 →
-    // 第二轮请求里 assistant message 必带 reasoning_content（否则
-    // v4 系列会在第二轮直接 400，run_turn 拿不到 EndTurn）。
+    // At this point, the first round (thinking + tool_use) has injected a tool_result, so
+    // the assistant message in the second round must include reasoning_content;
+    // otherwise, v4-series models will return a 400 on the second round, and run_turn
+    // will never receive EndTurn.
     Ok(None)
 }
 

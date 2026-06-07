@@ -5,10 +5,11 @@
 //!
 //! ## ACP alignment
 //!
-//! [`Tool::describe`] 与 [`ToolEvent::Progress`] / [`ToolEvent::Completed`]
-//! 直接复用 ACP 的 [`ToolCallUpdateFields`]，避免重复造一份字段。
-//! 主循环把工具产出的字段拼上 [`ToolCallId`]、[`raw_input`] 等元信息后
-//! 转手发出 `session/update` 与 `session/request_permission`。
+//! [`Tool::describe`] and [`ToolEvent::Progress`] / [`ToolEvent::Completed`]
+//! directly reuse ACP's [`ToolCallUpdateFields`] to avoid duplicating fields.
+//! The main loop enriches the fields produced by the tool with metadata such as
+//! [`ToolCallId`] and [`raw_input`], then forwards them as `session/update` and
+//! `session/request_permission`.
 //!
 //! [`ToolCallId`]: agent_client_protocol_schema::ToolCallId
 //! [`ToolCallUpdateFields`]: agent_client_protocol_schema::ToolCallUpdateFields
@@ -48,25 +49,27 @@ pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
 pub struct ToolSchema {
     pub name: String,
     pub description: String,
-    /// 参数 JSON Schema。约定使用 Draft 2020-12 的子集（具体子集
-    /// 与转义规则在 `tool-trait.md` 中沉淀）。
+    /// JSON Schema for the parameters. Uses a subset of Draft 2020-12 (the exact subset
+    /// and escaping rules are documented in `tool-trait.md`).
     pub input_schema: serde_json::Value,
 }
 
-/// 工具调用的"自描述"。直接对位 ACP 的 [`ToolCallUpdateFields`]。
+/// Self-description of a tool call, directly mapping to ACP's [`ToolCallUpdateFields`].
 ///
-/// 用途（同一份数据驱动三种 ACP 消息）：
-/// - 首次推送 `ToolCall`（`status = Pending`）
-/// - `RequestPermission` 请求中的 `tool_call` 字段
-/// - 作为 [`ToolEvent::Progress`] 增量更新的基线
+/// Purpose (the same data drives three ACP messages):
+/// - First push of a `ToolCall` (`status = Pending`)
+/// - The `tool_call` field in a `RequestPermission` request
+/// - Baseline for incremental updates via [`ToolEvent::Progress`]
 ///
-/// 字段约定：
-/// - `tool_call_id` 不在此结构中；由主循环统一分配（用 LLM 给的
-///   `tool_use_id` 或自生成 UUID），工具不关心。
-/// - `raw_input` 由主循环在外层填充原始 args，工具实现不应自己塞，
-///   避免与 wire 上的真实参数发散。
-/// - `status` 由 [`ToolEvent`] 的 variant 推断：`Progress` → `InProgress`，
-///   `Completed` → `Completed`，`Failed` → `Failed`。工具不应自行设置。
+/// Field conventions:
+/// - `tool_call_id` is not in this struct; it is assigned uniformly by the main loop
+///   (using the LLM's `tool_use_id` or a self-generated UUID). The tool does not care
+///   about it.
+/// - `raw_input` is filled by the main loop with the original args. Tool implementations
+///   must not set it themselves, to avoid divergence from the real parameters on the
+///   wire.
+/// - `status` is inferred from the [`ToolEvent`] variant: `Progress` → `InProgress`,
+///   `Completed` → `Completed`, `Failed` → `Failed`. Tools must not set it themselves.
 ///
 /// [`ToolCallUpdateFields`]: agent_client_protocol_schema::ToolCallUpdateFields
 #[derive(Debug, Clone)]
@@ -74,170 +77,208 @@ pub struct ToolCallDescription {
     pub fields: ToolCallUpdateFields,
 }
 
-/// 工具的安全等级。
+/// Safety level for a tool.
 ///
-/// 仅作为**提示**喂给外部 sandbox policy；最终的 Allow / Deny / Ask
-/// 决策由 policy（结合用户配置、历史授权等）作出，trait 自身不做策略。
+/// This is only a **hint** fed to the external sandbox policy; the final Allow / Deny /
+/// Ask decision is made by the policy (in combination with user configuration, prior
+/// authorization, etc.). The trait itself does not enforce any policy.
 ///
-/// `serde` 形态使用 `snake_case`（`read_only` / `mutating` / `destructive` /
-/// `network`），方便 `defect-config` 在 hook matcher 等场景里直接从 TOML
-/// 反序列化。
+/// The `serde` representation uses `snake_case` (`read_only` / `mutating` / `destructive`
+/// / `network`), so that `defect-config` can deserialize it directly from TOML in hook
+/// matchers and similar contexts.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SafetyClass {
-    /// 纯读：列目录、读文件、查询元数据。
+    /// Read-only: list directories, read files, query metadata.
     ReadOnly,
-    /// 修改：写文件、改 state，副作用可逆性视情况。
+    /// Mutating: writes files or modifies state; side effects may or may not be
+    /// reversible.
     Mutating,
-    /// 破坏性：删文件、移动、执行命令。
+    /// Destructive: deleting files, moving, executing commands.
     Destructive,
-    /// 出网：HTTP / DNS / 任意远程 IO。
+    /// Outbound network: HTTP / DNS / any remote I/O.
     Network,
 }
 
-/// [`Tool::execute`] 产出的事件流元素。
+/// Elements of the event stream produced by [`Tool::execute`].
 ///
-/// 终态语义：流中**至多有一个** [`ToolEvent::Completed`] 或
-/// [`ToolEvent::Failed`]，且必须是流的最后一个事件。主循环看到终态
-/// 后即视为本次工具调用结束，不再消费后续元素。
+/// Terminal semantics: the stream contains **at most one** [`ToolEvent::Completed`] or
+/// [`ToolEvent::Failed`], and it must be the last event in the stream. When the main
+/// loop encounters a terminal event, it considers the tool call finished and does not
+/// consume any further elements.
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum ToolEvent {
-    /// 进度增量：主循环转手发 ACP `session/update` 的 `tool_call_update`。
-    /// 仅含本次变化的字段，符合 [`ToolCallUpdateFields`] 的"patch"语义。
+    /// Progress delta: the main loop forwards this as a `tool_call_update` in an ACP
+    /// `session/update`.
+    /// Contains only the fields that changed, matching the "patch" semantics of
+    /// [`ToolCallUpdateFields`].
     ///
     /// [`ToolCallUpdateFields`]: agent_client_protocol_schema::ToolCallUpdateFields
     Progress(ToolCallUpdateFields),
 
-    /// 成功结束。`fields` 是最终态的剩余字段（如最终 content / locations /
-    /// raw_output）；主循环负责把 `status` 设为 `Completed`。
+    /// Successful completion. `fields` contains the remaining final-state fields (e.g.,
+    /// final content, locations, raw_output); the main loop is responsible for setting
+    /// `status` to `Completed`.
     Completed(ToolCallUpdateFields),
 
-    /// 失败结束。携带 Rust 侧错误便于上层做 retry / log；映射到 ACP 时
-    /// 由主循环把 `status` 设为 `Failed` 并把 [`ToolError`] 文本塞进
-    /// `content`。
+    /// Terminal failure. Carries the Rust-side error so the caller can retry or log it;
+    /// when mapping to ACP, the main loop sets `status` to `Failed` and places the
+    /// [`ToolError`] text into `content`.
     Failed(ToolError),
 }
 
-/// [`Tool::execute`] 的事件流。类型擦除以便 `dyn Tool` 直接可用。
+/// Event stream for [`Tool::execute`]. Type-erased so that `dyn Tool` can be used
+/// directly.
 pub type ToolStream = Pin<Box<dyn Stream<Item = ToolEvent> + Send>>;
 
-/// 注入给 [`Tool::execute`] 的运行环境。
+/// The execution environment injected into [`Tool::execute`].
 ///
-/// 显式 struct 而非环境变量 / thread-local，方便测试时构造、避免隐式
-/// 全局状态。字段标注 `non_exhaustive` 是为了允许后续追加（sandbox
-/// 句柄、ACP 反向通道等）而不破坏现有实现。
+/// An explicit struct rather than environment variables or thread-locals, making it easy
+/// to construct in tests and avoiding implicit global state. Fields are marked
+/// `non_exhaustive` to allow future additions (sandbox handles, ACP backchannels, etc.)
+/// without breaking existing implementations.
 #[non_exhaustive]
 pub struct ToolContext<'a> {
-    /// 工具默认的工作目录（通常是 ACP session 的 cwd）。
+    /// The default working directory for the tool (typically the ACP session's `cwd`).
     pub cwd: &'a Path,
-    /// 取消令牌：上层 `session/cancel`、用户 Ctrl+C、超时等都会触发。
-    /// 工具实现应在长循环 / await 点检查 `cancel.is_cancelled()` 并尽快
-    /// 退出。
+    /// Cancellation token: triggered by upstream `session/cancel`, user Ctrl+C, timeout,
+    /// etc.
+    /// Tool implementations should check `cancel.is_cancelled()` at long loops or await
+    /// points and exit as soon as possible.
     pub cancel: CancellationToken,
-    /// 文件系统后端。fs 工具家族（`read_file` / `write_file` /
-    /// `edit_file`）通过它读写文件；装配时由 `defect-acp` 按客户端
-    /// 协商的 [`FileSystemCapabilities`] 选择 `LocalFsBackend` 或
-    /// `AcpFsBackend`，工具实现完全不感知。
+    /// Filesystem backend. The `fs` tool family (`read_file` / `write_file` /
+    /// `edit_file`) reads and writes files through it. During assembly, `defect-acp`
+    /// selects either `LocalFsBackend` or `AcpFsBackend` based on the client-negotiated
+    /// [`FileSystemCapabilities`]; tool implementations are completely unaware of this.
     ///
-    /// 用 [`Arc`] 而非借用：`Tool::execute` 返回 `'static` future / stream,
-    /// 工具内部通常 `clone` 一份 fs 进入异步任务。借用形式无法跨过 await。
+    /// Uses [`Arc`] instead of a borrow: `Tool::execute` returns a `'static` future /
+    /// stream, and tools typically `clone` the fs into async tasks. A borrow cannot
+    /// survive across `.await`.
     ///
     /// [`FileSystemCapabilities`]: agent_client_protocol_schema::FileSystemCapabilities
     pub fs: Arc<dyn FsBackend>,
-    /// Shell 执行后端。`bash` 工具通过它创建 terminal 跑命令；装配时由
-    /// `defect-acp` 按客户端协商的 [`ClientCapabilities::terminal`] 选择
-    /// `LocalShellBackend` 或 `AcpShellBackend`，工具实现不感知。
+    /// Shell execution backend. The `bash` tool uses it to create a terminal and run
+    /// commands; during assembly, `defect-acp` selects either `LocalShellBackend` or
+    /// `AcpShellBackend` based on the client-negotiated [`ClientCapabilities::terminal`],
+    /// and tool implementations are unaware of the choice.
     ///
-    /// 与 `fs` 同款 `Arc` 取舍——`Tool::execute` 是 `'static` future。
+    /// Same `Arc` trade-off as `fs` — `Tool::execute` returns a `'static` future.
     ///
     /// [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
     pub shell: Arc<dyn ShellBackend>,
-    /// HTTP fetch 后端。`fetch` 工具通过它发起网络读取；装配在 CLI 入口完成
-    /// （按 `HttpClientConfig` 构造一个进程级 [`HttpClient`] 实例并复用）。
-    /// 工具实现拿到的是 [`Arc`] 副本；`Tool::execute` 是 `'static` future，
-    /// 借用形式无法跨过 await。
+    /// HTTP fetch backend. The `fetch` tool uses it to perform network reads; it is set
+    /// up at the CLI entry point (constructed from `HttpClientConfig` as a process-level
+    /// [`HttpClient`] instance and reused). Tool implementations receive an [`Arc`]
+    /// clone; `Tool::execute` is a `'static` future, so borrowing cannot survive across
+    /// await points.
     pub http: Arc<dyn HttpClient>,
-    /// 当前 turn 选中的 model id。绝大多数工具用不到；`spawn_agent`
-    /// 子 agent 工具用它做"model 回落到父会话当前选择"——`ToolContext`
-    /// 不携带 provider registry，但携带这个字符串就够 `spawn_agent` 在
-    /// 自己捕获的 registry 上 `entry_for_model` 解析出父此刻用的 provider。
-    /// 由 [`TurnRunner`](crate::session::TurnRunner) 构造 ctx 时填入 `config.model`。
+    /// The model id selected for the current turn. Most tools do not need this; the
+    /// `spawn_agent` sub-agent tool uses it to "fall back the model to the parent
+    /// session's current selection" — `ToolContext` does not carry a provider registry,
+    /// but carrying this string is enough for `spawn_agent` to call `entry_for_model` on
+    /// its own captured registry to resolve the provider the parent is currently using.
+    /// Populated from `config.model` by [`TurnRunner`](crate::session::TurnRunner) when
+    /// constructing the context.
     pub current_model: &'a str,
-    /// 当前 turn 选中的 provider vendor。与 [`Self::current_model`] 组成
-    /// `(vendor, model)` 选择对——`spawn_agent` 子 agent 回落到父选择时按这对在
-    /// registry 上 `entry_for` 精确解析（同名 model 多网关下避免选错 provider）。
-    /// 空串表示未注入（旧/测试路径），此时 `spawn_agent` 回退到按裸 model id 取
-    /// 首个 entry。由 turn runner 构造 ctx 时填入 `config.provider`。
+    /// The provider vendor selected for the current turn. Together with
+    /// [`Self::current_model`] this forms a `(vendor, model)` selection pair — when a
+    /// `spawn_agent` sub-agent falls back to the parent's choice, it uses this pair to
+    /// call `entry_for` on the registry for exact resolution (avoiding provider
+    /// mis-selection when multiple gateways serve the same model name). An empty string
+    /// means the value was not injected (legacy/test paths); in that case `spawn_agent`
+    /// falls back to looking up the first entry by bare model id. Populated by the turn
+    /// runner from `config.provider` when constructing the context.
     pub current_provider: &'a str,
-    /// session 级后台任务句柄。`Some` 时工具可 fire-and-forget 地 spawn 一个
-    /// 活过当前 turn 的任务（首要场景：`spawn_agent { run_in_background: true }`）；
-    /// `None` 表示本上下文不支持后台（子 agent 嵌套 turn / 测试），工具应回退到
-    /// 同步执行。
+    /// Session-level background task handle. When `Some`, tools can fire-and-forget a
+    /// task that outlives the current turn (primarily for `spawn_agent {
+    /// run_in_background: true }`); `None` means the context does not support background
+    /// execution (e.g., nested sub-agent turns or tests), and tools should fall back to
+    /// synchronous execution.
     ///
-    /// 用 owned [`Arc`]-backed 句柄而非借用：`Tool::execute` 返回 `'static`
-    /// future，借用无法跨过 await。由顶层 [`TurnRunner`](crate::session::TurnRunner)
-    /// 在构造 ctx 时注入；嵌套子 agent turn 不注入（结构性禁止后台任务自我繁殖）。
+    /// Uses an owned [`Arc`]-backed handle instead of a borrow: `Tool::execute` returns a
+    /// `'static` future, and a borrow cannot survive across await. Injected by the
+    /// top-level [`TurnRunner`](crate::session::TurnRunner) when constructing the
+    /// context; not injected for nested sub-agent turns (structurally prevents background
+    /// tasks from spawning themselves).
     pub background: Option<crate::session::BackgroundTasks>,
-    /// subagent 事件桥：`Some` 时工具可把自己内部派生的子 turn 事件包成
-    /// [`crate::event::AgentEvent::Subagent`] 转发回父 session 的事件流，供
-    /// observability 嵌套展示。当前唯一使用者是 `spawn_agent`。由
-    /// `session::turn` 的 turn runner 在驱动每个工具时按该工具的
-    /// [`ToolCallId`] 注入——**顶层与子 agent 嵌套 turn 都注入**（递归桥接），
-    /// 挂载坐标由 [`SubagentBridge::parent_tool_call_id`] 表达。
+    /// Subagent event bridge: when `Some`, a tool can wrap internally spawned sub-turn
+    /// events as [`crate::event::AgentEvent::Subagent`] and forward them back to the
+    /// parent session's event stream for nested observability display. Currently only
+    /// used by `spawn_agent`. Injected by the turn runner in `session::turn` for each
+    /// tool according to its [`ToolCallId`] — **injected for both top-level and nested
+    /// sub-agent turns** (recursive bridging), with the mount point expressed by
+    /// [`SubagentBridge::parent_tool_call_id`].
     pub subagent_bridge: Option<SubagentBridge>,
-    /// 本 turn 快照的 active sandbox policy。`spawn_agent` 用它做"子 agent 包
-    /// 父此刻的真实策略"——`session/set_mode` 切换后新起的 turn 把新策略经此
-    /// 传下去，子 agent 不会拿到陈旧的进程级默认。`None` 时 `spawn_agent`
-    /// 回退到构造期捕获的 policy（测试 / 未注入场景）。绝大多数工具忽略本字段。
+    /// The active sandbox policy for this turn snapshot. `spawn_agent` uses it to pass
+    /// the parent's current real policy to child agents — after a `session/set_mode`
+    /// switch, newly created turns propagate the new policy through this field, so child
+    /// agents never see a stale process-level default. When `None`, `spawn_agent` falls
+    /// back to the policy captured at construction time (testing / uninjected scenarios).
+    /// Most tools ignore this field.
     pub policy: Option<Arc<dyn crate::policy::SandboxPolicy>>,
-    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下，
-    /// `goal_done` 工具调用 [`crate::session::GoalState::mark_reached`] 置位；
-    /// `goal-gate` hook 在 turn 自愿停止时据此决定放行还是续命。`None` = 非目标
-    /// 模式（默认），`goal_done` 工具不会被注册，本字段无人读。
+    /// Shared state for the `--goal` goal-driven loop. When `Some`, this session runs in
+    /// goal mode; the `goal_done` tool calls [`crate::session::GoalState::mark_reached`]
+    /// to set the flag, and the `goal-gate` hook uses it to decide whether to release or
+    /// extend a turn when it voluntarily stops. `None` means non-goal mode (the default);
+    /// the `goal_done` tool is not registered and this field is never read.
     pub goal: Option<Arc<crate::session::GoalState>>,
-    /// 从当前层起还能再派发多少层 subagent。顶层 turn = 配置的初始上限；
-    /// `spawn_agent` 为子 agent 嵌套 turn 注入时减一。`0` ⇒ 子 agent 拿不到
-    /// `spawn_agent` 工具（深度耗尽，结构性禁止继续递归）——取代旧的"白名单永不
-    /// 含 spawn_agent"硬编码。功能性闸门，与 observability 无关，故独立于可空的
-    /// [`Self::subagent_bridge`]，在测试 / 无桥场景下同样生效。默认 `0`（最保守：
-    /// 不显式注入即不可派发；顶层 turn 必须显式 [`Self::with_subagent_depth`]）。
+    /// How many more layers of subagent can be dispatched from the current layer. The
+    /// top-level turn starts at the configured initial limit; `spawn_agent` decrements it
+    /// by one when injecting a nested turn for a child agent. `0` means the child agent
+    /// cannot obtain the `spawn_agent` tool (depth exhausted, structurally preventing
+    /// further recursion) — replacing the old hard-coded "whitelist never contains
+    /// `spawn_agent`". This is a functional gate, unrelated to observability, so it is
+    /// independent of the optional [`Self::subagent_bridge`] and also takes effect in
+    /// test / no-bridge scenarios. Defaults to `0` (most conservative: no explicit
+    /// injection means no dispatch; the top-level turn must explicitly use
+    /// [`Self::with_subagent_depth`]).
     pub subagent_depth: u32,
 }
 
-/// 把工具内部派生的子 turn 事件桥接回父 session 事件流所需的句柄。
+/// A handle for bridging sub-turn events (spawned internally by a tool) back into the
+/// parent session's event stream.
 ///
-/// 持有父 session 的 [`EventEmitter`] 与发起本工具调用的 [`ToolCallId`]。`Clone`
-/// 廉价（内部 `Arc` + 小字符串）。
+/// Holds the parent session's [`EventEmitter`] and the [`ToolCallId`] that initiated this
+/// tool invocation. `Clone` is cheap (internally `Arc` + small string).
 ///
-/// ## 递归桥接：每层只 prepend 自己的 id
+/// ## Recursive bridging: each layer only prepends its own id
 ///
-/// 完整祖先链不存在这里——它在事件**向上冒泡**时由各层桥接逐段累积。每一层的桥接
-/// 订阅者（`spawn_agent` 的 `bridge_task`）：
-/// - 收到子 turn 的**叶子**事件 ⇒ 包成
-///   `Subagent{ ancestor_path: [parent_tool_call_id], agent_type: <本层 profile>, inner: 叶子 }`；
-/// - 收到的**已是** `Subagent`（来自更深层、已带部分链）⇒ 把 `parent_tool_call_id`
-///   **prepend** 到其 `ancestor_path` 链首、保留 `inner` 叶子与深层 `agent_type` 不变。
+/// The full ancestor chain is not stored here — it is accumulated incrementally as events
+/// **bubble upward** through each layer's bridge. The bridge subscriber (e.g.,
+/// `spawn_agent`'s `bridge_task`) at each layer:
+/// - Receives a **leaf** event from the sub-turn → wraps it as
+///   `Subagent{ ancestor_path: [parent_tool_call_id], agent_type: <this layer's profile>,
+///   inner: leaf }`;
+/// - Receives an **already** `Subagent` (from a deeper layer, already carrying a partial
+///   chain) → **prepends** `parent_tool_call_id` to the head of its `ancestor_path`,
+///   leaving `inner` leaf and deeper `agent_type` unchanged.
 ///
-/// 于是事件穿过 N 层桥接后，`ancestor_path` 恰好是从顶层到叶子那层的完整 id 链。
-/// 每层无需预知全链，只认自己这一跳——这也让前台 / 后台 / 任意深度共用同一逻辑。
+/// Thus after passing through N layers of bridging, `ancestor_path` is exactly the
+/// complete id chain from the top layer down to the leaf. Each layer only needs to know
+/// its own hop — this lets frontend, backend, and arbitrary depths share the same logic.
 ///
-/// 递归的**深度闸门**不在这里——它是功能性的、必须始终生效（含无 observability /
-/// 测试场景），故走 [`ToolContext::subagent_depth`] 独立字段，而非这个可空的桥。
+/// The recursive **depth gate** is not here — it is functional and must always apply
+/// (including in non-observability / test scenarios), so it lives in the separate
+/// [`ToolContext::subagent_depth`] field rather than in this optional bridge.
 #[derive(Clone)]
 pub struct SubagentBridge {
-    /// 父 session 的事件总线。包好的 [`crate::event::AgentEvent::Subagent`] 投到这里。
+    /// Event bus of the parent session. Wrapped [`crate::event::AgentEvent::Subagent`]
+    /// events are emitted here.
     pub parent_events: Arc<EventEmitter>,
-    /// 发起子 agent 的那次工具调用 id（父 trace 里对应的 tool span）。本层桥接据它
-    /// prepend，是该子 agent 在父 trace 里挂载点的坐标。
+    /// The tool call ID that spawned this subagent (the corresponding tool span in the
+    /// parent trace). The bridge prepends this ID, serving as the mount point of this
+    /// subagent within the parent trace.
     pub parent_tool_call_id: ToolCallId,
 }
 
 impl<'a> ToolContext<'a> {
-    /// 构造一个最小 `ToolContext`。`#[non_exhaustive]` 让外部 crate 不能直接
-    /// 用结构体字面量构造——这个构造函数是 cross-crate 唯一入口。新增字段时
-    /// 给签名加默认值或新构造函数，不破坏现有调用点。
+    /// Constructs a minimal `ToolContext`. The `#[non_exhaustive]` attribute prevents
+    /// external crates from constructing the struct directly with a literal — this
+    /// constructor is the only cross-crate entry point. When adding new fields, add
+    /// default values to the signature or provide a new constructor to avoid breaking
+    /// existing call sites.
     pub fn new(
         cwd: &'a Path,
         cancel: CancellationToken,
@@ -262,50 +303,58 @@ impl<'a> ToolContext<'a> {
         }
     }
 
-    /// 注入当前 turn 选中的 provider vendor，与 `current_model` 组成选择对。
-    /// 不调用 ⇒ 空串（`spawn_agent` 回退到按裸 model id 取首个 entry）。
+    /// Inject the provider vendor selected for the current turn, forming a selection pair
+    /// with `current_model`.
+    /// If not called, defaults to an empty string (`spawn_agent` falls back to picking
+    /// the first entry by bare model id).
     #[must_use]
     pub fn with_current_provider(mut self, vendor: &'a str) -> Self {
         self.current_provider = vendor;
         self
     }
 
-    /// 注入本层起的剩余 subagent 派发深度。顶层 turn 的工具驱动用配置的初始上限
-    /// 调用；`spawn_agent` 为子 agent 嵌套 turn 注入减一后的值。不调用 ⇒ `0`
-    /// （最保守：不可派发 subagent）。
+    /// Inject the remaining subagent dispatch depth from this layer onward. The tool
+    /// driver for the top-level turn calls with the configured initial cap; `spawn_agent`
+    /// injects the decremented value for nested child-agent turns. If not called,
+    /// defaults to `0` (most conservative: no subagent dispatch allowed).
     #[must_use]
     pub fn with_subagent_depth(mut self, depth: u32) -> Self {
         self.subagent_depth = depth;
         self
     }
 
-    /// 注入本 turn 快照的 active sandbox policy。顶层 turn 的工具驱动用它把
-    /// 父此刻的策略传给 `spawn_agent`；不调用则 `policy` 为 `None`（子 agent
-    /// 嵌套 / 测试），`spawn_agent` 回退到构造期捕获的 policy。
+    /// Inject the active sandbox policy for this turn snapshot. The top-level turn's tool
+    /// driver uses this to pass the parent turn's policy to `spawn_agent`; if not called,
+    /// `policy` is `None` (child agent nesting / testing), and `spawn_agent` falls back
+    /// to the policy captured at construction time.
     #[must_use]
     pub fn with_policy(mut self, policy: Arc<dyn crate::policy::SandboxPolicy>) -> Self {
         self.policy = Some(policy);
         self
     }
 
-    /// 注入 session 级后台任务句柄。顶层 turn 的工具驱动用它开启 `run_in_background`
-    /// 能力；不调用则 `background` 为 `None`（子 agent / 测试的默认），工具回退同步执行。
+    /// Inject a session-level background task handle. The top-level turn's tool driver
+    /// uses this to enable `run_in_background`; if not called, `background` is `None`
+    /// (the default for sub-agents / tests), and tools fall back to synchronous
+    /// execution.
     #[must_use]
     pub fn with_background(mut self, background: crate::session::BackgroundTasks) -> Self {
         self.background = Some(background);
         self
     }
 
-    /// 注入 `--goal` 目标驱动循环的共享状态。`goal_done` 工具据它置位 reached；
-    /// 不调用则 `goal` 为 `None`（非目标模式，默认）。
+    /// Inject shared state for the `--goal` goal-driven loop. The `goal_done` tool sets
+    /// `reached` based on this state; if not called, `goal` is `None` (non-goal mode, the
+    /// default).
     #[must_use]
     pub fn with_goal(mut self, goal: Arc<crate::session::GoalState>) -> Self {
         self.goal = Some(goal);
         self
     }
 
-    /// 注入 subagent 事件桥。工具驱动 `session::turn` 为每个工具调用按其
-    /// [`ToolCallId`] 注入，让 `spawn_agent` 能把子 turn 事件嵌套回父 trace。
+    /// Inject a subagent event bridge. The tool driver injects one per tool call in
+    /// `session::turn`, keyed by [`ToolCallId`], so that `spawn_agent` can nest child
+    /// turn events back into the parent trace.
     #[must_use]
     pub fn with_subagent_bridge(mut self, bridge: SubagentBridge) -> Self {
         self.subagent_bridge = Some(bridge);
@@ -313,63 +362,70 @@ impl<'a> ToolContext<'a> {
     }
 }
 
-/// agent 可调用的工具。
+/// Tools callable by the agent.
 ///
-/// 实现者通常是无状态的（每次调用通过 `args` + [`ToolContext`] 拿到
-/// 全部依赖）；如果需要持有连接 / 缓存等状态，把状态放在 `Self` 上、
-/// 用 `Arc<Self>` 注册给主循环即可。
+/// Implementors are typically stateless (each invocation receives all dependencies via
+/// `args` + [`ToolContext`]); if you need to hold state such as connections or caches,
+/// place the state on `Self` and register an `Arc<Self>` with the main loop.
 pub trait Tool: Send + Sync {
-    /// 工具名片。返回引用避免每次调用都构造一份。
+    /// Tool metadata. Returns a reference to avoid allocating on every call.
     fn schema(&self) -> &ToolSchema;
 
-    /// 在不实际执行的前提下，给 sandbox policy 一个安全等级提示。
+    /// Provides a safety-level hint to the sandbox policy without actually executing the
+    /// tool.
     ///
-    /// `args` 是已经反序列化好的 JSON Value——同一个工具的安全等级
-    /// 可能依参数而异（例如 `bash` 工具在 `command` 含 `rm` 时升为
-    /// [`SafetyClass::Destructive`]）。实现应当**纯函数**，不做 IO。
+    /// `args` is the already-deserialized JSON value — the same tool's safety level may
+    /// vary by arguments (e.g., the `bash` tool escalates to [`SafetyClass::Destructive`]
+    /// when `command` contains `rm`). The implementation should be a **pure function**
+    /// and perform no IO.
     fn safety_hint(&self, args: &serde_json::Value) -> SafetyClass;
 
-    /// 在执行前生成一份"自描述"，用于推送给 ACP 客户端展示。
+    /// Generates a "self-description" before execution, for display to the ACP client.
     ///
-    /// 异步签名 + [`ToolContext`] 注入：实现可以在 describe 阶段做轻量
-    /// IO（典型用例：`write_file` 在请求授权前先读旧内容，给客户端画
-    /// 精确 old↔new diff——比"全新内容"更利于审查）。
+    /// The async signature and [`ToolContext`] injection allow implementations to perform
+    /// lightweight IO during the describe phase (typical example: `write_file` reads the
+    /// old content before requesting authorization, producing a precise old↔new diff for
+    /// the client—more reviewable than "entirely new content").
     ///
-    /// 性能约束：describe 在每次 ACP `ToolCall` 推送前都会跑一次，
-    /// 实现仍应保持快速且对失败 graceful（IO 失败时降级返回基础字段，
-    /// 不要让 describe 自己抛错——签名也没给错误通道）。
+    /// Performance constraint: `describe` runs before every ACP `ToolCall` push.
+    /// Implementations should remain fast and graceful on failure (on IO failure, degrade
+    /// to returning basic fields; do not let `describe` itself throw—the signature
+    /// provides no error channel).
     ///
-    /// 具体由谁填什么字段见 [`ToolCallDescription`] 的字段约定。
+    /// See the field conventions on [`ToolCallDescription`] for which fields are filled
+    /// by whom.
     fn describe<'a>(
         &'a self,
         args: &'a serde_json::Value,
         ctx: ToolContext<'a>,
     ) -> BoxFuture<'a, ToolCallDescription>;
 
-    /// 启动一次工具调用，返回事件流。
+    /// Initiates a tool call and returns an event stream.
     ///
-    /// 流的元素见 [`ToolEvent`]；终态事件之后流应立即结束。drop 流
-    /// 视为取消（与 `ctx.cancel.cancel()` 等价）。
+    /// See [`ToolEvent`] for the stream elements. The stream must end immediately after
+    /// the terminal event. Dropping the stream is treated as cancellation (equivalent to
+    /// `ctx.cancel.cancel()`).
     fn execute(&self, args: serde_json::Value, ctx: ToolContext<'_>) -> ToolStream;
 }
 
-/// 工具执行错误。
+/// Tool execution error.
 ///
-/// 粒度故意保持粗——细化到具体错误类型由内置工具自己在 `Execution`
-/// 的 source 里携带。这里只区分主循环需要差异化处理的几大类。
+/// The granularity is intentionally coarse — finer-grained error types are carried by
+/// built-in tools themselves in the `Execution` source. Here we only distinguish the
+/// broad categories that the main loop needs to handle differently.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ToolError {
-    /// 上层取消（[`ToolContext::cancel`] 触发）。
+    /// Canceled by the caller (triggered via [`ToolContext::cancel`]).
     #[error("tool canceled")]
     Canceled,
 
-    /// 参数 JSON 解析失败 / schema 校验不过。主循环可把它送回 LLM
-    /// 让模型修正参数后重试。
+    /// The tool arguments failed JSON parsing or schema validation. The main loop can
+    /// send this back to the LLM so the model can fix the parameters and retry.
     #[error("invalid tool arguments: {0}")]
     InvalidArgs(#[source] BoxError),
 
-    /// 执行期错误（IO 失败、子进程非零退出、网络错误等）。
+    /// Runtime error (I/O failure, non-zero subprocess exit, network error, etc.).
     #[error("tool execution failed: {0}")]
     Execution(#[source] BoxError),
 }

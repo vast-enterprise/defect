@@ -1,50 +1,61 @@
-//! 微压缩（microcompact）——便宜的第一道上下文防线。
+//! Microcompact — cheap first line of defense for context.
 //!
-//! 与全量压缩（`compact.rs`）的本质区别：**不调 LLM**，**不删消息**，只把**较旧
-//! 轮次**里体积超标的 `tool_result` 正文换成占位符。结构（消息条数、role、
-//! `tool_use`↔`tool_result` 配对）一律不动——故 wire 上永远合法，且模型仍看得到
-//! 「自己调过哪些工具」，只是看不到那些（多半已不相关的）庞大工具输出正文。
+//! Unlike full compaction (`compact.rs`): **no LLM call**, **no message deletion**. It
+//! only replaces oversized `tool_result` bodies from **older turns** with a placeholder.
+//! The structure (message count, role, `tool_use`↔`tool_result` pairing) is untouched —
+//! so the wire format is always valid, and the model still sees which tools it called,
+//! just not the (often irrelevant) large tool output bodies.
 //!
-//! 纯 `O(n)` 数据变换、零网络往返，可在 turn 主循环里同步跑（对齐 Claude Code 的
-//! microcompact）。它常常就能把工具输出大户削下去，把昂贵的全量压缩推后。
+//! Pure `O(n)` data transformation, zero network round trips, safe to run synchronously
+//! in the turn main loop (aligns with Claude Code's microcompact). It often cuts down the
+//! biggest tool output contributors, deferring expensive full compaction.
 //!
-//! ## 安全约束
+//! ## Safety constraints
 //!
-//! 1. **不增删消息**——只重写 `ToolResult` 的 `output` 字段。这维持了 `History`
-//!    的并发不变式（见 `splice_prefix`），与飞行中的后台全量压缩共存。
-//! 2. **保留窗口**：最近 [`KEEP_RECENT_TURNS`] 个轮次的工具结果原样留——大概率
-//!    还在用。只清更老轮次的。
-//! 3. **尺寸地板**：小于 [`MIN_CLEAR_TOKENS`] 的工具结果不动（不值当）。
-//! 4. **幂等**：占位文本本身即 sentinel；已清过的再跑直接跳过。
+//! 1. **No message addition or removal** — only rewrites the `output` field of
+//!    `ToolResult`. This preserves `History`'s concurrency invariants (see
+//!    `splice_prefix`) and coexists with in-flight background full compaction.
+//! 2. **Retention window**: tool results from the most recent [`KEEP_RECENT_TURNS`] turns
+//!    are kept as-is — they're likely still in use. Only older turns are cleared.
+//! 3. **Size floor**: tool results smaller than [`MIN_CLEAR_TOKENS`] are left alone (not
+//!    worth it).
+//! 4. **Idempotent**: the placeholder text itself acts as a sentinel; already-cleared
+//!    entries are skipped on re-run.
 
 use crate::llm::{Message, MessageContent, ToolResultBody};
 use crate::session::history::estimate_message_tokens;
 
 use super::compact::is_turn_start;
 
-/// 保留窗口：最近 N 个轮次的 tool_result 不清。
+/// Keep the last N turns of tool_result intact.
 const KEEP_RECENT_TURNS: usize = 3;
 
-/// 尺寸地板：估算 token 数不超过它的 tool_result 不值得清。
+/// Size floor: tool results whose estimated token count does not exceed this value are
+/// not worth clearing.
 const MIN_CLEAR_TOKENS: u64 = 512;
 
-/// 清理后填入的占位文本。既告知模型该输出已被回收，也充当幂等 sentinel。
+/// Placeholder text inserted after clearing. Both informs the model that the output has
+/// been reclaimed and serves as an idempotent sentinel.
 pub(super) const CLEARED_PLACEHOLDER: &str =
     "[tool output cleared to save context — re-run the tool if its result is needed again]";
 
-/// 微压缩的报告：清理前后的整段 token 估算。`cleared` = 实际清理的 tool_result 条数。
+/// Microcompact report: estimated total tokens before and after clearing. `cleared` is
+/// the number of `tool_result` entries actually removed.
 pub(super) struct MicrocompactReport {
     pub tokens_before: u64,
     pub tokens_after: u64,
     pub cleared: usize,
 }
 
-/// 对 `messages` 跑一次微压缩，返回 `Some(rebuilt, report)`（确有清理）或 `None`
-/// （无可清理项——调用方据此跳过回写、不发事件）。
+/// Runs micro-compaction on `messages`, returning `Some(rebuilt, report)` if any messages
+/// were cleared, or `None` if nothing could be cleared (callers use this to skip
+/// write-back and event emission).
 ///
-/// 纯函数：不碰 `History`，由调用方决定如何回写（当前走 `replace`）。
+/// Pure function: does not touch `History`; the caller decides how to write back
+/// (currently via `replace`).
 pub(super) fn run(messages: &[Message]) -> Option<(Vec<Message>, MicrocompactReport)> {
-    // 找保留边界：从末尾数 KEEP_RECENT_TURNS 个轮次起点，其后（含）全部保留。
+    // Find the retention boundary: keep all turns starting from the
+    // `KEEP_RECENT_TURNS`-th turn start from the end (inclusive).
     let turn_starts: Vec<usize> = messages
         .iter()
         .enumerate()
@@ -52,9 +63,12 @@ pub(super) fn run(messages: &[Message]) -> Option<(Vec<Message>, MicrocompactRep
         .map(|(i, _)| i)
         .collect();
 
-    // 保留边界下标：轮次数不足保留窗口 → 无更老轮次可清 → 直接跳过。
-    // 倒数第 KEEP_RECENT_TURNS 个轮次起点即保留边界；`nth_back(K-1)` 取它，
-    // 不足 K 个时 `None` → 跳过（避免裸索引可能 panic）。
+    // Keep boundary index: if there are fewer turns than the retention window, there are
+    // no older turns to prune, so skip directly.
+    // The start of the `KEEP_RECENT_TURNS`-th turn from the end is the boundary;
+    // `nth_back(K-1)` retrieves it.
+    // If there are fewer than K turns, it returns `None` → skip (avoiding a potential
+    // panic from raw indexing).
     let keep_from = *turn_starts.iter().rev().nth(KEEP_RECENT_TURNS - 1)?;
 
     let tokens_before = estimate_total(messages);
@@ -64,7 +78,7 @@ pub(super) fn run(messages: &[Message]) -> Option<(Vec<Message>, MicrocompactRep
         .iter()
         .enumerate()
         .map(|(idx, msg)| {
-            // 保留窗口内的消息原样放行。
+            // Pass through messages within the window unchanged.
             if idx >= keep_from {
                 return msg.clone();
             }
@@ -87,10 +101,12 @@ pub(super) fn run(messages: &[Message]) -> Option<(Vec<Message>, MicrocompactRep
     ))
 }
 
-/// 把一条消息里**超标且未清过**的 `ToolResult` 正文换成占位符；其余内容块原样。
-/// 命中即 `cleared += 1`。
+/// Replace the body of any `ToolResult` that is both oversized and not yet cleared with a
+/// placeholder; leave all other content blocks unchanged.
+/// Increments `cleared` by 1 for each replacement.
 fn clear_oversized_results(msg: &Message, cleared: &mut usize) -> Message {
-    // 先看这条消息有没有任何 ToolResult——绝大多数消息没有，避免无谓 clone。
+    // First check whether this message has any ToolResult — most messages do not,
+    // avoiding an unnecessary clone.
     let has_tool_result = msg
         .content
         .iter()
@@ -114,7 +130,8 @@ fn clear_oversized_results(msg: &Message, cleared: &mut usize) -> Message {
                     output: ToolResultBody::Text {
                         text: CLEARED_PLACEHOLDER.to_string(),
                     },
-                    // 保留 is_error：模型仍知道当初这次工具调用是失败的。
+                    // Preserve `is_error`: the model still knows that this tool call
+                    // originally failed.
                     is_error: *is_error,
                 }
             }
@@ -128,7 +145,8 @@ fn clear_oversized_results(msg: &Message, cleared: &mut usize) -> Message {
     }
 }
 
-/// 该 tool_result 是否该被清：超尺寸地板，且尚未被清过（幂等）。
+/// Whether this `tool_result` should be cleared: exceeds the size threshold and has not
+/// been cleared yet (idempotent).
 fn should_clear(output: &ToolResultBody) -> bool {
     if already_cleared(output) {
         return false;
@@ -136,13 +154,14 @@ fn should_clear(output: &ToolResultBody) -> bool {
     estimate_tool_result_tokens(output) > MIN_CLEAR_TOKENS
 }
 
-/// 是否已是占位符（幂等 sentinel）。
+/// Whether this is already the cleared placeholder (idempotent sentinel).
 fn already_cleared(output: &ToolResultBody) -> bool {
     matches!(output, ToolResultBody::Text { text } if text == CLEARED_PLACEHOLDER)
 }
 
-/// 单个 tool_result 的 token 估算——借一条只含它的临时消息复用 `estimate_message_tokens`，
-/// 与压缩判定 / 触发判定同一把尺子，不另立口径。
+/// Estimates tokens for a single `tool_result` by reusing `estimate_message_tokens` with
+/// a temporary message containing only that result, keeping the same metric as
+/// compression and trigger decisions without introducing a separate standard.
 fn estimate_tool_result_tokens(output: &ToolResultBody) -> u64 {
     let probe = Message {
         role: crate::llm::Role::User,

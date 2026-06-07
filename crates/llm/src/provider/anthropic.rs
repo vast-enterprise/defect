@@ -1,6 +1,6 @@
-//! Anthropic 官方 API provider。
+//! Anthropic official API provider.
 //!
-//! 对接 `https://api.anthropic.com/v1/messages`，bearer token + SSE。
+//! Connects to `https://api.anthropic.com/v1/messages` using bearer token + SSE.
 //!
 //! Anthropic provider implementation — field mapping and request building.
 
@@ -37,13 +37,14 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 type Client = ApiClient<HttpStack>;
 
-/// Anthropic provider 配置。
+/// Anthropic provider configuration.
 ///
-/// `api_key` / `base_url` 可显式提供，否则从环境变量读取。
-/// `api_key_env` 用来覆盖默认的 `ANTHROPIC_API_KEY` 名——同款 endpoint
-/// 在 secret manager 里换名是常见需求（与 OpenAI 那侧形状一致，详见
-/// `OpenAiConfig::api_key_env`）。`http` 配置 transport 层（超时 / 重试 /
-/// 代理 / UA），默认见 [`HttpStackConfig::default`].
+/// `api_key` / `base_url` can be provided explicitly, otherwise they are read from
+/// environment variables.
+/// `api_key_env` overrides the default `ANTHROPIC_API_KEY` name — renaming the env var
+/// for the same endpoint is common when using a secret manager (mirrors the OpenAI side;
+/// see `OpenAiConfig::api_key_env`). `http` configures the transport layer (timeout /
+/// retry / proxy / user-agent); defaults are in [`HttpStackConfig::default`].
 #[derive(Debug, Default, Clone)]
 pub struct AnthropicConfig {
     pub api_key: Option<String>,
@@ -260,13 +261,13 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
-// ---------- header injection adapter ------------------------------------
+// Header injection adapter
 
-/// 给 op 装上 Anthropic 必需的 `anthropic-version` 头。
+/// Attach the required `anthropic-version` header to `op`.
 ///
-/// toac 没有 generic `with_header`——参考 [`toac::WithAccept`] 的写法
-/// 自起一个最小 wrapper。仅注入固定 header，不与 [`toac::WithAccept`]
-/// 互斥（两者都改 [`http::Request`] 的不同字段）。
+/// `toac` has no generic `with_header` — following the pattern of [`toac::WithAccept`],
+/// build a minimal wrapper. It only injects a fixed header and does not conflict with
+/// [`toac::WithAccept`] (both modify different fields of [`http::Request`]).
 fn with_anthropic_headers<Op>(op: Op) -> WithAnthropicHeaders<Op> {
     WithAnthropicHeaders { op }
 }
@@ -312,8 +313,8 @@ impl<Op> WithAnthropicHeaders<Op> {
 
 // ---------- response header helpers -------------------------------------
 
-/// 抽 Anthropic / OpenAI 通用的 request-id header。Anthropic 用
-/// `request-id`，HTTP/2 / curl 等也会出 `x-request-id`，两者都收。
+/// Extract the common `request-id` header used by both Anthropic and OpenAI. Anthropic
+/// uses `request-id`, while HTTP/2, curl, etc. may produce `x-request-id`; accept both.
 fn extract_request_id(headers: &http::HeaderMap) -> Option<String> {
     headers
         .get("request-id")
@@ -335,13 +336,14 @@ impl WithRequestIdOpt for ProviderError {
     }
 }
 
-// ---------- error mapping -----------------------------------------------
+// // ---------- error mapping -----------------------------------------------
 
-/// 把 [`CallError<HttpStackError>`] 翻成 [`ProviderError`]。
+/// Maps [`CallError<HttpStackError>`] to [`ProviderError`].
 ///
-/// 关键分支：[`HttpStackError::Timeout`] 单独翻成
-/// [`ProviderErrorKind::Timeout`] 并把 phase 透传给 turn-loop §7 做重试
-/// Decision — this was previously missing; see HTTP retry semantics.
+/// Key branch: [`HttpStackError::Timeout`] is mapped to
+/// [`ProviderErrorKind::Timeout`] and the `phase` is forwarded to the turn-loop §7 for
+/// retry
+/// decision — this was previously missing; see HTTP retry semantics.
 fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     match err {
         CallError::Encode(e) => ProviderError::new(ProviderErrorKind::BadRequest {
@@ -362,8 +364,9 @@ fn call_error_to_provider(err: CallError<HttpStackError>) -> ProviderError {
     }
 }
 
-/// 见 [`super::openai::call_error_to_provider`] 的对位说明。两份 provider
-/// 各持一份独立函数避免相互依赖；这里复用 openai 的 phase 映射函数。
+/// See the counterpart documentation in [`super::openai::call_error_to_provider`]. Each
+/// provider keeps its own independent function to avoid mutual dependency; this one
+/// reuses the phase mapping function from the OpenAI provider.
 fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
     match phase {
         defect_http::TimeoutPhase::Connect => TimeoutPhase::Connect,
@@ -375,7 +378,7 @@ fn map_timeout_phase(phase: defect_http::TimeoutPhase) -> TimeoutPhase {
     }
 }
 
-/// 把 wire `ErrorResponse` + HTTP status 翻成 [`ProviderError`]。
+/// Translate a wire `ErrorResponse` + HTTP status into a [`ProviderError`].
 ///
 /// Mapping table — see Anthropic provider design.
 fn error_response(status: u16, e: &wire::ErrorResponse) -> ProviderError {
@@ -432,8 +435,8 @@ fn contains_max_tokens(msg: &str) -> bool {
     lower.contains("max_tokens") || lower.contains("max tokens")
 }
 
-/// 从形如 `model: claude-foo` 这类错误信息里抠 model id。
-/// 抠不出就返回 None，调用方按 `"unknown"` 兜底。
+/// Extracts the model id from error messages like `model: claude-foo`.
+/// Returns `None` if extraction fails; callers should fall back to `"unknown"`.
 fn extract_model(msg: &str) -> Option<String> {
     let lower = msg.to_ascii_lowercase();
     let idx = lower.find("model")?;

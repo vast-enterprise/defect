@@ -1,13 +1,13 @@
-//! Turn 主循环。
+//! Turn main loop.
 //!
 //! Turn main loop — the "heart" of the agent. This file implements the state machine.
 //!
-//! 关键依赖：
-//! - [`History`]：消息历史的读写
-//! - [`ToolRegistry`]：工具查找
-//! - [`LlmProvider`]：LLM 调用
-//! - [`EventEmitter`]：事件发布（`Arc` 共享，使工具 task 也能 emit）
-//! - [`PermissionGate`]：权限请求等待
+//! Key dependencies:
+//! - [`History`]: read/write message history
+//! - [`ToolRegistry`]: tool lookup
+//! - [`LlmProvider`]: LLM invocation
+//! - [`EventEmitter`]: event emission (shared via `Arc` so tool tasks can also emit)
+//! - [`PermissionGate`]: wait for permission requests
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,7 +45,8 @@ mod sanitize;
 
 mod content;
 
-// 模块名与文件名不一致（llm_drive ← llm.rs），故必须显式 `#[path]`。
+// Module name differs from file name (`llm_drive` ← `llm.rs`), so an explicit `#[path]`
+// is required.
 #[path = "turn/llm.rs"]
 mod llm_drive;
 
@@ -60,15 +61,16 @@ use tools::{Approved, DecisionFlow, approved_tool_name, tool_results_message};
 
 pub(crate) use request_audit::RequestAuditTracker;
 
-/// LLM call cap strategy.
+/// Strategy for capping LLM calls.
 #[derive(Debug, Clone, Copy)]
 pub enum TurnRequestLimit {
-    /// 不设上限。
+    /// No upper limit.
     Unbounded,
-    /// 固定上限：到 N 即返回 [`AcpStopReason::MaxTurnRequests`]。
+    /// Fixed limit: returns [`AcpStopReason::MaxTurnRequests`] after N turns.
     Fixed(u32),
-    /// 自适应：每当本轮"有 tool_use 被批准执行"视为推进，
-    /// 上限自动 +1；否则按 [`Self::Fixed`] 终止。
+    /// Adaptive: each time a tool use is approved and executed in the current turn, that
+    /// counts as progress and the limit is automatically incremented by 1; otherwise,
+    /// termination follows [`Self::Fixed`].
     Adaptive {
         initial: u32,
         expand_on_progress: bool,
@@ -95,11 +97,12 @@ impl TurnRequestLimit {
     }
 }
 
-/// Turn configuration.
+/// Configuration for a turn.
 #[derive(Debug, Clone)]
 pub struct TurnConfig {
-    /// 选中的 provider vendor（选择键的 provider 半边）。与 [`Self::model`] 一起
-    /// 在 registry 上按 `(vendor, model)` 对解析出真实 provider entry。
+    /// The selected provider vendor (the provider half of the selection key). Together
+    /// with [`Self::model`], this is used to resolve the actual provider entry in the
+    /// registry by the `(vendor, model)` pair.
     pub provider: String,
     pub model: String,
     pub allowed_models: Option<Vec<String>>,
@@ -108,42 +111,54 @@ pub struct TurnConfig {
     pub prompt: PromptConfig,
     pub sampling: SamplingParams,
     pub request_limit: TurnRequestLimit,
-    /// 压缩阈值的**绝对值显式覆盖**（token 数）。`Some` 时优先于
-    /// [`Self::compact_ratio`] 推算。`None` 则按 ratio 自动推算。
+    /// Explicit absolute override for the compaction threshold (in tokens). When `Some`,
+    /// takes precedence over the value inferred from [`Self::compact_ratio`]. When
+    /// `None`, the threshold is automatically derived from the ratio.
     pub compact_threshold_tokens: Option<u64>,
-    /// 压缩阈值占模型 `context_window` 的比例（如 `0.85` = 用量过 85% 触发）。
-    /// 这是 **hard 水位**：到这一档若无后台压缩在飞，turn 主循环**同步**压缩兜底
-    /// （阻塞本轮，但保证不超上下文）。`None` = 不按比例自动压缩（且无绝对值时
-    /// 本 turn 完全不压缩）。仅在 `compact_threshold_tokens` 为 `None` 且模型公开
-    /// `context_window` 时生效。详见 `session/turn/compact.rs`。
+    /// Compression threshold as a fraction of the model's `context_window` (e.g. `0.85` =
+    /// trigger when usage exceeds 85%). This is the **hard watermark**: when reached, if
+    /// no background compaction is in flight, the turn main loop performs **synchronous**
+    /// compaction as a fallback (blocking the current turn but guaranteeing the context
+    /// is not exceeded). `None` = no automatic ratio-based compression (and if no
+    /// absolute threshold is set either, no compression occurs for this turn). Only
+    /// effective when `compact_threshold_tokens` is `None` and the model exposes a
+    /// `context_window`. See `session/turn/compact.rs` for details.
     pub compact_ratio: Option<f64>,
-    /// **后台全量压缩**开关。`true` 时一旦越过 [`Self::compact_soft_ratio`] 推出的
-    /// soft 水位，就**异步**起一次摘要压缩（不阻塞本轮）；趁还没撞 hard 水位悄悄把
-    /// 历史压下去。关闭时只保留 hard 水位的同步压缩。详见
-    /// `session/turn/compaction_slot.rs`。
+    /// **Background full compaction** toggle. When `true`, once the soft watermark
+    /// derived from [`Self::compact_soft_ratio`] is exceeded, a summarization compaction
+    /// is started **asynchronously** (without blocking the current turn); it quietly
+    /// compresses history before the hard watermark is hit. When disabled, only
+    /// synchronous compaction at the hard watermark remains. See
+    /// `session/turn/compaction_slot.rs`.
     pub background_compact_enabled: bool,
-    /// 后台压缩的 **soft 水位**占 `context_window` 的比例（默认 `0.7`）。须 `<`
-    /// `compact_ratio`（hard）才有意义——留出 soft→hard 之间的窗口给后台摘要跑完。
-    /// 仅在 `background_compact_enabled` 且能推出阈值时生效。
+    /// Soft watermark for background compaction, as a fraction of `context_window`
+    /// (default `0.7`). Must be less than `compact_ratio` (the hard watermark) to leave a
+    /// window between soft and hard for background summarization to complete. Only
+    /// effective when `background_compact_enabled` is set and a threshold can be derived.
     pub compact_soft_ratio: Option<f64>,
-    /// **微压缩**开关。`true` 时每轮在最低水位 [`Self::microcompact_ratio`] 之上先做
-    /// 一次微压缩（清理较旧轮次里的超大 tool_result，不调 LLM、不删消息），把昂贵的
-    /// 全量压缩推后。详见 `session/turn/microcompact.rs`。
+    /// Enables **micro‑compaction**. When `true`, each turn first runs a micro‑compaction
+    /// (cleans oversized `tool_result` in older turns, without calling the LLM or
+    /// deleting messages) at the water level above [`Self::microcompact_ratio`],
+    /// deferring expensive full compaction. See `session/turn/microcompact.rs`.
     pub microcompact_enabled: bool,
-    /// 微压缩的水位占 `context_window` 的比例（默认 `0.6`）。通常 `<` soft 水位——
-    /// 微压缩是最便宜的第一道防线。仅在 `microcompact_enabled` 且能推出阈值时生效。
+    /// Micro‑compaction watermark as a fraction of `context_window` (default `0.6`).
+    /// Typically below the soft watermark — micro‑compaction is the cheapest first line
+    /// of defense. Only effective when `microcompact_enabled` and a threshold can be
+    /// derived.
     pub microcompact_ratio: Option<f64>,
     pub max_llm_retries: u32,
-    /// `0` = 不限。v0 默认不限。
+    /// `0` = unlimited. v0 default is unlimited.
     pub max_concurrent_tools: usize,
-    /// `before turn-end` hook 强制续命的硬上限——防止 hook 一直 `Continue` 把 turn
-    /// Prevents infinite loops from repeated hook continues. Default: 3.
+    /// Hard upper limit on forced continuations from the `before turn-end` hook —
+    /// prevents infinite loops from repeated hook `Continue` calls. Default: 3.
     pub max_hook_continues: u32,
-    /// 本 turn 起还能派发多少层 subagent（纵向递归深度上限）。`spawn_agent` 据它经
-    /// [`crate::tool::ToolContext::subagent_depth`] 把"剩余深度"传给工具；子 agent
-    /// 嵌套 turn 的 `subagent_max_depth` = 父注入的剩余深度减一。`0` ⇒ 本 turn 的
-    /// 工具集不含 `spawn_agent`，结构性禁止派发——取代旧的"白名单永不含 spawn_agent"
-    /// 硬编码闸门。默认 `DEFAULT_SUBAGENT_MAX_DEPTH`。
+    /// Maximum subagent nesting depth (vertical recursion limit) for this turn.
+    /// `spawn_agent` uses this to pass the "remaining depth" to tools via
+    /// [`crate::tool::ToolContext::subagent_depth`]; a child agent's nested turn receives
+    /// `subagent_max_depth` = parent's remaining depth minus one. `0` means this turn's
+    /// tool set contains no `spawn_agent`, structurally forbidding dispatch — replacing
+    /// the old hardcoded gate of "whitelist never contains `spawn_agent`". Default:
+    /// `DEFAULT_SUBAGENT_MAX_DEPTH`.
     pub subagent_max_depth: u32,
 }
 
@@ -162,13 +177,16 @@ impl Default for TurnConfig {
                 expand_on_progress: true,
             },
             compact_threshold_tokens: None,
-            // 默认按 context_window 的 85% 触发（hard 水位）——留 ~15% 给摘要输出与
-            // 浮动，落在 codex(90%)/Claude(~93%)/opencode(window-20k) 的合理区间内。
+            // Trigger compaction at 85% of `context_window` (hard watermark), reserving
+            // ~15% for summary output and headroom — within the reasonable range of codex
+            // (90%), Claude (~93%), and opencode (window-20k).
             compact_ratio: Some(0.85),
-            // 后台压缩默认开：soft=0.7 起异步摘要，赶在 hard=0.85 之前压完。
+            // Background compaction enabled by default: starts async summarization at
+            // soft=0.7, aiming to finish before hard=0.85 is reached.
             background_compact_enabled: true,
             compact_soft_ratio: Some(0.7),
-            // 微压缩默认开：0.6 起清旧的大 tool_result，最便宜的第一道防线。
+            // Micro‑compaction enabled by default: at 0.6 it evicts old large
+            // `tool_result`s — the cheapest first line of defense.
             microcompact_enabled: true,
             microcompact_ratio: Some(0.6),
             max_llm_retries: 3,
@@ -203,78 +221,96 @@ impl Default for PromptConfig {
         }
     }
 }
-/// turn 一次执行的全部依赖与累计状态。
+/// All dependencies and accumulated state for a single turn execution.
 ///
-/// 本 struct 由 [`crate::session::DefaultSession`] 在每次 `run_turn` 时构造，
-/// 借用 session 的子组件、跑完即销毁。
+/// This struct is constructed by [`crate::session::DefaultSession`] on each `run_turn`
+/// call,
+/// borrowing sub-components of the session and being dropped after the turn completes.
 pub struct TurnRunner<'a> {
     pub history: &'a dyn History,
     pub tools: &'a dyn ToolRegistry,
     pub provider: &'a dyn LlmProvider,
-    /// 本轮快照的 active policy。owned `Arc` 而非借用：它要随
-    /// [`crate::tool::ToolContext`] 流给 `spawn_agent`，子 agent 用
-    /// [`NonInteractivePolicy`](crate::policy::NonInteractivePolicy) 包它——必须是父此刻的真实策略。
+    /// The active policy for this turn's snapshot. Owned as an `Arc` rather than
+    /// borrowed: it flows with [`crate::tool::ToolContext`] into `spawn_agent`, where
+    /// child agents wrap it with
+    /// [`NonInteractivePolicy`](crate::policy::NonInteractivePolicy) — must be the
+    /// parent's actual policy at this moment.
     pub policy: Arc<dyn SandboxPolicy>,
     pub events: Arc<EventEmitter>,
     pub permissions: &'a PermissionGate,
     pub cancel: CancellationToken,
     pub config: &'a TurnConfig,
-    /// 本 turn 解析定型的 system prompt。`Arc<str>`：每次 `build_request` 都
-    /// `clone` 进 `CompletionRequest.system`，Arc 让其退化成引用计数。
+    /// The system prompt resolved for this turn. `Arc<str>`: each `build_request` call
+    /// `clone`s it into `CompletionRequest.system`; the `Arc` reduces this to a reference
+    /// count increment.
     pub system_prompt: Option<Arc<str>>,
     pub cwd: &'a std::path::Path,
     pub fs: Arc<dyn FsBackend>,
     pub shell: Arc<dyn ShellBackend>,
     pub http: Arc<dyn HttpClient>,
-    /// session 启动期裁决出的 hosted capability 集合。
-    /// 每轮 turn 装配请求时直接复用，不再重新查询。
+    /// Hosted capabilities determined at session startup.
+    /// Reused directly on each turn when assembling requests, without re-querying.
     pub hosted_capabilities: HostedCapabilities,
-    /// Hook 引擎。turn 主循环在 4 个时刻 emit Sync 事件
-    /// （`UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`）
+    /// Hook engine. The turn main loop emits Sync events at four points
+    /// (`UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure`).
     /// Waits for hooks to finish before proceeding.
     pub hooks: &'a dyn HookEngine,
-    /// 当前 session id。`HookCtx` 注入用——hook handler 按 session 维度路由 / 审计。
+    /// Current session ID. Injected into `HookCtx` so that hook handlers can route or
+    /// audit by session.
     pub session_id: &'a SessionId,
-    /// session 级后台任务句柄。`Some` 时工具的 `run_in_background` 能力开启
-    /// （经 [`crate::tool::ToolContext::background`] 注入给工具）；嵌套子 agent
-    /// turn receives `None`, structurally preventing background task self-replication.
+    /// Session-level background task handle. When `Some`, enables the tool's
+    /// `run_in_background` capability (injected into tools via
+    /// [`crate::tool::ToolContext::background`]); nested sub-agent turns receive `None`,
+    /// structurally preventing background task self-replication.
     pub background: Option<crate::session::BackgroundTasks>,
-    /// `--goal` 目标驱动循环的共享状态。`Some` 时本 session 跑在目标模式下：经
-    /// [`crate::tool::ToolContext::goal`] 注入给 `goal_done` 工具，`goal-gate` hook
-    /// 在 `before_turn_end` 据它放行 / 续命。`None` = 非目标模式（默认）。
+    /// Shared state for the `--goal` goal-driven loop. When `Some`, this session is
+    /// running in goal mode: it is injected into the `goal_done` tool via
+    /// [`crate::tool::ToolContext::goal`], and the `goal-gate` hook uses it in
+    /// `before_turn_end` to allow or extend the session. `None` = non-goal mode
+    /// (default).
     pub goal: Option<Arc<crate::session::GoalState>>,
-    /// session 级后台压缩槽（single-flight）。`Some` 时后台全量压缩可用——越 soft
-    /// 水位即异步起一次摘要压缩，不阻塞本轮。嵌套子 agent turn 传 `None`（子 agent
-    /// 上下文短、且不应自繁衍后台任务）。需要 `Arc<dyn History>`/`Arc<dyn LlmProvider>`
-    /// 才能让任务跨 turn `'static` 持有，故同时要求 `history_arc`/`provider_arc`。
+    /// Session-level single-flight compaction slot. When `Some`, background full
+    /// compaction is available — exceeding the soft watermark triggers an async summary
+    /// compaction without blocking the current turn. Nested sub-agent turns pass `None`
+    /// (sub-agent contexts are short-lived and should not spawn background tasks).
+    /// Requires `Arc<dyn History>`/`Arc<dyn LlmProvider>` for the task to hold `'static`
+    /// references across turns, hence the accompanying `history_arc`/`provider_arc`.
     pub compaction_slot: Option<crate::session::CompactionSlot>,
-    /// `compaction_slot` 用的 history `Arc`（与 `history` 借用指向同一对象）。后台
-    /// 压缩任务持它跨 turn。`None` 时后台压缩不可用，降级为仅同步压缩。
+    /// `Arc<dyn History>` for `compaction_slot` (points to the same object as the
+    /// `history` borrow). Held by the background compaction task across turns. When
+    /// `None`, background compaction is unavailable and falls back to synchronous
+    /// compaction only.
     pub history_arc: Option<Arc<dyn History>>,
-    /// `compaction_slot` 用的 provider `Arc`。同上。
+    /// `Arc` for the provider used by `compaction_slot`. Same as above.
     pub provider_arc: Option<Arc<dyn LlmProvider>>,
-    /// session 级取消令牌——后台压缩任务的取消令牌从它派生（独立于 turn cancel，
-    /// 随 session 终结而取消）。`None` 时后台压缩用 turn 的 `cancel`（子 agent 路径）。
+    /// Session-level cancellation token; the background compaction task's cancellation
+    /// token is derived from this one (independent of the turn's cancel, cancelled when
+    /// the session ends). When `None`, background compaction uses the turn's `cancel`
+    /// (sub-agent path).
     pub session_cancel: Option<CancellationToken>,
-    /// 本 turn 输入的摄入来源——决定 `before_ingest` step 信封的 `source` 字段。
-    /// 用户 turn = `User`；session driver 起的后台续转 turn = `Background`（§5.1）。
+    /// The ingestion source for this turn's input — determines the `source` field of the
+    /// `before_ingest` step envelope.
+    /// User turns use `User`; background continuation turns started by the session driver
+    /// use `Background` (§5.1).
     pub ingest_source: crate::hooks::step::IngestSource,
-    /// 请求稳定性诊断：对比相邻两次实际发给 provider 的请求快照，
-    /// 帮助定位 prompt cache 低命中率的高波动来源。
+    /// Request stability diagnostics: compares snapshots of two consecutive requests
+    /// actually sent to the provider, helping locate sources of high volatility in low
+    /// prompt cache hit rates.
     pub(crate) request_audit: &'a RequestAuditTracker,
 }
 
 impl<'a> TurnRunner<'a> {
-    /// 跑完一次 turn。
+    /// Runs a single turn.
     pub async fn run(&self, prompt: Vec<ContentBlock>) -> Result<AcpStopReason, TurnError> {
-        // ① UserPromptSubmit hook（Sync 拦截）
-        // 在 prompt 落 history 之前给 hook 改写 / 拦截的机会。详见
-        // Give hooks a chance to rewrite / intercept the prompt before it lands in history.
+        // ① UserPromptSubmit hook (sync interception)
+        // Gives hooks a chance to rewrite or intercept the prompt before it lands in
+        // history.
         let prompt = match self.fire_user_prompt_submit(prompt).await {
             UserPromptHookFlow::Continue(p) => p,
             UserPromptHookFlow::Refused => {
-                // hook block：不 emit UserPromptCommitted，不进 history；
-                // 直接返回 Refusal，让 ACP 桥接以此回 PromptResponse。
+                // Hook blocked: do not emit `UserPromptCommitted`, do not append to
+                // history; return `Refusal` directly so the ACP bridge responds with
+                // `PromptResponse`.
                 return Ok(AcpStopReason::Refusal);
             }
         };
@@ -295,7 +331,7 @@ impl<'a> TurnRunner<'a> {
                 .collect(),
         });
 
-        // after Ingest hook：输入已并入 history。仅可注入。
+        // After Ingest hook: input has been merged into history. Injection only.
         {
             let mut step = crate::hooks::step::AfterIngest {
                 committed_len: 1,
@@ -309,8 +345,10 @@ impl<'a> TurnRunner<'a> {
 
         self.events.emit(AgentEvent::TurnStarted).await;
 
-        // after turn enter hook：turn 作用域已进入。可注入 system context / Break 拒该 turn。
-        // 注：现状埋点在 prompt 摄入之后（设计 §6 标注的"落地调整：埋点前移"待后续）。
+        // After-turn-enter hook: the turn scope has been entered. Allows injecting system
+        // context or a Break to reject the turn.
+        // Note: currently the hook point is placed after prompt ingestion (design §6
+        // marks this as "deferred adjustment: move hook point earlier").
         {
             let mut step = crate::hooks::step::AfterTurnEnter {
                 is_subagent: false,
@@ -336,7 +374,8 @@ impl<'a> TurnRunner<'a> {
                 })
                 .await;
         }
-        // Err 路径不发 TurnEnded：桥接层据 future outcome 自行决定 wire 响应。
+        // The `Err` path does not emit `TurnEnded`; the bridge layer decides the wire
+        // response based on the future outcome.
 
         result.map(|outcome| outcome.reason)
     }
@@ -352,7 +391,8 @@ impl<'a> TurnRunner<'a> {
 
             let mut req = self.build_request();
 
-            // before Generate hook：可改 request（model）/ short-circuit（填合成 assistant，跳过 LLM）/ Break。
+            // Before Generate hook: can modify request (model), short-circuit (fill in
+            // synthetic assistant to skip LLM), or Break.
             let mut before_gen = crate::hooks::step::BeforeGenerate {
                 model: req.model.clone(),
                 message_count: req.messages.len(),
@@ -362,7 +402,8 @@ impl<'a> TurnRunner<'a> {
             let bg_control = self.hooks.dispatch(&mut before_gen, self.hook_ctx()).await;
             req.model = before_gen.model;
             if let Some(text) = before_gen.assistant_text {
-                // short-circuit：用合成 assistant 回复跳过真实 LLM 调用，然后走 before-turn-end 判定。
+                // Short-circuit: use a synthetic assistant reply to skip the real LLM
+                // call, then proceed to the before-turn-end check.
                 self.history.append(Message {
                     role: Role::Assistant,
                     content: vec![MessageContent::Text { text }].into(),
@@ -384,8 +425,9 @@ impl<'a> TurnRunner<'a> {
                 return Ok(turn_outcome(&state, AcpStopReason::Cancelled));
             }
 
-            // 流已 drain，本次调用的 usage 到齐——现在发 LlmCallFinished，带**单次**
-            // 调用的真 usage（outcome.usage，非 turn 累计 state.usage）。
+            // The stream has been drained and all usage for this call is available — emit
+            // `LlmCallFinished` with the **per-call** actual usage (`outcome.usage`, not
+            // the turn-accumulated `state.usage`).
             self.events
                 .emit(AgentEvent::LlmCallFinished {
                     model: req.model.clone(),
@@ -395,7 +437,8 @@ impl<'a> TurnRunner<'a> {
                 })
                 .await;
 
-            // after Generate hook：观察（usage / stop / error）。无可填产出；要干预下一轮走 before-turn-end。
+            // After the Generate hook: observe (usage / stop / error). No output to fill;
+            // to intervene, route the next turn through before-turn-end.
             let stop_reason_for_hook = match outcome.stop {
                 LlmStopReason::EndTurn | LlmStopReason::StopSequence => AcpStopReason::EndTurn,
                 LlmStopReason::Refusal => AcpStopReason::Refusal,
@@ -410,9 +453,11 @@ impl<'a> TurnRunner<'a> {
             };
             let _ = self.hooks.dispatch(&mut after_gen, self.hook_ctx()).await;
 
-            // 把本次调用回报的真实输入 token 喂给 history，作为压缩阈值判断的
-            // 精确基线（详见 `session/turn/compact.rs`）。本次发出的 messages 即
-            // req.messages，其真实输入量就是 outcome.usage 的输入侧三项之和。
+            // Feed the actual input token count returned by this call into `history` as
+            // the precise baseline for compaction threshold decisions (see
+            // `session/turn/compact.rs`). The messages sent in this call are
+            // `req.messages`, and their real input size is the sum of the three
+            // input-side fields in `outcome.usage`.
             if let Some(real_input) = real_input_tokens(&outcome.usage) {
                 self.history.record_input_tokens(real_input);
             }
@@ -422,11 +467,11 @@ impl<'a> TurnRunner<'a> {
                 self.history.append(assistant);
             }
 
-            // 被动停止（Refusal / MaxTokens）：不经 before-turn-end hook（hook 不能续命这些），
-            // Exit directly.
+            // Passive stop (Refusal / MaxTokens): skip the before-turn-end hook (the hook
+            // cannot extend these), exit directly.
             match outcome.stop {
                 LlmStopReason::EndTurn | LlmStopReason::StopSequence => {
-                    // 自愿停止 → before-turn-end 判定点。
+                    // Voluntary stop → before-turn-end decision point.
                     if self.decide_turn_end(&mut state).await {
                         continue;
                     }
@@ -442,14 +487,16 @@ impl<'a> TurnRunner<'a> {
             }
 
             if outcome.tool_uses.is_empty() {
-                // 自愿停止（没要工具）→ 同一个 before-turn-end 判定点。
+                // Voluntary stop (no tool requested) → same before-turn-end decision
+                // point.
                 if self.decide_turn_end(&mut state).await {
                     continue;
                 }
                 return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
             }
 
-            // before Permission hook（v0 仅 observe 打桩；policy 仍是放行权威，见 hooks.md §7.3）。
+            // Before the Permission hook (v0 only observes/stubs; policy still delegates
+            // to the authority, see hooks.md §7.3).
             for tu in &outcome.tool_uses {
                 let mut bp = crate::hooks::step::BeforePermission {
                     tool: tu.name.clone(),
@@ -466,7 +513,7 @@ impl<'a> TurnRunner<'a> {
                 }
             };
 
-            // after Permission hook（v0 仅 observe 打桩）。
+            // After permission hook (v0 only observes/stubs).
             for a in &approved {
                 let (tool, granted) = match a {
                     Approved::Run { .. } => (approved_tool_name(a), true),
@@ -485,7 +532,8 @@ impl<'a> TurnRunner<'a> {
 
             let results = self.run_tools_concurrently(approved).await;
 
-            // after ToolBatch hook：整批并行工具结束后、下次 LLM 调用前。可注入 / Break（graceful）。
+            // After `ToolBatch` hook: after all parallel tools finish, before the next
+            // LLM call. Allows injection or graceful break.
             let mut batch = crate::hooks::step::AfterToolBatch {
                 results: results
                     .iter()
@@ -513,8 +561,10 @@ impl<'a> TurnRunner<'a> {
     }
 
     fn build_request(&self) -> CompletionRequest {
-        // 发请求前补全孤儿 tool_use（中断留下的、无对应 tool_result 的 tool_use）——
-        // 否则被 provider 永久拒。只补给 provider 的这一份，history 真相不动。见 `sanitize`。
+        // Before sending the request, pair any orphaned `tool_use` (left over from an
+        // interruption, with no matching `tool_result`) — otherwise the provider will
+        // permanently reject the request. Only patch the copy sent to the provider; the
+        // true history remains untouched. See `sanitize`.
         let messages = sanitize::sanitize_tool_pairing(self.history.snapshot());
         let req = CompletionRequest {
             model: self.config.model.clone(),
@@ -529,21 +579,30 @@ impl<'a> TurnRunner<'a> {
         req
     }
 
-    /// 分层上下文管理：micro → soft（后台）→ hard（同步兜底）。每轮主循环开头调用。
+    /// Layered context management: micro → soft (background) → hard (synchronous
+    /// fallback). Called at the start of each main loop iteration.
     ///
-    /// 三档水位（详见 `compact_thresholds`）：
-    /// 1. **micro**（默认 0.6·window）：开启微压缩则先清旧的大 tool_result——不调
-    ///    LLM、不删消息、几乎零延迟，把昂贵的全量压缩推后。
-    /// 2. **soft**（默认 0.7·window）：开启后台压缩则**异步**起一次摘要压缩，turn
-    ///    不阻塞，趁还没撞 hard 悄悄压下去（single-flight，已有在飞则不重复起）。
-    /// 3. **hard**（默认 0.85·window，= 旧 `compact_ratio` 语义）：到这一档必须把
-    ///    历史压下去——已有后台压缩在飞则 `await` 它落地；否则**同步**压缩兜底。
+    /// Three water levels (see `compact_thresholds` for details):
+    /// 1. **micro** (default 0.6·window): if micro-compaction is enabled, first evict old
+    ///    large `tool_result` entries — no LLM calls, no message deletion, near-zero
+    ///    latency, deferring expensive full compaction.
+    /// 2. **soft** (default 0.7·window): if background compaction is enabled,
+    ///    **asynchronously** start a summary compaction; the turn does not block, quietly
+    ///    compacting before hitting hard (single-flight, won't re-start if one is already
+    ///    in flight).
+    /// 3. **hard** (default 0.85·window, equivalent to the old `compact_ratio`
+    ///    semantics): at this level compaction is mandatory — if a background compaction
+    ///    is already in flight, `await` its completion; otherwise compact
+    ///    **synchronously** as a fallback.
     ///
-    /// micro/soft 需要模型公开 `context_window`；hard 还支持 `compact_threshold_tokens`
-    /// 绝对值覆盖。任何一档拿不到阈值即跳过该档（保持「无信息不压」的保守语义）。
+    /// micro/soft require the model to expose `context_window`; hard also supports an
+    /// absolute override via `compact_threshold_tokens`. If any level cannot obtain its
+    /// threshold, that level is skipped (preserving the conservative "no information, no
+    /// compaction" semantics).
     async fn manage_context(&self) -> Result<(), TurnError> {
         let thresholds = self.compact_thresholds();
-        // 三档全无 → 本 turn 完全不主动压缩（保持 v0 语义）。
+        // All three thresholds absent → no proactive compaction this turn (preserves v0
+        // semantics).
         if thresholds.is_empty() {
             return Ok(());
         }
@@ -551,7 +610,8 @@ impl<'a> TurnRunner<'a> {
             return Ok(());
         };
 
-        // ① micro：同步、最便宜。可能把 estimate 削到 soft/hard 之下，故压完重取。
+        // ① micro: synchronous, cheapest. May reduce `estimate` below soft/hard
+        // thresholds, so re-fetch after compaction.
         let estimate = if self.config.microcompact_enabled
             && thresholds.micro.is_some_and(|t| estimate >= t)
         {
@@ -561,18 +621,20 @@ impl<'a> TurnRunner<'a> {
             estimate
         };
 
-        // ② soft：越线即异步起后台压缩，不阻塞本轮。
+        // ② soft: crossing the threshold triggers an async background compaction without
+        // blocking the current round.
         if self.config.background_compact_enabled
             && let (Some(soft), Some(hard)) = (thresholds.soft, thresholds.hard)
             && estimate >= soft
             && estimate < hard
         {
             self.spawn_background_compaction(hard).await;
-            // 不阻塞——本轮继续装配请求；摘要落地是下一轮（或更晚）的事。
+            // Non-blocking – continue assembling requests this round; summary persistence
+            // happens in a later round (or later).
             return Ok(());
         }
 
-        // ③ hard：必须压下去。
+        // ③ hard: must compact.
         if let Some(hard) = thresholds.hard
             && estimate >= hard
         {
@@ -581,7 +643,8 @@ impl<'a> TurnRunner<'a> {
         Ok(())
     }
 
-    /// 跑一次微压缩并回写（`replace`）。最佳努力：无可清理项就什么都不做。
+    /// Run a micro-compact and write back via `replace`. Best-effort: does nothing if
+    /// there is nothing to clean up.
     async fn run_microcompact(&self) {
         let messages = self.history.snapshot();
         let Some((rebuilt, report)) = microcompact::run(&messages) else {
@@ -603,9 +666,10 @@ impl<'a> TurnRunner<'a> {
             .await;
     }
 
-    /// 越 soft 水位时异步起一次后台全量压缩（single-flight）。需要 slot 与
-    /// history/provider 的 `Arc`（顶层 turn 才有；子 agent turn 无 → 静默跳过，
-    /// 留给 hard 水位的同步压缩兜底）。
+    /// Spawns a single-flight background full compaction when the soft threshold is
+    /// exceeded. Requires a slot and `Arc` references to history and provider (only
+    /// available in the top-level turn; child agent turns silently skip this, leaving it
+    /// to the synchronous compaction at the hard threshold).
     async fn spawn_background_compaction(&self, hard_threshold: u64) {
         let (Some(slot), Some(history_arc), Some(provider_arc)) = (
             self.compaction_slot.as_ref(),
@@ -615,11 +679,13 @@ impl<'a> TurnRunner<'a> {
             return;
         };
         if slot.is_in_flight() {
-            return; // single-flight：已有一个在压，不重复起。
+            return; // Single-flight: a compaction is already in flight, do not start another.
         }
 
-        // 后台压缩的取消令牌独立于 turn cancel——摘要应能跑完即便发起它的 turn 已结束；
-        // 但随 session 终结而取消。子 agent 路径无 session_cancel，退回 turn cancel。
+        // The compaction cancel token is independent of the turn cancel — the summary
+        // should be allowed to finish even if the originating turn has ended; however, it
+        // is cancelled when the session ends. For sub-agent paths that have no
+        // `session_cancel`, it falls back to the turn cancel.
         let cancel = self
             .session_cancel
             .clone()
@@ -638,8 +704,9 @@ impl<'a> TurnRunner<'a> {
                 + Send
                 + Sync,
         > = Arc::new(move |report| {
-            // 返回 future 让 emit 在压缩任务体内 await——不另起游离任务，事件发送受
-            // 压缩任务的 cancel/track 约束。
+            // Return a future so that `emit` is awaited inside the compaction task body —
+            // no detached task is spawned, and event emission is governed by the
+            // compaction task's cancel/track semantics.
             let events = events.clone();
             Box::pin(async move {
                 events
@@ -656,9 +723,11 @@ impl<'a> TurnRunner<'a> {
         }
     }
 
-    /// hard 水位兜底：已有后台压缩在飞则等它落地；否则同步压缩。
+    /// Hard threshold fallback: wait for an in-flight background compaction to finish, or
+    /// run a synchronous compaction.
     async fn compact_hard(&self, estimate: u64, hard: u64) -> Result<(), TurnError> {
-        // 后台已在飞 → 等它落地，省一次重复摘要。
+        // A background compaction is already in flight; wait for it to finish to avoid
+        // redundant work.
         if let Some(slot) = self.compaction_slot.as_ref()
             && slot.is_in_flight()
         {
@@ -666,7 +735,8 @@ impl<'a> TurnRunner<'a> {
             return Ok(());
         }
 
-        // before Compact hook：hook 可 `Skip` 否决本次压缩（变更型 step）。
+        // Before the compact hook: the hook may `Skip` to veto this compaction (a
+        // mutating step).
         let mut before = crate::hooks::step::BeforeCompact {
             token_estimate: estimate,
             threshold: hard,
@@ -680,7 +750,8 @@ impl<'a> TurnRunner<'a> {
 
         let ctx = self.sync_compaction_ctx();
         let Some(report) = compact::run_sync(self.history, &ctx, hard).await else {
-            // 没有安全的压缩边界（如单个超长轮次）——本次跳过，不发事件。
+            // No safe compaction boundary (e.g., a single very long turn) — skip this
+            // round, no event emitted.
             return Ok(());
         };
         self.events
@@ -690,7 +761,8 @@ impl<'a> TurnRunner<'a> {
             })
             .await;
 
-        // after Compact hook：观察 + 可注入（注入物落 history）。
+        // After the compact hook: observe and allow injection (injected content goes into
+        // history).
         let mut after = crate::hooks::step::AfterCompact {
             tokens_before: report.tokens_before,
             tokens_after: report.tokens_after,
@@ -703,9 +775,11 @@ impl<'a> TurnRunner<'a> {
         Ok(())
     }
 
-    /// 同步压缩用的 [`compact::CompactionCtx`]——provider 走借用包成的临时 `Arc` 不
-    /// 现实（trait object 借用无法 `Arc`），故同步路径要求 `provider_arc`；缺它时退回
-    /// 不可能（顶层总有，子 agent 走 `provider` 借用——见 `sync_compaction_ctx` 实现）。
+    /// The [`compact::CompactionCtx`] for synchronous compaction. Wrapping a borrowed
+    /// provider in a temporary `Arc` is not feasible (a trait object borrow cannot be
+    /// `Arc`), so the synchronous path requires `provider_arc`. Falling back when it is
+    /// missing is impossible (the top-level always has one; child agents use a borrowed
+    /// `provider`—see the `sync_compaction_ctx` implementation).
     fn sync_compaction_ctx(&self) -> compact::CompactionCtx {
         compact::CompactionCtx {
             provider: self
@@ -719,19 +793,22 @@ impl<'a> TurnRunner<'a> {
         }
     }
 
-    /// 解析本 turn 的三档压缩阈值（token 数）。任意一档为 `None` 表示该档不触发。
+    /// Parse the three-tier compaction thresholds (in tokens) for this turn. Any tier set
+    /// to `None` means that tier is not triggered.
     fn compact_thresholds(&self) -> CompactThresholds {
         let window = self
             .provider
             .model_info(&self.config.model)
             .and_then(|m| m.context_window);
 
-        // hard：绝对值覆盖优先，否则 ratio·window。
+        // For `hard`, an absolute threshold takes precedence; otherwise, use `ratio *
+        // window`.
         let hard = self.config.compact_threshold_tokens.or_else(|| {
             let ratio = self.config.compact_ratio?;
             ratio_threshold(window?, ratio)
         });
-        // micro/soft 只能从 window 推（绝对值覆盖只作用于 hard）。
+        // micro/soft can only be derived from window (absolute overrides apply only to
+        // hard).
         let from_ratio =
             |ratio: Option<f64>| ratio.and_then(|r| window.and_then(|w| ratio_threshold(w, r)));
         CompactThresholds {
@@ -754,7 +831,8 @@ struct TurnOutcome {
     usage: Usage,
 }
 
-/// 三档压缩水位（token 数）。每档 `None` = 该档本 turn 不触发。
+/// Three-tier compaction watermarks (in tokens). Each `None` means that tier is not
+/// triggered this turn.
 #[derive(Clone, Copy)]
 struct CompactThresholds {
     micro: Option<u64>,
@@ -763,27 +841,30 @@ struct CompactThresholds {
 }
 
 impl CompactThresholds {
-    /// 三档全无——本 turn 完全不主动压缩。
+    /// All three thresholds absent — no proactive compaction this turn.
     fn is_empty(&self) -> bool {
         self.micro.is_none() && self.soft.is_none() && self.hard.is_none()
     }
 }
 
-/// `context_window * ratio` 向下取整。`ratio` 落在 `(0, 1]`。`0` → `None`（不触发）。
+/// `context_window * ratio` rounded down. `ratio` is in `(0, 1]`. `0` → `None` (no
+/// trigger).
 fn ratio_threshold(context_window: u64, ratio: f64) -> Option<u64> {
     let threshold = (context_window as f64 * ratio).floor() as u64;
     (threshold > 0).then_some(threshold)
 }
 
-/// `before turn-end` hook 强制续命次数的**默认**上限。可被
-/// [`TurnConfig::max_hook_continues`] 覆盖（配置项 `[turn].max_hook_continues`）。
-/// See docs on hook step context exit semantics.
+/// Default upper limit for forced continuations in the `before turn-end` hook. Can be
+/// overridden by [`TurnConfig::max_hook_continues`] (config key
+/// `[turn].max_hook_continues`). See docs on hook step context exit semantics.
 pub(crate) const DEFAULT_MAX_HOOK_CONTINUES: u32 = 3;
 
-/// subagent 纵向递归深度默认上限。顶层 turn 起算：N 层 ⇒ 顶层可派发 subagent，
-/// 其子可再派发……直到第 N 层（`subagent_max_depth` 减到 0）不再获得 `spawn_agent`。
-/// 默认 4 给"主 agent → 协调子 agent → 工作子 agent"这类编排留足空间，又能防纵向
-/// 失控。横向失控另由 `request_limit` 防住。
+/// Default upper bound for subagent vertical recursion depth. Counted from the top-level
+/// turn: N levels means the top turn can spawn subagents, their children can spawn
+/// further, and so on, until the Nth level (where `subagent_max_depth` reaches 0) can no
+/// longer call `spawn_agent`. The default of 4 leaves room for orchestrations like "main
+/// agent → coordinator subagent → worker subagent" while preventing runaway vertical
+/// growth. Horizontal runaway is separately guarded by `request_limit`.
 pub(crate) const DEFAULT_SUBAGENT_MAX_DEPTH: u32 = 1;
 
 struct TurnState {
@@ -791,9 +872,12 @@ struct TurnState {
     usage: Usage,
     cap: Option<u32>,
     expand_on_progress: bool,
-    /// 本 turn 已被 `before turn-end` hook 续命几次。上限 [`Self::max_stop_hook_continues`]。
+    /// How many times this turn has been extended by the `before turn-end` hook. Cap is
+    /// [`Self::max_stop_hook_continues`].
     stop_hook_continues: u32,
-    /// 续命硬上限（来自 [`TurnConfig::max_hook_continues`]）。防 hook 无限 `Continue`。
+    /// Hard upper limit for life-extending continues (from
+    /// [`TurnConfig::max_hook_continues`]). Prevents hooks from `Continue`ing
+    /// indefinitely.
     max_stop_hook_continues: u32,
 }
 
@@ -824,12 +908,13 @@ impl TurnState {
         }
     }
 
-    /// 是否还允许 `before turn-end` hook 续命（未达硬上限）。
+    /// Whether the `before turn-end` hook is still allowed to continue (has not reached
+    /// the hard limit).
     fn may_stop_hook_continue(&self) -> bool {
         self.stop_hook_continues < self.max_stop_hook_continues
     }
 
-    /// 记一次续命。
+    /// Records one stop-hook continuation.
     fn note_stop_hook_continue(&mut self) {
         self.stop_hook_continues = self.stop_hook_continues.saturating_add(1);
     }

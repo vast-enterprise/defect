@@ -1,16 +1,17 @@
-//! 跨模块共用的 HTTP 基础设施。
+//! HTTP infrastructure shared across modules.
 //!
-//! 在 `client_util::build_https_client` 之上 stack 一层薄壳：超时、
-//! transport 抖动重试、HTTP/HTTPS 代理、统一 `User-Agent`。
+//! A thin wrapper on top of `client_util::build_https_client` that adds: timeouts,
+//! transport retry with jitter, HTTP/HTTPS proxy support, and a unified `User-Agent`.
 //! HTTP client abstraction for the agent.
 //!
-//! 当前消费者：`defect-llm`（各 LLM provider）；规划中：`defect-tools`
-//! 的 fetch tool。把这层独立成 crate 是为了避免后者再次依赖 `defect-llm`
-//! 这种倒挂。
+//! Current consumers: `defect-llm` (various LLM providers); planned: `defect-tools`'
+//! fetch tool. This layer is extracted into its own crate to prevent the latter from
+//! depending on `defect-llm` (which would create an inverted dependency).
 //!
-//! 公共入口仅 [`build_http_stack`]、[`HttpStackConfig`]、[`HttpStack`]、
-//! [`HttpStackError`]。具体 layer 实现在子模块里 `pub(crate)`，不暴露
-//! 到 crate 之外——让上层调用方只见 type-erased Service。
+//! Public entry points are only [`build_http_stack`], [`HttpStackConfig`], [`HttpStack`],
+//! and [`HttpStackError`]. Concrete layer implementations live in submodules as
+//! `pub(crate)` and are not exposed outside the crate — callers see only a type-erased
+//! Service.
 
 use std::time::Duration;
 
@@ -35,43 +36,46 @@ pub use fetch::{
 pub use proxy::{ProxyAwareConnector, build_proxy_connector};
 pub use user_agent::default_user_agent;
 
-/// `build_http_stack` 输出的类型擦除 service。
+/// Type-erased service returned by `build_http_stack`.
 ///
-/// 输入 `toac::Request`，输出 `http::Response<hyper::body::Incoming>`，
-/// 错误类型统一为 [`HttpStackError`]。每家 provider 把它喂给
-/// `toac::ApiClient::new`。
+/// Takes a `toac::Request` and returns `http::Response<hyper::body::Incoming>`,
+/// with errors unified as [`HttpStackError`]. Each provider passes this to
+/// `toac::ApiClient::new`.
 ///
-/// 选 [`BoxCloneSyncService`] 而非 `BoxService`：toac 的 `tower::Service`
-/// impl 要求 inner `S: Clone` 才能在 `poll_ready` 后克隆出未持有锁的副本
-/// 走 future——见 toac `lib.rs` 的 `mem::replace` 模式。
+/// Uses [`BoxCloneSyncService`] instead of `BoxService`: toac's `tower::Service`
+/// impl requires `S: Clone` so that after `poll_ready`, a lock-free clone can be
+/// taken for the future — see the `mem::replace` pattern in toac's `lib.rs`.
 pub type HttpStack =
     BoxCloneSyncService<toac::Request, http::Response<hyper::body::Incoming>, HttpStackError>;
 
-/// HTTP 栈配置。
+/// HTTP stack configuration.
 ///
-/// `Default::default()` 给 v0 推荐值——`total_timeout = 600s`、
-/// `transport_retries = 2`、`initial_backoff = 200ms`、`user_agent = None`
-/// （用编译期默认）、`proxy = ProxyConfig::FromEnv`。
+/// `Default::default()` provides v0 recommended values: `total_timeout = 600s`,
+/// `transport_retries = 2`, `initial_backoff = 200ms`, `user_agent = None`
+/// (compile-time default), `proxy = ProxyConfig::FromEnv`.
 #[derive(Debug, Clone)]
 pub struct HttpStackConfig {
-    /// 单次请求总超时。`None` 表示不限。SSE 流式响应在第一字节到达后
-    /// 继续计时直到流结束——v0 默认 600s 覆盖 Anthropic extended thinking
-    /// 的最长合理时长。
+    /// Total timeout for a single request. `None` means no limit. For SSE streaming
+    /// responses, the timer starts after the first byte arrives and continues until the
+    /// stream ends — the v0 default of 600s covers the maximum reasonable duration for
+    /// Anthropic extended thinking.
     pub total_timeout: Option<Duration>,
 
-    /// transport 错误重试上限（不含首次）。`0` 禁用 retry layer。
-    /// 仅重试 transport 抖动（DNS / TCP / TLS / hyper IO），HTTP 状态
-    /// 任意值都视作"成功"放行——业务级重试在 turn-loop §7。
+    /// Maximum number of transport error retries (excluding the initial attempt). `0`
+    /// disables the retry layer. Only retries transport-level jitter (DNS / TCP / TLS /
+    /// hyper IO); any HTTP status code is treated as "success" and passed through —
+    /// business-level retries are handled in turn-loop §7.
     pub transport_retries: u8,
 
-    /// 重试初始 backoff。每次乘以 2、加 ±25% jitter，封顶 30s。
+    /// Initial backoff for retries. Each retry multiplies by 2, adds ±25% jitter, and
+    /// caps at 30s.
     pub initial_backoff: Duration,
 
-    /// `User-Agent` header 值。`None` 时使用编译期默认
-    /// （`defect-http/{version} ({git_sha[..8]})`）。
+    /// `User-Agent` header value. When `None`, uses the compile-time default
+    /// (`defect-http/{version} ({git_sha[..8]})`).
     pub user_agent: Option<String>,
 
-    /// 代理配置。
+    /// Proxy configuration.
     pub proxy: ProxyConfig,
 }
 
@@ -87,20 +91,20 @@ impl Default for HttpStackConfig {
     }
 }
 
-/// 代理配置。
+/// Proxy configuration.
 #[derive(Debug, Clone, Default)]
 pub enum ProxyConfig {
-    /// 从 env 读取 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`。
+    /// Reads `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` from the environment.
     #[default]
     FromEnv,
-    /// 显式给定。
+    /// Explicitly provided.
     Explicit(ProxySettings),
-    /// 强制不走代理（即使 env 配了）。
+    /// Forcefully disable proxying, even if environment variables are set.
     Disabled,
 }
 
-/// 显式代理设置。`http_proxy` / `https_proxy` 各自可为 `None`，
-/// `no_proxy` 是域名后缀列表（参考 GNU `NO_PROXY` 风格）。
+/// Explicit proxy settings. `http_proxy` / `https_proxy` may each be `None`;
+/// `no_proxy` is a list of domain suffixes (following the GNU `NO_PROXY` convention).
 #[derive(Debug, Clone, Default)]
 pub struct ProxySettings {
     pub http_proxy: Option<http::Uri>,
@@ -108,34 +112,35 @@ pub struct ProxySettings {
     pub no_proxy: Vec<String>,
 }
 
-/// HTTP 栈层错误。
+/// HTTP stack-layer error.
 ///
-/// 与 `toac::CallError<E>` 中的 `E` 对位——provider 在
-/// `call_error_to_provider` 里把这层错翻成 `ProviderErrorKind`
-/// （详见 HTTP retry/error semantics）。
+/// Corresponds to the `E` in `toac::CallError<E>` — the provider translates this error
+/// into `ProviderErrorKind` in `call_error_to_provider` (see HTTP retry/error semantics).
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum HttpStackError {
-    /// transport 错误（DNS / TCP / TLS / hyper IO 等）。
+    /// Transport error (DNS, TCP, TLS, hyper I/O, etc.).
     #[error("HTTP transport error: {0}")]
     Transport(#[source] BoxError),
 
-    /// 请求超时。`phase` 标识在哪一阶段超时——v0 仅 `Total`，
+    /// Request timed out. `phase` indicates which stage timed out — v0 only supports
+    /// `Total`.
     /// Staged timeouts for HTTP requests.
     #[error("HTTP request timed out (phase = {phase:?})")]
     Timeout { phase: TimeoutPhase },
 
-    /// HTTP 栈配置错误（代理 URL 解析失败等）。
+    /// HTTP layer configuration error (e.g., proxy URL parsing failure).
     #[error("HTTP layer config invalid: {hint}")]
     Config { hint: String },
 
-    /// 代理 CONNECT 阶段失败。
+    /// Proxy CONNECT phase failed.
     #[error("proxy CONNECT failed: {hint}")]
     ProxyConnect { hint: String },
 }
 
-/// 超时阶段。与 [`defect_agent::llm::TimeoutPhase`] 对位，但本 crate
-/// 内部不引用 agent 的类型，避免 layer 实现耦合到 LLM 错误模型。
+/// Timeout phase. Mirrors [`defect_agent::llm::TimeoutPhase`], but this crate does not
+/// reference the agent's type internally to avoid coupling the layer implementation to
+/// the LLM error model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TimeoutPhase {
@@ -146,24 +151,24 @@ pub enum TimeoutPhase {
     Total,
 }
 
-/// 构造完整 HTTP 栈，输出可直接喂给 `toac::ApiClient::new`。
+/// Builds the full HTTP stack; the result can be fed directly to `toac::ApiClient::new`.
 ///
-/// 当前 layer 顺序（外→内，请求方向）：
+/// Current layer order (outer → inner, request direction):
 /// `UserAgent → Trace → Timeout? → hyper-util Client`
 ///
-/// `Timeout` 仅在 `config.total_timeout = Some(_)` 时插入——`None` 直接
-/// 跳过整个 timeout layer，避免 `tower::timeout` 把 Error 包成
-/// [`tower::BoxError`] 时跟 `Identity` 类型不一致（`option_layer` 在
-/// `None` 路径上不修改 Error 类型）。
+/// `Timeout` is inserted only when `config.total_timeout = Some(_)` — when `None`,
+/// the entire timeout layer is skipped. This avoids a type mismatch with `Identity`
+/// when `tower::timeout` wraps the error as [`tower::BoxError`] (`option_layer`
+/// does not change the error type on the `None` path).
 pub fn build_http_stack(config: HttpStackConfig) -> Result<HttpStack, HttpStackError> {
-    // 连接器层一次性合并 TLS + 代理：`ProxyConnector` 在没挂任何 entry
-    // 时透明放行，所以 `Disabled` 也走同一份连接器类型，不引入 `if`
-    // 分叉的两份 `HyperClient` 类型。
+    // The connector layer merges TLS + proxy in one pass: `ProxyConnector` transparently
+    // passes through when no entries are configured, so `Disabled` also uses the same
+    // connector type, avoiding two forked `HyperClient` types behind an `if`.
     let connector = proxy::build_proxy_connector(&config.proxy)?;
     let inner =
         HyperClient::builder(TokioExecutor::default()).build::<_, toac::body::Body>(connector);
 
-    // hyper-util Client 的 Error → HttpStackError::Transport
+    // Maps `hyper-util Client` errors to `HttpStackError::Transport`
     let transport = ServiceBuilder::new()
         .map_err(|e: hyper_util::client::legacy::Error| HttpStackError::Transport(BoxError::new(e)))
         .service(inner);
@@ -201,12 +206,12 @@ pub fn build_http_stack(config: HttpStackConfig) -> Result<HttpStack, HttpStackE
     Ok(stack)
 }
 
-/// 把 [`tower::timeout`] 引入的 [`tower::BoxError`] 翻回
-/// [`HttpStackError`]：
+/// Converts a [`tower::BoxError`] from [`tower::timeout`] back into an
+/// [`HttpStackError`]:
 /// - [`tower::timeout::error::Elapsed`] → `Timeout { phase: Total }`
-/// - 其余应是 inner [`HttpStackError`]——`tower::timeout` 把它 box 起来
-///   传出，`downcast` 还原即可
-/// - 极端兜底（不应发生）→ `Transport`，保留原始来源
+/// - Otherwise it should be an inner [`HttpStackError`]—[`tower::timeout`] boxes it, so
+///   `downcast` recovers it
+/// - Last resort (should not happen) → `Transport`, preserving the original source
 fn map_timeout_error(err: tower::BoxError) -> HttpStackError {
     if err.is::<tower::timeout::error::Elapsed>() {
         return HttpStackError::Timeout {

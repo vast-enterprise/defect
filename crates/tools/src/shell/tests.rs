@@ -1,5 +1,5 @@
-//! LocalShellBackend unit tests covering key
-//! 行为：create / output / wait_for_exit / release / kill 的语义合同。
+//! LocalShellBackend unit tests covering the semantic contract of key operations: create
+//! / output / wait_for_exit / release / kill.
 
 use std::time::Duration;
 
@@ -71,20 +71,21 @@ async fn nonzero_exit_propagates_exit_code() {
 async fn kill_terminates_long_running_command() {
     let dir = tempdir().unwrap();
     let backend = LocalShellBackend::new();
-    // exec 让 sh 直接被 sleep 替换；否则 SIGKILL 只杀 sh，sleep 成为孤儿
-    // 仍持有 pipe，stdout/stderr 不 EOF 直到 sleep 自己结束。
+    // `exec` replaces `sh` with `sleep` directly; otherwise SIGKILL would only kill `sh`,
+    // leaving `sleep` as an orphan that still holds the pipe, so stdout/stderr won't EOF
+    // until `sleep` exits on its own.
     let id = backend
         .create("exec sleep 30".to_string(), dir.path().to_path_buf())
         .await
         .expect("create");
-    // 给 sleep 起跑的时间再 kill
+    // Give sleep time to start before killing it.
     tokio::time::sleep(Duration::from_millis(50)).await;
     backend.kill(&id).await.expect("kill");
     let status = tokio::time::timeout(Duration::from_secs(3), backend.wait_for_exit(&id))
         .await
         .expect("wait_for_exit timed out")
         .expect("wait");
-    // SIGKILL 让 exit_code = None, signal = SIGKILL
+    // SIGKILL sets exit_code to None and signal to SIGKILL
     assert!(
         status.exit_code.is_none() && status.signal.as_deref() == Some("SIGKILL"),
         "expected SIGKILL, got {:?}",

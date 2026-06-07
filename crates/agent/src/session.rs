@@ -2,14 +2,20 @@
 //!
 //! ## Abstraction layers
 //!
-//! - [`AgentCore`]：进程级"agent 实例"，持有内置工具集与全局配置；
-//!   是 `defect-cli` 装配出来后注入给 `defect-acp::serve` 的根对象
-//! - [`Session`]：单次对话的生命周期单元；持有历史、per-session 工具
-//!   表（含 MCP）、cancel token、事件流
-//! - [`History`]：消息历史的封装，预留压缩 / token 计数 / resume 钩子
+//! - [`AgentCore`]: process-level "agent instance", holds the built-in tool set and
+//!   global configuration;
+//!   it is the root object assembled by `defect-cli` and injected into
+//!   `defect-acp::serve`
+//! - [`Session`]: lifecycle unit for a single conversation; holds history, per-session
+//!   tool
+//!   table (including MCP), cancel token, and event stream
+//! - [`History`]: wrapper around message history, with hooks reserved for compression,
+//!   token counting, and resume
 //!
-//! 三者**全部以 trait 暴露**，具体实现在 crate 内的 `session/` 子模块
-//! 与 `defect-cli` 的装配点完成；`defect-acp` 只通过 trait 与之打交道。
+//! All three are **exposed as traits**; concrete implementations live in the `session/`
+//! submodule within this crate
+//! and at the assembly point in `defect-cli`; `defect-acp` interacts with them only
+//! through the traits.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,49 +60,57 @@ pub use history::VecHistory;
 pub use permissions::PermissionGate;
 pub use prompt::resolve_system_prompt;
 pub use tool_registry::{CompositeRegistry, StaticToolRegistry, StaticToolRegistryBuilder};
-/// crate 内部复用：`spawn_agent` 子 agent 工具构造嵌套 [`TurnRunner`] 时需要
-/// 一个 `RequestAuditTracker` 实例。它对外不公开（诊断用内部状态），但同 crate
-/// 的 `crate::tool::spawn_agent` 要能 `new()`。
+/// Re-exported for reuse within the crate: the `spawn_agent` sub-agent tool needs a
+/// `RequestAuditTracker` instance when constructing a nested [`TurnRunner`]. This type is
+/// not public (it exposes internal diagnostic state), but `crate::tool::spawn_agent` in
+/// the same crate must be able to call `new()`.
 pub(crate) use turn::RequestAuditTracker;
 pub use turn::{
     BasePromptConfig, CompactionSlot, PromptConfig, TurnConfig, TurnRequestLimit, TurnRunner,
 };
 
-/// 进程级 agent 根对象。
+/// Process-level agent root object.
 ///
-/// `defect-cli` 在启动时构造一个具体实现（持有 LLM provider 注册表、
-/// 内置工具集、配置），把 `Arc<dyn AgentCore>` 注入给 `defect-acp::serve`。
+/// `defect-cli` constructs a concrete implementation at startup (holding the LLM provider
+/// registry, built-in tool set, and configuration) and injects an `Arc<dyn AgentCore>`
+/// into `defect-acp::serve`.
 ///
-/// 抽 trait 的考量：
-/// - 测试时可注入 mock，不必拉起真实 LLM
-/// - 未来出现"嵌入式 agent"（lib 模式被宿主应用调用）等形态时，
-///   可有第二个具体实现，不动 acp 桥接代码
+/// Rationale for extracting a trait:
+/// - Allows injecting a mock in tests without spinning up a real LLM.
+/// - If an "embedded agent" (library mode called by a host application) emerges in the
+///   future, a second concrete implementation can be added without touching the ACP
+///   bridge code.
 pub trait AgentCore: Send + Sync {
-    /// 创建一个新 session。
+    /// Creates a new session.
     ///
-    /// `id` 由调用方（`defect-acp` 的 `session/new` handler）生成并传入——
-    /// fs 后端在 [`AgentCore::create_session`] 之外构造时已经需要 SessionId
-    /// (see the ACP filesystem delegation contract). Concrete implementations treat it as the authoritative external id
-    /// 用，重复时返回 [`AgentError::DuplicateSessionId`]。
+    /// `id` is generated and passed in by the caller (the `defect-acp` `session/new`
+    /// handler) — the filesystem backend already needs a `SessionId` when constructed
+    /// outside of [`AgentCore::create_session`] (see the ACP filesystem delegation
+    /// contract). Concrete implementations treat it as the authoritative external id and
+    /// return [`AgentError::DuplicateSessionId`] on duplicates.
     ///
-    /// `mcp_servers` 是 `session/new` 请求里携带的 per-session MCP server
-    /// 列表；具体实现在初始化阶段拉起子进程 / 建立 SSE 连接，把每个 MCP
-    /// 工具包装成 [`Tool`] 加入会话工具表。
+    /// `mcp_servers` is the per-session MCP server list from the `session/new` request;
+    /// the concrete implementation spawns subprocesses or establishes SSE connections
+    /// during initialization, wrapping each MCP tool as a [`Tool`] and adding it to the
+    /// session's tool table.
     ///
-    /// `fs` 是 session 级文件系统后端——`defect-acp` 装配时按客户端的
-    /// [`FileSystemCapabilities`] 选择 `LocalFsBackend` 或 `AcpFsBackend`。
-    /// session 持有它的 `Arc`，所有 fs 工具调用都走它。
+    /// `fs` is the session-level filesystem backend — `defect-acp` selects
+    /// `LocalFsBackend` or `AcpFsBackend` at assembly time based on the client's
+    /// [`FileSystemCapabilities`]. The session holds an `Arc` to it, and all filesystem
+    /// tool calls go through it.
     ///
-    /// `shell` 是 session 级 shell 后端——`defect-acp` 装配时按客户端的
-    /// [`ClientCapabilities::terminal`] 选择 `LocalShellBackend` 或
-    /// `AcpShellBackend`。session 持有它的 `Arc`，`bash` 工具调用都走它。
+    /// `shell` is the session-level shell backend — `defect-acp` selects
+    /// `LocalShellBackend` or `AcpShellBackend` at assembly time based on the client's
+    /// [`ClientCapabilities::terminal`]. The session holds an `Arc` to it, and all `bash`
+    /// tool calls go through it.
     ///
-    /// `frontend` 标记 agent 被如何接入（[`Frontend::Acp`] 携带 ACP 握手协商
-    /// 出的 fs / shell 委托状态），用于注入 system prompt 的 `# Environment` 段。
+    /// `frontend` indicates how the agent is being accessed ([`Frontend::Acp`] carries
+    /// the fs/shell delegation state negotiated during the ACP handshake) and is used to
+    /// inject the `# Environment` section of the system prompt.
     ///
     /// # Errors
     ///
-    /// MCP 启动失败、cwd 不存在、id 重复等。
+    /// MCP startup failure, missing cwd, duplicate id, etc.
     ///
     /// [`FileSystemCapabilities`]: agent_client_protocol_schema::FileSystemCapabilities
     /// [`ClientCapabilities::terminal`]: agent_client_protocol_schema::ClientCapabilities
@@ -110,14 +124,15 @@ pub trait AgentCore: Send + Sync {
         frontend: Frontend,
     ) -> BoxFuture<'_, Result<Arc<dyn Session>, AgentError>>;
 
-    /// 从持久化状态恢复一个已存在的 session。
+    /// Restore an existing session from persistent state.
     ///
-    /// `frontend` 同 [`AgentCore::create_session`]——恢复出的 session 也要据此
-    /// 注入运行环境信息。
+    /// `frontend` works the same as in [`AgentCore::create_session`] — the restored
+    /// session also uses it to inject runtime environment information.
     ///
     /// # Errors
     ///
-    /// session 不存在、持久化数据损坏、恢复出的 cwd 不可用等。
+    /// The session does not exist, the persisted data is corrupted, the restored `cwd` is
+    /// unavailable, etc.
     fn load_session(
         &self,
         id: SessionId,
@@ -126,32 +141,34 @@ pub trait AgentCore: Send + Sync {
         frontend: Frontend,
     ) -> BoxFuture<'_, Result<Arc<dyn Session>, AgentError>>;
 
-    /// 按 id 查找已存在的 session。
+    /// Look up an existing session by id.
     fn session(&self, id: &SessionId) -> Option<Arc<dyn Session>>;
 }
 
-/// 从持久化存储恢复 session 的抽象。
+/// Abstraction for restoring a session from persistent storage.
 ///
-/// 具体实现通常来自 `defect-storage`。
+/// Concrete implementations typically come from `defect-storage`.
 pub trait SessionLoader: Send + Sync {
-    /// 按 session id 读回恢复所需状态。
+    /// Read back the state needed for recovery by session id.
     ///
     /// # Errors
     ///
-    /// session 不存在、存储损坏、或回放失败。
+    /// The session does not exist, the storage is corrupted, or replay fails.
     fn load_session(&self, id: SessionId) -> BoxFuture<'_, Result<LoadedSession, BoxError>>;
 }
 
-/// 为单个 session 构建附加工具表的抽象。
+/// Abstraction for building an additional tool registry for a single session.
 ///
-/// 典型实现来自 `defect-mcp`：按 `session/new` 或 `session/load` 提供的
-/// MCP server 列表建立连接，并把远端工具包装成 [`ToolRegistry`]。
+/// A typical implementation comes from `defect-mcp`: it connects to the list of MCP
+/// servers provided by `session/new` or `session/load`, and wraps the remote tools into a
+/// [`ToolRegistry`].
 pub trait SessionToolFactory: Send + Sync {
-    /// 为当前 session 构建一份会话级工具表。
+    /// Build a session-level tool registry for the current session.
     ///
     /// # Errors
     ///
-    /// 外部工具源初始化失败、远端 inventory 拉取失败、或配置不受支持。
+    /// Returns an error if the external tool source fails to initialize, the remote
+    /// inventory cannot be fetched, or the configuration is unsupported.
     fn build_registry(
         &self,
         cwd: PathBuf,
@@ -159,17 +176,18 @@ pub trait SessionToolFactory: Send + Sync {
     ) -> BoxFuture<'_, Result<Arc<dyn ToolRegistry>, BoxError>>;
 }
 
-/// `AgentCore::create_session` 成功后的观察器。
+/// Observer for when `AgentCore::create_session` succeeds.
 ///
-/// 典型用途：
-/// - 启动 `defect-storage` 的事件订阅落盘
-/// - 挂 tracing / metrics 的 per-session 旁路消费者
+/// Typical uses:
+/// - Start `defect-storage` event subscription persistence
+/// - Attach per-session sidecar consumers for tracing / metrics
 pub trait SessionObserver: Send + Sync {
-    /// 在 session 创建成功后调用。
+    /// Called after the session is successfully created.
     ///
     /// # Errors
     ///
-    /// 初始化旁路消费者失败时返回错误，阻止该 session 对外可见。
+    /// Returns an error if initializing the side‑channel consumer fails, preventing the
+    /// session from becoming externally visible.
     fn on_session_created(
         &self,
         session: Arc<dyn Session>,
@@ -177,10 +195,11 @@ pub trait SessionObserver: Send + Sync {
     ) -> Result<(), BoxError>;
 }
 
-/// 一个可选权限模式的对外描述。`defect-acp` 用它构造 ACP `SessionMode`。
+/// A public description of an optional permission mode. Used by `defect-acp` to construct
+/// an ACP `SessionMode`.
 ///
-/// 是 [`crate::policy::PolicyMode`] 的"无 policy"投影——只暴露 id / 展示
-/// 字段，不泄露内部决策器。
+/// It is a "policy-free" projection of [`crate::policy::PolicyMode`] — exposing only the
+/// id/display fields without leaking the internal decision engine.
 #[derive(Debug, Clone)]
 pub struct ModeDescriptor {
     pub id: String,
@@ -188,119 +207,128 @@ pub struct ModeDescriptor {
     pub description: Option<String>,
 }
 
-/// 模型选择键：`(provider vendor, model id)` 对。
+/// Model selection key: a `(provider vendor, model id)` pair.
 ///
-/// 同一 model id 可由多个 provider 声明（多网关同模型），故选择必须同时带上
-/// provider vendor 与 model id。`provider` 即 [`ProviderInfo::vendor`]。
+/// The same model id can be declared by multiple providers (multiple gateways with the
+/// same model), so selection must include both the provider vendor and the model id.
+/// `provider` refers to [`ProviderInfo::vendor`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSelection {
     pub provider: String,
     pub model: String,
 }
 
-/// 单次会话。
+/// A single session.
 ///
-/// 所有方法都是 trait 对象友好（`&self` + `BoxFuture`）。`Arc<dyn Session>`
-/// 在 `defect-acp` 与主循环之间共享。
+/// All methods are trait-object-friendly (`&self` + `BoxFuture`). The `Arc<dyn Session>`
+/// is shared between `defect-acp` and the main loop.
 pub trait Session: Send + Sync {
     fn id(&self) -> &SessionId;
 
-    /// 当前 session 使用的 provider 元信息。
+    /// Provider metadata used by the current session.
     fn provider_info(&self) -> ProviderInfo;
 
-    /// 当前 session 使用的模型 id。
+    /// The model ID used by the current session.
     fn current_model(&self) -> String;
 
-    /// 列出当前 provider 对此 session 可用的模型候选。
+    /// List the model candidates available from the current provider for this session.
     ///
     /// # Errors
     ///
-    /// 当 provider 拉取模型列表失败时返回 [`ProviderError`]。
+    /// Returns [`ProviderError`] if the provider fails to fetch the model list.
     fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>>;
 
-    /// 列出 session 可见的 (provider, model) 候选对——多 provider 装配下
-    /// 同一 session 可能跨 provider 切换 model，ACP 渲染时需要在每条候选
-    /// 旁边注明所属 provider。
+    /// List the (provider, model) candidate pairs visible to the session. Under a
+    /// multi-provider setup, the same session may switch models across providers, so ACP
+    /// rendering needs to annotate each candidate with its provider.
     ///
     /// # Errors
     ///
-    /// 同 [`Self::list_models`]：provider 列表拉取失败时返回 [`ProviderError`]。
+    /// Same as [`Self::list_models`]: returns [`ProviderError`] if fetching the provider
+    /// list fails.
     fn list_candidates(&self) -> BoxFuture<'_, Result<Vec<ModelCandidate>, ProviderError>>;
 
-    /// 切换当前 session 的模型。
+    /// Switches the model for the current session.
     ///
-    /// 选择键是 `(provider vendor, model)` 对——同一 model id 可由多个 provider
-    /// 声明（多网关同模型），故必须显式带上 provider。当前进行中的 turn 保持原
-    /// 选择；后续 turn 使用新选择。
+    /// The selection key is a `(provider vendor, model)` pair — the same model id may be
+    /// advertised by multiple providers (multiple gateways for the same model), so the
+    /// provider must be explicitly specified. The currently in-progress turn retains its
+    /// original selection; subsequent turns use the new selection.
     ///
     /// # Errors
     ///
-    /// 当 provider 拉取模型列表失败，或请求的 `(provider, model)` 对不存在时返回
-    /// [`ProviderError`]。
+    /// Returns [`ProviderError`] when the provider fails to fetch its model list, or when
+    /// the requested `(provider, model)` pair does not exist.
     fn set_model(&self, selection: ModelSelection) -> BoxFuture<'_, Result<(), ProviderError>>;
 
-    /// 当前生效的权限模式 id。未装配模式目录时返回 `None`。
+    /// The current active permission mode ID. Returns `None` if no mode catalog is
+    /// loaded.
     ///
-    /// 映射到 ACP `SessionModeState::current_mode_id`。
+    /// Maps to ACP `SessionModeState::current_mode_id`.
     fn current_mode(&self) -> Option<String>;
 
-    /// 本 session 可选的权限模式列表（顺序即装配顺序）。未装配模式目录时
-    /// 返回空。映射到 ACP `SessionModeState::available_modes`。
+    /// The list of permission modes available to this session, in assembly order. Returns
+    /// an empty list when no mode directory is mounted. Maps to ACP
+    /// `SessionModeState::available_modes`.
     fn available_modes(&self) -> Vec<ModeDescriptor>;
 
-    /// 切换当前权限模式。后续 turn 生效，进行中的 turn 保持原 policy
-    /// （与 [`Self::set_model`] 同语义——run_turn 启动时快照 policy）。
+    /// Switch the current permission mode. The change takes effect on subsequent turns;
+    /// the in-flight turn retains its original policy (same semantics as
+    /// [`Self::set_model`] — the policy is snapshotted when `run_turn` starts).
     ///
     /// # Errors
     ///
-    /// `mode_id` 未命中任一可选模式，或本 session 未装配模式目录时返回
-    /// [`AgentError::ModeNotFound`]。
+    /// Returns [`AgentError::ModeNotFound`] if `mode_id` does not match any available
+    /// mode, or if the session has no mode directory installed.
     fn set_mode(&self, mode_id: String) -> Result<(), AgentError>;
 
-    /// 当前的 `reasoning_effort` 等级（`None` = 未设置，沿用 provider 默认）。
-    /// 映射到 ACP thought-level 配置项的当前值。
+    /// The current `reasoning_effort` level (`None` = unset, falling back to the provider
+    /// default). Maps to the current value of the ACP thought-level configuration item.
     fn current_reasoning_effort(&self) -> Option<ReasoningEffort>;
 
-    /// 设置 `reasoning_effort` 等级。`None` 清除覆盖（回落 provider 默认）。
-    /// 后续 turn 生效。不支持该概念的 provider 在装配请求时忽略。
+    /// Sets the `reasoning_effort` level. `None` clears the override (falls back to the
+    /// provider default). Takes effect on subsequent turns. Providers that do not support
+    /// this concept ignore it when assembling requests.
     fn set_reasoning_effort(&self, effort: Option<ReasoningEffort>);
 
-    /// 订阅事件流。三个独立消费者（acp / storage / tracing）各自调一次，
-    /// 互不影响——内部用 mpsc 配 fan-out 保证慢消费者只 backpressure
-    /// without dropping events.
+    /// Subscribe to the event stream. Three independent consumers (acp / storage /
+    /// tracing) each call this once without interfering with each other — internally uses
+    /// mpsc with fan-out so that slow consumers only experience backpressure without
+    /// dropping events.
     fn subscribe(&self) -> EventStream;
 
-    /// 当前历史的只读快照，用于 session/load 后向客户端 replay transcript。
+    /// A read-only snapshot of the current history, used to replay the transcript to the
+    /// client after a session load.
     fn history_snapshot(&self) -> Vec<Message>;
 
-    /// 启动一次 turn。
+    /// Starts a turn.
     ///
-    /// 返回的 future 在 turn 结束时 resolve：
-    /// - `Ok(StopReason)`：正常结束（含 Cancelled），驱动 ACP 的
+    /// The returned future resolves when the turn ends:
+    /// - `Ok(StopReason)` – normal termination (including Cancelled); drives the ACP
     ///   `PromptResponse`
-    /// - `Err(TurnError)`：fatal 错误（鉴权过期 / 模型不可用等），
-    ///   驱动 ACP 的 JSON-RPC `Error` 返回
+    /// - `Err(TurnError)` – fatal error (auth expiry, model unavailable, etc.);
+    ///   drives the ACP JSON-RPC `Error` response
     ///
-    /// 期间产生的 [`AgentEvent`] 通过 [`Session::subscribe`] 推送，
-    /// **不**通过此 future。`TurnEnded` 事件仍然在事件流上发（给
-    /// storage / tracing），但 ACP 桥接以本 future 的 outcome 为准。
+    /// [`AgentEvent`]s produced during the turn are pushed via [`Session::subscribe`],
+    /// **not** through this future. The `TurnEnded` event is still emitted on the event
+    /// stream (for storage / tracing), but the ACP bridge uses this future's outcome.
     ///
-    /// 同一 session 同时只能有一个进行中的 turn；并发调用返回
-    /// [`TurnError::TurnInProgress`]。
+    /// Only one turn may be in progress per session at a time; concurrent calls return
+    /// [`TurnError::TurnInProgress`].
     fn run_turn(&self, prompt: Vec<ContentBlock>) -> BoxFuture<'_, Result<StopReason, TurnError>>;
 
-    /// 取消当前 turn。幂等：没有 turn 在跑时是 no-op。
+    /// Cancels the current turn. Idempotent: no-op if no turn is in progress.
     fn cancel_turn(&self);
 
-    /// 把 ACP 反向 request `session/request_permission` 的客户端响应
-    /// 回写给主循环。
+    /// Writes back the client response to the ACP reverse request
+    /// `session/request_permission` to the main loop.
     fn resolve_permission(&self, id: ToolCallId, outcome: PermissionResolution);
 }
 
-/// 事件流。类型擦除以支持 trait 对象返回。
+/// Event stream. Type-erased to support trait object return.
 pub type EventStream = futures::stream::BoxStream<'static, AgentEvent>;
 
-/// 创建成功后给 [`SessionObserver`] 的稳定信息。
+/// Stable information provided to [`SessionObserver`] after successful creation.
 #[derive(Debug, Clone)]
 pub struct SessionCreateInfo {
     pub id: SessionId,
@@ -308,76 +336,94 @@ pub struct SessionCreateInfo {
     pub mcp_servers: Vec<McpServer>,
 }
 
-/// 从持久化存储恢复出来的最小 session 数据。
+/// Minimal session data restored from persistent storage.
 #[derive(Debug, Clone)]
 pub struct LoadedSession {
     pub info: SessionCreateInfo,
     pub history: Vec<Message>,
 }
 
-/// 消息历史的抽象——**纯存储 + token 计量**。
+/// Abstraction over message history — pure storage + token accounting.
 ///
-/// 压缩这件事**不在这里**：摘要需要调 LLM，而存储抽象够不到 provider。
-/// 压缩编排在 turn 主循环（`session/turn/compact.rs`）里完成——它读
-/// [`History::snapshot`]、调 LLM 摘要、再用 [`History::replace`] 把算好的
-/// 新消息列表整体写回。本 trait 只负责：追加、快照、整体替换、以及给
-/// 主循环报一个「当前历史值多少 token」的估算。
+/// Compaction is **not** handled here: summarization requires calling the LLM, which the
+/// storage abstraction cannot reach.
+/// Compaction is orchestrated in the turn main loop (`session/turn/compact.rs`) — it
+/// reads [`History::snapshot`], calls the LLM for a summary, then writes back the
+/// computed new message list via [`History::replace`]. This trait is only responsible
+/// for: appending, snapshotting, wholesale replacement, and providing the main loop with
+/// an estimate of "how many tokens the current history is worth."
 ///
-/// token 估算策略（详见 [`VecHistory`]）：以上一次 LLM 调用回报的**真实
-/// 输入 token**为基线，叠加其后新追加消息的**字符启发式**增量；真实基线
-/// 不可用时整份走字符启发式兜底。turn 主循环用它与压缩阈值比较。
+/// Token estimation strategy (see [`VecHistory`]): use the **actual input token** count
+/// reported by the last LLM call as a baseline, then add a **character-heuristic**
+/// increment for messages appended after that baseline; when no real baseline is
+/// available, fall back to a pure character-heuristic estimate for the entire history.
+/// The turn main loop compares this estimate against the compaction threshold.
 pub trait History: Send + Sync {
-    /// 追加一条消息。
+    /// Appends a message.
     fn append(&self, msg: Message);
 
-    /// 当前历史的快照，用于喂给下一轮 LLM 调用。
+    /// A snapshot of the current history, to be fed into the next LLM call.
     fn snapshot(&self) -> Vec<Message>;
 
-    /// 压缩后整体替换消息列表。turn 主循环算好「摘要 + 保留尾部」的新列表后
-    /// 调它回写。实现应同时重置 token 估算基线（旧的真实 token 已不适用新列表）。
+    /// Replace the entire message list after compression. The turn main loop calls this
+    /// to write back the new list consisting of a summary plus the retained tail. The
+    /// implementation should also reset the token estimation baseline, since the old
+    /// actual token counts no longer apply to the new list.
     fn replace(&self, messages: Vec<Message>);
 
-    /// 前缀替换：用 `summary` 这一条消息换掉**当前**列表最前面 `drop_count` 条，
-    /// 保留其后全部。返回实际丢弃的消息数（`drop_count` 被 clamp 到当前长度）。
+    /// Prefix splice: replaces the first `drop_count` messages in the **current** list
+    /// with the single `summary` message, preserving everything after them. Returns the
+    /// actual number of messages dropped (`drop_count` is clamped to the current length).
     ///
-    /// 这是**后台压缩**回写的原语：后台任务在某时刻的 snapshot 上算出
-    /// `drop_count`（= 待摘要前缀长度）与 `summary`，但摘要 LLM 调用耗时期间，
-    /// 前台 turn 仍在往**尾部** `append`。回写时绝不能 `replace(整表)`——那会冲掉
-    /// 这期间新增的尾部消息。`splice_prefix` 只动**当前**列表的前 `drop_count` 条，
-    /// 保留 `drop_count..` 的全部（含期间新增的尾部），故回写正确。
+    /// This is the primitive for **background compression** write-back: a background task
+    /// computes `drop_count` (= the prefix length to summarize) and `summary` from a
+    /// snapshot taken at some point, but while the summarization LLM call is in flight,
+    /// the foreground turn may still be `append`ing to the **tail**. Writing back with
+    /// `replace(entire list)` would discard any tail messages added during that time.
+    /// `splice_prefix` only touches the first `drop_count` messages of the **current**
+    /// list, preserving everything from `drop_count..` onward (including tail messages
+    /// added in the meantime), so the write-back is correct.
     ///
-    /// **并发不变式**（务必维持）：`drop_count` 在旧 snapshot 上算得、对**当前**列表
-    /// 合法，前提是「飞行期间只发生尾插（`append`）与原地内容替换（微压缩
-    /// `replace` 同长度重建），不增删中段消息」。唯一会删中段的操作是压缩本身，
-    /// 而压缩**单飞**（同时至多一个在跑）——故该不变式成立。
+    /// **Concurrency invariant** (must be maintained): `drop_count` is computed from an
+    /// old snapshot and remains valid for the **current** list provided that during the
+    /// flight only tail appends (`append`) and in-place content replacements
+    /// (micro-compression `replace` with same-length rebuild) occur — no insertion or
+    /// deletion of middle messages. The only operation that removes middle messages is
+    /// compression itself, and compression runs **solo** (at most one in flight at a
+    /// time), so the invariant holds.
     ///
-    /// 同 [`Self::replace`]，回写后重置 token 基线（新前缀的真实 token 未知）。
+    /// Like [`Self::replace`], resets the token estimation baseline after write-back (the
+    /// true token count of the new prefix is unknown).
     fn splice_prefix(&self, drop_count: usize, summary: Message) -> usize;
 
-    /// 喂入上一次 LLM 调用的真实输入 token 数
-    /// （`input + cache_read + cache_creation`）。作为 [`Self::token_estimate`]
-    /// 的精确基线；其后 [`Self::append`] 的消息走字符启发式增量叠加。
+    /// Records the actual input token count from the last LLM call
+    /// (`input + cache_read + cache_creation`). Serves as the precise baseline for
+    /// [`Self::token_estimate`]; subsequent [`Self::append`] messages are accumulated
+    /// incrementally using a character heuristic.
     fn record_input_tokens(&self, tokens: u64);
 
-    /// 估算当前历史的 token 数。`None` 表示历史为空 / 无可用估算。
+    /// Estimates the token count for the current history. `None` indicates the history is
+    /// empty or no estimate is available.
     fn token_estimate(&self) -> Option<u64>;
 }
 
-/// 压缩报告。压缩前后的 token 数据被主循环包成 [`AgentEvent::ContextCompressed`]。
+/// Compaction report. The token counts before and after compaction are wrapped into
+/// [`AgentEvent::ContextCompressed`] by the main loop.
 #[derive(Debug, Clone, Copy)]
 pub struct CompactionReport {
     pub tokens_before: u64,
     pub tokens_after: u64,
 }
 
-/// 进程级 agent 错误。
+/// Process-level agent error.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     #[error("invalid working directory: {0}")]
     InvalidCwd(PathBuf),
 
-    /// MCP server 启动失败（stdio 进程拉不起来 / sse 连不上）。
+    /// MCP server failed to start (stdio process could not be launched / SSE connection
+    /// could not be established).
     #[error("mcp startup failed for {server}: {source}")]
     McpStartup {
         server: String,
@@ -385,8 +431,9 @@ pub enum AgentError {
         source: BoxError,
     },
 
-    /// 调用方传入的 [`SessionId`] 已经存在于 session 表中。
-    /// 单调递增 + 时间戳的 id 生成器理论上不会冲突；这是安全网。
+    /// The caller-provided [`SessionId`] already exists in the session table.
+    /// A monotonic + timestamp ID generator should theoretically never collide; this is a
+    /// safety net.
     #[error("session id already in use: {0}")]
     DuplicateSessionId(SessionId),
 
@@ -396,14 +443,15 @@ pub enum AgentError {
     #[error("session not found in storage: {0}")]
     SessionNotFound(SessionId),
 
-    /// `set_mode` 收到的 `mode_id` 不在该 session 的模式目录里（或目录未装配）。
+    /// The `mode_id` received by `set_mode` is not in the session's mode directory (or
+    /// the directory is not mounted).
     #[error("permission mode not found: {0}")]
     ModeNotFound(String),
 
     #[error("session restore failed: {0}")]
     Restore(#[source] BoxError),
 
-    /// session 启动期能力裁决失败。详见 [`SessionInitError`]。
+    /// Session capability adjudication failed during startup. See [`SessionInitError`].
     #[error(transparent)]
     Init(#[from] SessionInitError),
 
@@ -411,20 +459,21 @@ pub enum AgentError {
     Other(#[from] BoxError),
 }
 
-/// session 启动期一次性裁决失败。
+/// A one-time adjudication failure during session startup.
 ///
 /// See capabilities design.
-/// 当 `capabilities.<name>.mode = "delegate"` 但当前 provider 的
-/// [`crate::llm::LlmProvider::hosted_capabilities`] 不支持该 capability
-/// 时，拒绝启动 session。
+/// The session is refused when `capabilities.<name>.mode = "delegate"` but the current
+/// provider's
+/// [`crate::llm::LlmProvider::hosted_capabilities`] does not support that capability.
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum SessionInitError {
-    /// 用户显式选择 `Delegate`，但 provider 不支持对应 hosted capability。
+    /// The user explicitly chose `Delegate`, but the provider does not support the
+    /// corresponding hosted capability.
     CapabilityUnsatisfied {
-        /// 出问题的 capability 名（例如 `"web_search"`）。
+        /// The name of the problematic capability (e.g. `"web_search"`).
         capability: &'static str,
-        /// 当前 session 绑定的 provider 名。
+        /// The name of the provider bound to the current session.
         provider: String,
     },
 }
@@ -463,36 +512,37 @@ impl std::fmt::Display for SessionInitError {
 
 impl std::error::Error for SessionInitError {}
 
-/// 一次 turn 的失败原因。
+/// Reasons why a turn fails.
 ///
-/// 划线规则：**只把"导致 turn 无法继续"的错误归到这里**。turn 内部
-/// 工具失败、单次 LLM 重试失败等不归这里，归 [`AgentEvent`] 与历史
-/// 的状态机。
+/// Rule of thumb: **only include errors that make the turn unable to continue**. Internal
+/// tool failures within a turn, single LLM retry failures, etc. belong in [`AgentEvent`]
+/// and the historical state machine instead.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum TurnError {
-    /// 该 session 上已经有 turn 在跑。
+    /// A turn is already in progress for this session.
     #[error("turn already in progress for this session")]
     TurnInProgress,
 
-    /// 重试用尽后仍失败的 provider 错误。
+    /// Provider error that still fails after retries are exhausted.
     #[error(transparent)]
     Provider(#[from] ProviderError),
 
-    /// 主循环内部 invariant 被破坏（理应是 bug）。
+    /// Internal invariant broken (should be a bug).
     #[error("internal turn error: {0}")]
     Internal(#[source] BoxError),
 }
 
-/// 工具注册表的抽象。
+/// Abstraction for a tool registry.
 ///
-/// 进程级（[`AgentCore`] 持有，内置工具）与会话级（[`Session`] 持有，
-/// MCP 工具）共用同一形状；turn 主循环通过 `Session` 暴露的
-/// composite registry 查工具。
+/// Both the process-level registry (owned by [`AgentCore`], for built-in tools) and the
+/// session-level registry (owned by [`Session`], for MCP tools) share the same shape; the
+/// turn main loop looks up tools through the composite registry exposed by [`Session`].
 pub trait ToolRegistry: Send + Sync {
-    /// 列出注册表内所有工具的 schema，用于装配 LLM 请求的 `tools` 字段。
+    /// Return the schemas of all tools in the registry, used to populate the `tools`
+    /// field of an LLM request.
     fn schemas(&self) -> Vec<ToolSchema>;
 
-    /// 按名查找工具。
+    /// Looks up a tool by name.
     fn get(&self, name: &str) -> Option<Arc<dyn Tool>>;
 }

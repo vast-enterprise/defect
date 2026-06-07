@@ -1,8 +1,10 @@
-//! `defect` 二进制入口——只做最薄的 CLI 生命周期编排。
+//! `defect` binary entrypoint — minimal CLI lifecycle orchestration only.
 //!
-//! 默认 AgentCore 拼装已收束到 [`defect_cli::assembly::CliAgentBuilder`]：
-//! 下游二次开发可以从那层 builder 上裁剪默认 feature set，并叠加自己的
-//! provider / tool / hook / observer / MCP factory。
+//! Default `AgentCore` assembly is encapsulated in
+//! [`defect_cli::assembly::CliAgentBuilder`]:
+//! downstream developers can trim the default feature set from that builder and layer on
+//! their own
+//! provider / tool / hook / observer / MCP factory.
 
 use std::env;
 use std::process::ExitCode;
@@ -36,14 +38,16 @@ async fn main() -> anyhow::Result<ExitCode> {
         tracing::warn!("{warning:?}");
     }
 
-    // --message（单轮）与 --goal（目标驱动多轮循环）都是无人值守 headless 模式。
+    // Both `--message` (single-turn) and `--goal` (goal-driven multi-turn loop) are
+    // headless, non-interactive modes.
     let headless = cli.message.is_some() || cli.goal.is_some();
     let mut builder = CliAgentBuilder::new(cwd.clone(), load_opts, config).repl(if cli.repl {
         ReplMode::Enabled
     } else {
         ReplMode::Disabled
     });
-    // 无人值守模式：包 NonInteractivePolicy，避免无 TTY 挂死在权限确认上。
+    // Headless mode: wrap `NonInteractivePolicy` to avoid hanging on permission prompts
+    // when there is no TTY.
     if headless {
         builder = builder.non_interactive();
     }
@@ -82,13 +86,16 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
     );
 
-    // 出口优先级：--goal > --message > --repl > ACP server。
-    // --goal 与 --message 都复用 oneshot runner：单次 run_turn + 消费事件 + 退出码。
-    // 区别仅在 agent 装配——goal 模式挂了 goal-gate hook，turn 会在内部被续命多轮，
-    // 对 CLI 层透明（仍是一次 run_turn 调用）。
+    // Exit priority: --goal > --message > --repl > ACP server.
+    // Both --goal and --message reuse the oneshot runner: a single run_turn + event
+    // consumption + exit code.
+    // The only difference is in agent assembly — goal mode attaches a goal-gate hook, so
+    // turns are internally extended across multiple rounds,
+    // transparent to the CLI layer (still a single run_turn call).
     if let Some(prompt) = cli.goal.or(cli.message) {
-        // ask-writes 下 Ask 被降级为 Deny 才算"无人值守缺口"；open/deny-all/read-only
-        // 的 Deny 是用户预期的，不参与 denied 退出码。
+        // Under `ask-writes`, only an `Ask` that is downgraded to `Deny` counts as an
+        // "unattended gap"; `Deny` in `open`/`deny-all`/`read-only` modes is expected by
+        // the user and does not contribute to the denied exit code.
         let track_denied = matches!(built.sandbox_mode, defect_config::SandboxMode::AskWrites);
         return run_oneshot(
             built.agent,
@@ -108,8 +115,9 @@ async fn main() -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// 跑单轮 prompt（`--message`）。由 `oneshot` feature gate——裁掉时 hard fail
-/// 提示重新带 feature 编译，不静默退化成 ACP。
+/// Run a single-turn prompt (`--message`). Gated by the `oneshot` feature; when the
+/// feature is disabled, hard-fail with a message to recompile with the feature enabled,
+/// rather than silently falling back to ACP.
 #[cfg(feature = "oneshot")]
 #[allow(clippy::too_many_arguments)]
 async fn run_oneshot(
@@ -141,8 +149,9 @@ async fn run_oneshot(
     )
 }
 
-/// 启动 REPL。`repl` feature 开启时跑真正的 REPL；裁掉时这个 flag 仍能
-/// 解析，但运行期 hard fail 提示重新带 feature 编译——不静默退化成 ACP。
+/// Starts the REPL. When the `repl` feature is enabled, runs the actual REPL; when it is
+/// disabled, the flag is still parsed but fails at runtime with a hard error instructing
+/// the user to rebuild with the feature enabled — it does not silently degrade to ACP.
 #[cfg(feature = "repl")]
 async fn run_repl(agent: Arc<dyn AgentCore>, resume: Option<SessionId>) -> anyhow::Result<()> {
     let cwd = env::current_dir()?;

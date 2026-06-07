@@ -1,10 +1,11 @@
-//! [`AgentEvent`] → ACP wire 形态的投影。
+//! [`AgentEvent`] → ACP wire projection.
 //!
 //! Translation table for ACP events. Splits internal events into:
-//! - [`Projection::Update`]：直接 `cx.send_notification(SessionNotification {..})`
-//! - [`Projection::Permission`]：触发 `session/request_permission` 反向请求
-//! - [`Projection::EndTurn`]：驱动 `PromptResponse::stop_reason`
-//! - [`Projection::Ignore`]：仅审计，不入 wire
+//! - [`Projection::Update`]: directly calls `cx.send_notification(SessionNotification
+//!   {..})`
+//! - [`Projection::Permission`]: triggers a `session/request_permission` reverse request
+//! - [`Projection::EndTurn`]: drives `PromptResponse::stop_reason`
+//! - [`Projection::Ignore`]: audit-only, not sent over the wire
 
 use agent_client_protocol::schema::{
     Content, ContentChunk, EmbeddedResource, EmbeddedResourceResource, ImageContent,
@@ -20,28 +21,29 @@ use defect_agent::policy::PolicyDecision;
 const REPLAY_TOOL_RESULT_TITLE: &str = "Tool result";
 const REPLAY_RESOURCE_URI: &str = "defect://session-replay/text";
 
-/// 一次投影的产物。
+/// A single projection's output.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Projection {
-    /// 普通 `session/update` 通知。
+    /// A normal `session/update` notification.
     Update(SessionNotification),
-    /// 需要发反向 `session/request_permission`。
+    /// Needs to send a reverse `session/request_permission`.
     Permission(PermissionAsk),
-    /// turn 终态——驱动 `PromptResponse`。事件本身仅作哨兵，权威 stop_reason
-    /// 由 [`Session::run_turn`](defect_agent::session::Session::run_turn) 的返回值给出。
+    /// Terminal turn state – drives a `PromptResponse`. The event itself is only a
+    /// sentinel; the authoritative `stop_reason` is given by the return value of
+    /// [`Session::run_turn`](defect_agent::session::Session::run_turn).
     EndTurn,
-    /// 仅审计，不入 wire。
+    /// Audit-only, not sent over the wire.
     Ignore,
 }
 
-/// 一次 `session/request_permission` 请求所需的上下文。
+/// Context required for a `session/request_permission` request.
 pub(crate) struct PermissionAsk {
     pub tool_call_id: ToolCallId,
     pub fields: ToolCallUpdateFields,
     pub options: Vec<PermissionOption>,
 }
 
-/// 翻译单条 [`AgentEvent`]。
+/// Translates a single [`AgentEvent`].
 pub(crate) fn project(session_id: &SessionId, event: AgentEvent) -> Projection {
     match event {
         AgentEvent::TurnStarted => Projection::Ignore,
@@ -80,7 +82,8 @@ pub(crate) fn project(session_id: &SessionId, event: AgentEvent) -> Projection {
                 })
             }
             PolicyDecision::Allow | PolicyDecision::Deny => Projection::Ignore,
-            // `PolicyDecision` 同样 `#[non_exhaustive]`——未识别变体当作仅审计。
+            // `PolicyDecision` is also `#[non_exhaustive]` — treat unrecognized variants
+            // as audit-only.
             _ => Projection::Ignore,
         },
 
@@ -89,13 +92,14 @@ pub(crate) fn project(session_id: &SessionId, event: AgentEvent) -> Projection {
         | AgentEvent::LlmCallFinished { .. }
         | AgentEvent::ContextCompressed { .. } => Projection::Ignore,
 
-        // `AgentEvent` 是 #[non_exhaustive]——新增变体走 Ignore，避免桥接层
-        // 因为新事件而拒签代码；真正需要上 wire 的变体在上面显式分支。
+        // `AgentEvent` is `#[non_exhaustive]` — new variants fall through to `Ignore`,
+        // preventing the bridge layer from rejecting code due to new events; variants
+        // that actually need to go on the wire are explicitly handled above.
         _ => Projection::Ignore,
     }
 }
 
-/// 将恢复出的 message history 投影成 ACP transcript replay 通知。
+/// Projects the recovered message history into ACP transcript replay notifications.
 pub(crate) fn replay_notifications(
     session_id: &SessionId,
     history: &[Message],
@@ -198,8 +202,9 @@ fn replay_tool_result(
     ));
 }
 
-/// 把 [`ToolResultBody`] 还原成给客户端 UI 重放的 ACP content 块。
-/// 多模态结果逐块还原成文本/图片块；文本/JSON 仍是单个文本块。
+/// Reconstruct [`ToolResultBody`] into ACP content blocks for replay in the client UI.
+/// Multimodal results are decomposed into text/image blocks; text/JSON remain as a single
+/// text block.
 fn tool_result_blocks(output: &ToolResultBody) -> Vec<ToolCallContent> {
     let blocks = match output {
         ToolResultBody::Text { text } => vec![text_block(text.clone())],
@@ -244,9 +249,9 @@ fn image_block(mime: &str, data: &ImageData) -> agent_client_protocol::schema::C
     }
 }
 
-/// 从 [`ToolCallUpdateFields`] 拼出一个完整 [`ToolCall`]。
+/// Construct a complete [`ToolCall`] from [`ToolCallUpdateFields`].
 ///
-/// `ToolCall::new` 需要 id + title 两个必填字段；其它通过 `update` 注入。
+/// `ToolCall::new` requires `id` and `title`; all other fields are injected via `update`.
 fn tool_call_from_fields(id: ToolCallId, fields: ToolCallUpdateFields) -> ToolCall {
     let title = fields.title.clone().unwrap_or_default();
     let mut call = ToolCall::new(id, title);

@@ -1,19 +1,26 @@
-//! HTTP/HTTPS 代理 connector 装配。
+//! HTTP/HTTPS proxy connector assembly.
 //!
 //! HTTP proxy implementation.
 //!
-//! 形态：连接层装一份 [`hyper_http_proxy::ProxyConnector<HttpConnector>`]，
-//! 外面再用 [`hyper_rustls::HttpsConnector`] 包出 TLS。`ProxyConnector`
-//! 在 `proxies` 列表为空时透明放行（见上游 `Service<Uri>` impl 的
-//! `match_proxy` 分支），所以无论用户是否启用代理，连接器类型保持一致——
-//! `HttpsConnector<ProxyConnector<HttpConnector>>`——避免 [`build_http_stack`]
-//! 出现两份不同的连接器类型。
+//! Architecture: the connection layer wraps a
+//! [`hyper_http_proxy::ProxyConnector<HttpConnector>`],
+//! then wraps that with [`hyper_rustls::HttpsConnector`] for TLS. When the `proxies` list
+//! is empty,
+//! `ProxyConnector` transparently passes through (see the `match_proxy` branch in the
+//! upstream
+//! `Service<Uri>` impl), so the connector type stays the same regardless of whether the
+//! user has
+//! enabled a proxy — `HttpsConnector<ProxyConnector<HttpConnector>>` — avoiding two
+//! different
+//! connector types in [`build_http_stack`].
 //!
-//! NO_PROXY：把每条代理 entry 的 [`Intercept`] 写成 [`Intercept::Custom`]
-//! 闭包，闭包内匹配 scheme + host 并对照 `NO_PROXY` 后缀列表。匹配规则
-//! 按 [GNU 风格](https://about.gitlab.com/blog/we-need-to-talk-no-proxy/)：
-//! 逗号分隔、域名后缀（`api.openai.com` 命中 `*.openai.com`）、`*` 等价
-//! 全禁、IP CIDR / 端口 v0 不做。
+//! NO_PROXY: each proxy entry's [`Intercept`] is written as an [`Intercept::Custom`]
+//! closure that
+//! matches scheme + host against the `NO_PROXY` suffix list. Matching follows
+//! [GNU style](https://about.gitlab.com/blog/we-need-to-talk-no-proxy/):
+//! comma-separated, domain suffixes (`api.openai.com` matches `*.openai.com`), `*` means
+//! block all,
+//! IP CIDR and port v0 are not supported.
 //!
 //! [`build_http_stack`]: super::build_http_stack
 
@@ -27,42 +34,46 @@ use hyper_util::client::legacy::connect::HttpConnector;
 
 use super::{HttpStackError, ProxyConfig, ProxySettings};
 
-/// 完整连接器类型——上层用这个类型构造 [`hyper_util::client::legacy::Client`]。
+/// The full connector type used by upper layers to construct a
+/// [`hyper_util::client::legacy::Client`].
 pub type ProxyAwareConnector = hyper_rustls::HttpsConnector<ProxyConnector<HttpConnector>>;
 
-/// 从 [`ProxyConfig`] 构造完整连接器。
+/// Build a full connector from [`ProxyConfig`].
 ///
-/// - `Disabled` → 仍返回 `ProxyConnector`，但不挂任何 entry，`match_proxy`
-///   始终 `None`，行为等价"无代理"。
-/// - `FromEnv` → 读 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（大小写
-///   都接受，小写优先，对齐 curl 习惯）。
-/// - `Explicit` → 直接用给定值。
+/// - `Disabled` → still returns a `ProxyConnector`, but with no entries; `match_proxy`
+///   always returns `None`, behaving equivalently to "no proxy".
+/// - `FromEnv` → reads `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (case-insensitive,
+///   lowercase preferred, matching curl conventions).
+/// - `Explicit` → uses the given values directly.
 ///
 /// # Errors
 ///
-/// 加载 native TLS roots 失败、或 env 中代理 URL 解析失败时返回。
+/// Returns an error if loading native TLS roots fails, or if a proxy URL from the
+/// environment cannot be parsed.
 pub fn build_proxy_connector(config: &ProxyConfig) -> Result<ProxyAwareConnector, HttpStackError> {
     let entries = resolve_proxy(config)?;
 
-    // ⚠ 必须 `enforce_http(false)`：默认 `HttpConnector` 拒绝 https scheme，
-    // 走 `https://` 时由外层 `HttpsConnector` 接管 TLS、内层 `HttpConnector`
-    // 仅负责 TCP。`ProxyConnector` 在没有命中 proxy entry 时透传给内层
-    // `HttpConnector`（见上游 `Service<Uri>` impl 的 fallthrough 分支），
-    // 默认 `enforce_http=true` 会让所有 `https://` 直接 `Err(InvalidUri)`。
-    // hyper-rustls 自家的 `HttpsConnectorBuilder::build()` 也是这么改的，
-    // 但 `wrap_connector(_)` 不会替我们改自定义连接器，需要手动设置。
+    // ⚠ Must call `enforce_http(false)`: by default `HttpConnector` rejects `https`
+    // schemes. When the outer `HttpsConnector` handles TLS for `https://` URLs, the inner
+    // `HttpConnector` only manages TCP. `ProxyConnector` falls through to the inner
+    // `HttpConnector` when no proxy entry matches (see the fallthrough branch in the
+    // upstream `Service<Uri>` impl). With the default `enforce_http(true)`, all
+    // `https://` requests immediately return `Err(InvalidUri)`. hyper-rustls's own
+    // `HttpsConnectorBuilder::build()` applies this same change, but `wrap_connector(_)`
+    // does not modify custom connectors — it must be done manually.
     let mut http_connector = HttpConnector::new();
     http_connector.enforce_http(false);
 
-    // ⚠ 必须 `unsecured`：开启 `__rustls`（任何 `rustls-tls-*-roots` feature）
-    // 时 `ProxyConnector::new` 会内置一份 `tokio_rustls::TlsConnector`，并在
-    // CONNECT 隧道之上**自己**做一次 TLS 握手，返回 `ProxyStream::Secured`。
-    // 我们外层 `HttpsConnector::wrap_connector(_)` 会把这条已经加密的流再包
-    // 一次 TLS——TLS-in-TLS，外层握手永远读不到 ServerHello，~14s 后超时。
-    // 用 `unsecured` 关闭 ProxyConnector 自己的 TLS，让它只负责 CONNECT 隧道
-    // + 原始 TCP（返回 `ProxyStream::Regular`），TLS 完全由外层
-    // `HttpsConnector` 统一负责（HTTP/2 ALPN 也在那一层完成）。
-    // 因此 workspace 把 `hyper-http-proxy` 的 `rustls-*-roots` feature 全关。
+    // ⚠ Must use `unsecured`: when `__rustls` (any `rustls-tls-*-roots` feature) is
+    // enabled, `ProxyConnector::new` embeds a `tokio_rustls::TlsConnector` that performs
+    // its own TLS handshake over the CONNECT tunnel, returning `ProxyStream::Secured`.
+    // Our outer `HttpsConnector::wrap_connector(_)` then wraps this already-encrypted
+    // stream in another TLS layer — TLS-in-TLS — so the outer handshake never receives a
+    // ServerHello and times out after ~14s. Using `unsecured` disables the proxy
+    // connector's own TLS, making it handle only the CONNECT tunnel + raw TCP (returning
+    // `ProxyStream::Regular`), while the outer `HttpsConnector` handles all TLS
+    // (including HTTP/2 ALPN). That's why the workspace disables all `rustls-*-roots`
+    // features on `hyper-http-proxy`.
     let mut proxy_connector = ProxyConnector::unsecured(http_connector);
     for entry in entries {
         proxy_connector.add_proxy(Proxy::new(entry.intercept, entry.uri));
@@ -80,15 +91,16 @@ pub fn build_proxy_connector(config: &ProxyConfig) -> Result<ProxyAwareConnector
     Ok(https)
 }
 
-/// 解析后的单条代理 entry。
+/// A single resolved proxy entry.
 struct ResolvedProxy {
     intercept: Intercept,
     uri: Uri,
 }
 
-/// 把 [`ProxyConfig`] 翻成 `(Intercept, Uri)` 列表。
+/// Converts a [`ProxyConfig`] into a list of `(Intercept, Uri)` pairs.
 ///
-/// 没有代理时返回空列表（合法状态）；URI 解析失败 → `HttpStackError::Config`。
+/// Returns an empty list when no proxy is configured (a valid state); returns
+/// `HttpStackError::Config` if a URI fails to parse.
 fn resolve_proxy(config: &ProxyConfig) -> Result<Vec<ResolvedProxy>, HttpStackError> {
     match config {
         ProxyConfig::Disabled => Ok(Vec::new()),
@@ -134,8 +146,9 @@ fn resolve_explicit(settings: &ProxySettings) -> Result<Vec<ResolvedProxy>, Http
     Ok(entries)
 }
 
-/// 读取 env 变量并 parse 成 [`Uri`]。优先读小写、回退大写——这是
-/// curl / Go / requests 等主流客户端的事实约定。
+/// Reads an env variable and parses it into a [`Uri`]. Prefers the lowercase name,
+/// falling back to uppercase — this is the de‑facto convention used by curl, Go,
+/// requests, and other mainstream clients.
 fn env_proxy(lower: &str, upper: &str) -> Result<Option<Uri>, HttpStackError> {
     let raw = match env_first(lower, upper) {
         Some(v) => v,
@@ -165,8 +178,8 @@ fn env_first(lower: &str, upper: &str) -> Option<String> {
     None
 }
 
-/// `Intercept::Custom`：scheme 命中且 host 不在 NO_PROXY 列表里时
-/// 才走代理。
+/// `Intercept::Custom`: proxy only when the scheme matches and the host is not in the
+/// NO_PROXY list.
 fn scheme_intercept_with_no_proxy(scheme: &'static str, no_proxy: Arc<[String]>) -> Intercept {
     Intercept::Custom(
         (move |s: Option<&str>, h: Option<&str>, _p: Option<u16>| -> bool {
@@ -183,7 +196,8 @@ fn scheme_intercept_with_no_proxy(scheme: &'static str, no_proxy: Arc<[String]>)
     )
 }
 
-/// 解析逗号分隔的 NO_PROXY 字符串。空白裁剪、跳过空项。
+/// Parse a comma-separated `NO_PROXY` string, trimming whitespace and skipping empty
+/// entries.
 fn parse_no_proxy(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
@@ -192,22 +206,22 @@ fn parse_no_proxy(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// 列表里出现 `*` → 等价禁用所有代理。
+/// A `*` in the list disables all proxies.
 fn no_proxy_disables_all(patterns: &[String]) -> bool {
     patterns.iter().any(|p| p == "*")
 }
 
-/// 判断 `host` 是否被 NO_PROXY 列表豁免。
+/// Returns whether `host` is exempted by the NO_PROXY list.
 ///
-/// GNU 风格：每条 pattern 是域名（前导/尾随 `.` 都被剥掉）；
-/// `host` 命中条件之一即豁免：
-/// - `host == pattern`（去前缀点后）
-/// - `host` 以 `.<pattern>` 结尾
+/// GNU style: each pattern is a domain name (leading/trailing `.` are stripped);
+/// `host` is exempt if it matches one of:
+/// - `host == pattern` (after stripping leading dot)
+/// - `host` ends with `.<pattern>`
 ///
-/// `*` 已在 [`no_proxy_disables_all`] 提前处理，这里不再特判。
-/// 端口（`example.com:8080`）/ IP CIDR v0 不做——pattern 中带 `:` / 数字
-/// 网段都按字面对比，匹配不到就是不豁免（行为安全：宁可走代理也不
-/// 假装匹配）。
+/// `*` is already handled by [`no_proxy_disables_all`], so it is not checked here.
+/// Ports (e.g. `example.com:8080`) and IP CIDR v0 are not supported — patterns
+/// containing `:` or numeric subnets are compared literally; if they don't match,
+/// the host is not exempted (safe behavior: prefer the proxy over a false match).
 pub(crate) fn matches_no_proxy(host: &str, patterns: &[String]) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() {
@@ -256,13 +270,13 @@ mod tests {
 
     #[test]
     fn suffix_match_without_dot() {
-        // GNU 风格：pattern 不带前导点也按后缀匹配。
+        // GNU style: a pattern without a leading dot still matches as a suffix.
         assert!(matches_no_proxy("api.openai.com", &pats(&["openai.com"])));
     }
 
     #[test]
     fn substring_does_not_match() {
-        // "openai" 不应匹配 "myopenai.com"——必须以 "." 边界结尾。
+        // "openai" should not match "myopenai.com" — must end at a "." boundary.
         assert!(!matches_no_proxy("myopenai.com", &pats(&["openai.com"])));
     }
 
@@ -282,8 +296,8 @@ mod tests {
 
     #[test]
     fn empty_pattern_in_list_is_skipped() {
-        // 来自 `,foo.com,` 这种边角输入——parse_no_proxy 已经过滤，但
-        // matches_no_proxy 收到也得幂等。
+        // Corner-case input like `,foo.com,` is already filtered by `parse_no_proxy`, but
+        // `matches_no_proxy` must also be idempotent when it receives such input.
         let p = pats(&["", "foo.com"]);
         assert!(matches_no_proxy("foo.com", &p));
         assert!(!matches_no_proxy("bar.com", &p));
@@ -355,19 +369,22 @@ mod tests {
 
     #[tokio::test]
     async fn build_proxy_connector_does_not_reject_https_when_no_proxy_match() {
-        // 回归测试：之前 `wrap_connector(ProxyConnector::new(HttpConnector::new()))`
-        // 漏掉了 `enforce_http(false)`，导致没命中 proxy entry 的 https 请求
-        // 在 `HttpConnector::call` 阶段直接 `Err(InvalidUri/scheme is not http)`，
-        // 还没走到 TLS。这里直接 poll 一次连接，断言我们**没有**拿到那条
-        // 错误——真正的 DNS / 拒连失败是允许的（不联网）。
+        // Regression test: previously
+        // `wrap_connector(ProxyConnector::new(HttpConnector::new()))` omitted
+        // `enforce_http(false)`, causing HTTPS requests that did not match a proxy entry
+        // to fail at the `HttpConnector::call` stage with `Err(InvalidUri/scheme is not
+        // http)` before reaching TLS. Here we poll the connection once and assert that we
+        // do **not** get that error — actual DNS / connection refusal errors are
+        // acceptable (no network).
         use http::Uri;
         use tower::{Service, ServiceExt};
 
         let connector = build_proxy_connector(&ProxyConfig::Disabled).expect("build");
         let uri: Uri = "https://example.invalid/".parse().unwrap();
         let svc = connector.ready_oneshot().await;
-        // ready_oneshot 失败说明连接器自身 ready 不出来——目前 hyper-rustls
-        // / hyper-util 的 ready 都是恒 ready，所以这里不该 panic。
+        // A failure in `ready_oneshot` means the connector itself cannot become ready —
+        // currently both `hyper-rustls` and `hyper-util` are always ready, so this should
+        // not panic.
         let mut svc = svc.expect("connector ready");
         let res = svc.call(uri).await;
         if let Err(e) = res {
@@ -381,11 +398,13 @@ mod tests {
 
     #[test]
     fn intercept_closure_respects_scheme_and_no_proxy() {
-        // 直接验证闭包语义：scheme 不匹配 → false；scheme 匹配但 host
-        // 在 NO_PROXY → false；scheme 匹配且 host 不在 NO_PROXY → true。
+        // Directly verify the closure semantics: scheme mismatch → false; scheme matches
+        // but host is in NO_PROXY → false; scheme matches and host is not in NO_PROXY →
+        // true.
         let no_proxy = Arc::<[String]>::from(pats(&[".openai.com"]));
         let intercept = scheme_intercept_with_no_proxy("https", no_proxy);
-        // intercept_closure 不能直接调用——通过 Intercept::matches 验证。
+        // intercept_closure cannot be called directly — verified via
+        // `Intercept::matches`.
         struct FakeUri<'a> {
             scheme: Option<&'a str>,
             host: Option<&'a str>,

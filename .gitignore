@@ -1,6 +1,9 @@
 /target
 .worktrees/
 
+# Node 依赖：comment-polish 等脚本工具
+node_modules/
+
 # 本地 secret / 凭证：不要进 git
 .env
 .env.*

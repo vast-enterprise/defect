@@ -1,18 +1,21 @@
 //! `ProviderRegistry`: catalog of configured providers + their model candidates.
 //!
-//! 用于 ACP 层向客户端暴露 `(provider, model)` 候选列表，并按 `(vendor, model)`
-//! 对解析当前 turn 应该走哪个真实 provider。registry 本身**不实现**
-//! [`LlmProvider`]——它是装配期落地的一份只读目录，session 在每次
-//! `set_model` / `run_turn` 时按这对取出对应的真实 provider 跑。
+//! Exposes the `(provider, model)` candidate list to the ACP layer, and resolves which
+//! real provider should handle the current turn based on the `(vendor, model)` pair. The
+//! registry itself does **not** implement [`LlmProvider`] — it is a read-only directory
+//! assembled at configuration time. The session calls `set_model` / `run_turn` to look up
+//! the corresponding real provider using this pair.
 //!
-//! 设计要点：
-//! - 每个 [`ProviderEntry`] 一份显式 `Vec<ModelInfo>`：CLI 装配期把
-//!   `providers.<p>.default_model` 与 `providers.<p>.models` 翻成模型表，
-//!   保证 ACP `list_models` 不依赖具体 adapter 的 `list_models` 网络调用。
-//! - 选择键是 `(vendor, model id)` 对：同一 model id 可被多个 vendor 不同的
-//!   provider 声明（多网关同模型）。ACP `set_model` 按这对切。
-//! - 每个 entry 还携带 [`SessionCapabilitiesConfig`]——跨 provider 切换
-//!   model 时 session 需要重新 resolve hosted capabilities。
+//! Design notes:
+//! - Each [`ProviderEntry`] carries an explicit `Vec<ModelInfo>`: during CLI assembly,
+//!   `providers.<p>.default_model` and `providers.<p>.models` are flattened into a model
+//!   table, so that ACP `list_models` does not require a network call to the adapter's
+//!   own `list_models`.
+//! - The selection key is the `(vendor, model id)` pair: the same model id may be
+//!   declared by multiple providers with different vendors (multi-gateway, same model).
+//!   ACP `set_model` switches on this pair.
+//! - Each entry also carries [`SessionCapabilitiesConfig`] — when switching models across
+//!   providers, the session must re-resolve hosted capabilities.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -21,7 +24,7 @@ use super::model::{ModelInfo, ProviderInfo};
 use super::provider::LlmProvider;
 use crate::session::SessionCapabilitiesConfig;
 
-/// 一组 provider + 它公开的模型 id + 该 provider 的 session capability 配置。
+/// A provider, the model IDs it exposes, and its session capability configuration.
 #[derive(Clone)]
 pub struct ProviderEntry {
     provider: Arc<dyn LlmProvider>,
@@ -85,21 +88,25 @@ pub enum ProviderRegistryError {
     UnknownDefaultModel { provider: String, model: String },
 }
 
-/// 装配期落地的"provider 目录"。session 持有 `Arc<ProviderRegistry>`。
+/// A "provider directory" that is materialized at assembly time. The session holds an
+/// `Arc<ProviderRegistry>`.
 #[derive(Debug)]
 pub struct ProviderRegistry {
     entries: Vec<ProviderEntry>,
-    /// (vendor, model id) → entries 索引。同一 model id 可由多个 provider
-    /// （vendor 不同）声明——选择键是这对 (vendor, model)，不再是裸 model id。
+    /// (vendor, model id) → entries index. Multiple providers (with different vendors)
+    /// may declare the same model id — the lookup key is the pair (vendor, model), not
+    /// the bare model id.
     model_index: HashMap<(String, String), usize>,
-    /// 默认 (provider, model) 对应的 entries 索引 + entry.models 索引。
+    /// Index into `entries` for the default (provider, model), plus index into that
+    /// entry's `models`.
     default: (usize, usize),
 }
 
 impl ProviderRegistry {
-    /// 单 provider 单 model 的便捷构造。测试 / EchoProvider / `provider()`
-    /// builder 入口走此路径——保持 `ProviderRegistry::new` 的不变量校验
-    /// （非空 + default_model 必须落在某 entry）成立的最小形态。
+    /// A convenience constructor for a single provider with a single model.
+    /// Used by tests, `EchoProvider`, and the `provider()` builder entry point.
+    /// This is the minimal form that satisfies the invariants checked by
+    /// `ProviderRegistry::new` (non-empty + `default_model` must belong to an entry).
     #[must_use]
     pub fn single(provider: Arc<dyn LlmProvider>, default_model: ModelInfo) -> Arc<Self> {
         let vendor = provider.info().vendor;
@@ -115,20 +122,21 @@ impl ProviderRegistry {
         )
     }
 
-    /// 用一组 entries + 默认 `(provider vendor, model id)` 对装配。该对必须
-    /// 出现在某个 entry 的 `(vendor, models)` 里。
+    /// Constructs a registry from a list of entries and a default `(provider vendor,
+    /// model id)` pair. The pair must appear in the `(vendor, models)` list of some
+    /// entry.
     ///
-    /// 同一 model id 可被多个 vendor 不同的 entry 声明（多网关同模型）——选择键
-    /// 是 `(vendor, model)`。只有**同一** `(vendor, model)` 对重复出现才是配置
-    /// 错误。
+    /// The same model id may be declared by multiple entries with different vendors
+    /// (multiple gateways sharing a model) — the selection key is `(vendor, model)`. Only
+    /// a duplicate `(vendor, model)` pair is a configuration error.
     ///
     /// # Errors
     ///
-    /// - [`ProviderRegistryError::Empty`]：entries 为空
-    /// - [`ProviderRegistryError::DuplicateSelection`]：同一 `(vendor, model)`
-    ///   对出现两次
-    /// - [`ProviderRegistryError::UnknownDefaultModel`]：默认 `(vendor, model)`
-    ///   对不在任何 entry 里
+    /// - [`ProviderRegistryError::Empty`]: entries is empty
+    /// - [`ProviderRegistryError::DuplicateSelection`]: the same `(vendor, model)` pair
+    ///   appears twice
+    /// - [`ProviderRegistryError::UnknownDefaultModel`]: the default `(vendor, model)`
+    ///   pair is not present in any entry
     pub fn new(
         entries: Vec<ProviderEntry>,
         default_provider: &str,
@@ -175,7 +183,8 @@ impl ProviderRegistry {
         })
     }
 
-    /// 默认 entry——session 启动时用来初始化当前 provider/model。
+    /// The default entry used to initialize the current provider/model when a session
+    /// starts.
     #[must_use]
     pub fn default_entry(&self) -> &ProviderEntry {
         let (entry_idx, _) = self.default;
@@ -184,7 +193,7 @@ impl ProviderRegistry {
             .expect("default index validated in `new`")
     }
 
-    /// 默认 model id。
+    /// The default model ID.
     #[must_use]
     pub fn default_model(&self) -> &str {
         let (entry_idx, model_idx) = self.default;
@@ -199,8 +208,8 @@ impl ProviderRegistry {
             .expect("default model index validated in `new`")
     }
 
-    /// 按 `(vendor, model id)` 对查找对应 entry。`None` 表示当前 registry 没有
-    /// 声明此对。
+    /// Look up the entry for a given `(vendor, model id)` pair. Returns `None` if the
+    /// registry does not declare this pair.
     #[must_use]
     pub fn entry_for(&self, vendor: &str, model_id: &str) -> Option<&ProviderEntry> {
         self.model_index
@@ -208,8 +217,9 @@ impl ProviderRegistry {
             .and_then(|idx| self.entries.get(*idx))
     }
 
-    /// 按裸 model id 查找首个声明它的 entry（装配顺序）。供没有 vendor 维度的
-    /// 旧路径（如 prompt hook 的 `model` 字段）用——有歧义时取第一个。
+    /// Look up the first entry that declares the given bare model ID (in assembly order).
+    /// Used by legacy paths that lack a vendor dimension, such as the `model` field in
+    /// prompt hooks — when there are multiple matches, the first one is returned.
     #[must_use]
     pub fn first_entry_for_model(&self, model_id: &str) -> Option<&ProviderEntry> {
         self.entries
@@ -217,14 +227,14 @@ impl ProviderRegistry {
             .find(|entry| entry.models.iter().any(|m| m.id == model_id))
     }
 
-    /// 列出所有 entry（按装配顺序）。
+    /// Returns all entries in assembly order.
     #[must_use]
     pub fn entries(&self) -> &[ProviderEntry] {
         &self.entries
     }
 
-    /// 平铺出所有 (provider_info, model) 对。ACP `list_models` 用此构造
-    /// `SessionModelState::available_models`。
+    /// Flatten all (provider_info, model) pairs. ACP `list_models` uses this to build
+    /// `SessionModelState::available_models`.
     #[must_use]
     pub fn list_candidates(&self) -> Vec<ModelCandidate> {
         let mut out = Vec::new();
@@ -240,7 +250,7 @@ impl ProviderRegistry {
         out
     }
 
-    /// 按 model id 查 candidate；用于 ACP 层渲染 description。
+    /// Look up a candidate by model ID; used by the ACP layer to render the description.
     #[must_use]
     pub fn candidate_for(&self, vendor: &str, model_id: &str) -> Option<ModelCandidate> {
         let entry = self.entry_for(vendor, model_id)?;
@@ -252,7 +262,8 @@ impl ProviderRegistry {
     }
 }
 
-/// `(provider, model)` 平铺一对——ACP `list_models` 的最小投影单元。
+/// A flattened `(provider, model)` pair — the smallest projection unit of ACP
+/// `list_models`.
 #[derive(Debug, Clone)]
 pub struct ModelCandidate {
     pub provider: ProviderInfo,
@@ -281,7 +292,8 @@ mod tests {
         }
     }
 
-    /// 只带 vendor 身份、不真生成的占位 provider——registry 装配只读 `info()`。
+    /// A stub provider that carries only a vendor identity and does not actually generate
+    /// anything — used by the registry to assemble a read-only `info()`.
     struct StubProvider {
         vendor: &'static str,
     }
@@ -335,8 +347,9 @@ mod tests {
 
     #[test]
     fn same_model_id_across_distinct_vendors_resolves_per_vendor() {
-        // 两个网关（vendor 不同）都声明同一个 model id `gpt-4o`——应能装配，
-        // 且按 (vendor, model) 对各自解析到正确的 entry。
+        // Two gateways with different vendors both declare the same model id `gpt-4o` —
+        // assembly should succeed, and each (vendor, model) pair should resolve to its
+        // correct entry.
         let registry = ProviderRegistry::new(
             vec![entry("gw_a", &["gpt-4o"]), entry("gw_b", &["gpt-4o"])],
             "gw_a",
@@ -352,14 +365,14 @@ mod tests {
             .expect("gw_b/gpt-4o present");
         assert_eq!(a.provider().info().vendor, "gw_a");
         assert_eq!(b.provider().info().vendor, "gw_b");
-        // default 对解析到声明它的那家。
+        // The default entry resolves to the one that declared it.
         assert_eq!(registry.default_entry().provider().info().vendor, "gw_a");
         assert_eq!(registry.default_model(), "gpt-4o");
     }
 
     #[test]
     fn duplicate_vendor_model_pair_errors() {
-        // 同一 (vendor, model) 对重复出现才是真错误。
+        // Only a duplicate (vendor, model) pair is a real error.
         let err = ProviderRegistry::new(
             vec![entry("gw_a", &["gpt-4o"]), entry("gw_a", &["gpt-4o"])],
             "gw_a",
@@ -390,7 +403,8 @@ mod tests {
             "gpt-4o",
         )
         .unwrap();
-        // 无 vendor 维度的旧路径取首个声明它的 entry（装配顺序）。
+        // Without a vendor dimension, the old path picks the first entry that declares it
+        // (assembly order).
         assert_eq!(
             registry
                 .first_entry_for_model("gpt-4o")

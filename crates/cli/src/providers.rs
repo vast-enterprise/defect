@@ -1,17 +1,18 @@
-//! 装配 [`ProviderRegistry`] 与单个 provider 实例。
+//! Assembles a [`ProviderRegistry`] and individual provider instances.
 //!
-//! - [`build_registry`]：装配期入口，给定一份 [`LoadedConfig`] 返回
-//!   `(ProviderRegistry, TurnConfig)`，用于直接 attach 到
-//!   `DefaultAgentCore::builder().registry(...)`。
-//! - [`build_single_llm_provider`]：按 [`ProviderKind`] 构造一个 provider
-//!   实例；外部如果要"换掉某家 provider"可以独立调用此函数后自己组装
-//!   `ProviderEntry`。
-//! - [`build_provider_entries`]：为 `ProviderRegistry::new` 准备的 entries
-//!   列表——默认 entry + 用户在 `[providers.*]` 配过的其他 entry。
+//! - [`build_registry`]: entry point for assembly; given a [`LoadedConfig`], returns
+//!   `(ProviderRegistry, TurnConfig)` for direct attachment to
+//!   `DefaultAgentCore::builder().registry(...)`.
+//! - [`build_single_llm_provider`]: constructs a provider instance by [`ProviderKind`];
+//!   callers that want to "swap out a provider" can call this function independently
+//!   and assemble their own `ProviderEntry`.
+//! - [`build_provider_entries`]: the list of entries for `ProviderRegistry::new` —
+//!   the default entry plus any additional entries the user configured under
+//!   `[providers.*]`.
 //!
 //! [`ProviderKind`]: defect_config::ProviderKind
 
-// BTreeMap/HashMap + http header 类型仅 provider_headers（openai）用。
+// BTreeMap/HashMap and http header types are only used by provider_headers (openai).
 #[cfg(feature = "provider-openai")]
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -25,7 +26,7 @@ use defect_config::{
     LoadedConfig, ProviderConfigFile, ProviderConfigs, ProviderKind as ConfigProviderKind,
     ProviderProtocol,
 };
-// 仅 reasoning-effort 映射用，随 openai/deepseek 编入。
+// Only used for reasoning-effort mapping, included alongside openai/deepseek.
 #[cfg(any(feature = "provider-openai", feature = "provider-deepseek"))]
 use defect_agent::llm::ReasoningEffort as LlmReasoningEffort;
 #[cfg(any(feature = "provider-openai", feature = "provider-deepseek"))]
@@ -44,7 +45,8 @@ use http::{HeaderName, HeaderValue};
 use crate::http_stack::build_http_stack_config;
 
 pub(crate) const BEDROCK_PROVIDER: &str = "bedrock";
-// LiteLLM 走 OpenAI provider，相关常量随 provider-openai 编入。
+// LiteLLM uses the OpenAI provider; related constants are compiled in under
+// `provider-openai`.
 #[cfg(feature = "provider-openai")]
 pub(crate) const LITELLM_API_KEY_ENV: &str = "LITELLM_API_KEY";
 #[cfg(feature = "provider-openai")]
@@ -56,9 +58,9 @@ const CUSTOM_BEDROCK_DISPLAY_NAME: &str = "Amazon Bedrock";
 #[cfg(feature = "provider-openai")]
 const LITELLM_DISPLAY_NAME: &str = "LiteLLM Gateway";
 
-/// 装配 provider registry 与默认 turn config。
+/// Assembles the provider registry and default turn config.
 ///
-/// 入口给主 binary：
+/// Entry point for the main binary:
 /// ```ignore
 /// let (registry, turn_config) = defect_cli::providers::build_registry(&config).await?;
 /// DefaultAgentCore::builder().registry(registry).config(turn_config)...
@@ -74,9 +76,9 @@ pub async fn build_registry(
     Ok((Arc::new(registry), turn_config))
 }
 
-/// 按 `[providers]` 段为每个有效 `ProviderKind` 装配一个
-/// [`ProviderEntry`]——默认 provider 必在；其他 entry 仅在它们声明了
-/// `default_model` / `models` 时才装配。
+/// For each valid `ProviderKind` in the `[providers]` section, assemble a
+/// [`ProviderEntry`] — the default provider is always included; other entries are only
+/// included if they declare `default_model` or `models`.
 pub async fn build_provider_entries(
     config: &LoadedConfig,
     http_config: defect_http::HttpStackConfig,
@@ -116,12 +118,14 @@ pub async fn build_provider_entries(
     Ok(entries)
 }
 
-/// 按 `ProviderKind` 实例化一个 provider。
+/// Instantiate a provider based on [`ProviderKind`].
 ///
-/// 下游二次开发想"自己换 OpenAI 实现"时——独立调用此函数构造默认
-/// 那家，再 push 一份自定义 entry 进 [`ProviderRegistry::new`]。
-// http_config 只被 anthropic/openai/deepseek 走 hyper 的 provider 用；bedrock 走
-// AWS SDK 自己的 transport、echo 无 transport。这些组合下参数未用，按需放行。
+/// When downstream developers want to swap in their own OpenAI implementation, call this
+/// function independently to construct the default provider, then push a custom entry
+/// into [`ProviderRegistry::new`].
+// `http_config` is only used by the anthropic, openai, and deepseek providers (which use
+// hyper); bedrock uses the AWS SDK's own transport, and echo has no transport. For these
+// combinations the parameter is unused and is allowed accordingly.
 #[cfg_attr(
     not(any(
         feature = "provider-anthropic",
@@ -170,13 +174,16 @@ pub async fn build_single_llm_provider(
             })
             .map_err(|e| anyhow::anyhow!("deepseek provider init failed: {e}"))?,
         ) as Arc<dyn LlmProvider>),
-        // LiteLLM 复用 OpenAI provider 实现，因此跟随 provider-openai。
+        // LiteLLM reuses the OpenAI provider implementation, so it follows
+        // `provider-openai`.
         #[cfg(feature = "provider-openai")]
         ConfigProviderKind::Litellm => {
             build_litellm_provider(config.effective.providers.litellm.clone(), http_config)
         }
-        // 被配置选中但未编译进本 build 的 provider：hard fail，给出可操作提示。
-        // echo 永远可用、不进这条；custom 单独在下方处理。
+        // Providers selected by config but not compiled into this build: hard fail with
+        // actionable hint.
+        // Echo is always available and never reaches this branch; custom is handled
+        // separately below.
         #[cfg(not(feature = "provider-anthropic"))]
         ConfigProviderKind::Anthropic => Err(provider_not_compiled("anthropic")),
         #[cfg(not(feature = "provider-openai"))]
@@ -193,11 +200,12 @@ pub async fn build_single_llm_provider(
             else {
                 return Err(anyhow::anyhow!("missing [providers.{name}] configuration"));
             };
-            // 协议默认值：bedrock / aws 段存在 → anthropic-messages；
-            // 否则按 OpenAI Chat。这条派遣前没有兜底——`bedrock` 习惯写
-            // `[providers.bedrock] aws = { ... }` 不显式标 protocol，被默认
-            // 路由到 OpenAI builder 后报 "missing OPENAI_API_KEY"，与实际
-            // 配置完全不沾边。
+            // Protocol default: if the provider is `bedrock` or has an `aws` section, use
+            // `AnthropicMessages`; otherwise fall back to `OpenaiChat`. Previously there
+            // was no fallback before dispatch — users writing `[providers.bedrock] aws =
+            // { ... }` without an explicit `protocol` would be routed to the OpenAI
+            // builder, producing a misleading "missing OPENAI_API_KEY" error unrelated to
+            // their actual configuration.
             let protocol = provider.protocol.unwrap_or_else(|| {
                 if name == BEDROCK_PROVIDER || provider.aws.is_some() {
                     ProviderProtocol::AnthropicMessages
@@ -240,10 +248,12 @@ pub async fn build_single_llm_provider(
     }
 }
 
-/// 被配置选中、但未通过 `provider-*` feature 编译进本 build 的 provider —— hard
-/// fail 并提示要开哪个 feature（遵循 fail-loud：不静默回退到 echo）。
+/// A provider that was selected by configuration but not compiled into this build via a
+/// `provider-*` feature — hard fail with a message indicating which feature to enable
+/// (following the fail-loud principle: no silent fallback to echo).
 ///
-/// 全 provider 开启时没有任何调用点，故仅在至少裁掉一家时编入。
+/// This function has no call sites when all providers are enabled, so it is only compiled
+/// when at least one provider is excluded.
 #[cfg(not(all(
     feature = "provider-anthropic",
     feature = "provider-bedrock",
@@ -258,9 +268,10 @@ fn provider_not_compiled(feature_suffix: &str) -> anyhow::Error {
     )
 }
 
-/// 把全局 [`capabilities`] 与 `providers.<p>.capabilities` 合并，再投影成
-/// agent 侧的 [`SessionCapabilitiesConfig`]。供每个 entry 自带——这样
-/// session 跨 provider 切 model 时也能拿到正确的 capability 配置。
+/// Merge the global [`capabilities`] with `providers.<p>.capabilities` and project the
+/// result into the agent-side [`SessionCapabilitiesConfig`]. Each entry carries its own
+/// copy so that the session can obtain the correct capability configuration when
+/// switching models across providers.
 ///
 /// [`capabilities`]: defect_config::CapabilitiesConfig
 fn provider_session_capabilities(
@@ -339,7 +350,7 @@ fn entry_models(
 ) -> Vec<ModelInfo> {
     let mut models: Vec<ModelInfo> = Vec::new();
     if let Some(provider) = provider {
-        // `default_model` 只有 id（裸字符串），无展示名。
+        // `default_model` is just an ID (a bare string) with no display name.
         if let Some(default_model) = &provider.default_model {
             push_unique_model(&mut models, default_model, None);
         }
@@ -357,9 +368,10 @@ fn entry_models(
     models
 }
 
-/// 按 id 去重地追加一个 [`ModelInfo`]。已存在同 id 时：若新声明带展示名而旧的
-/// 没有，用新的补上（让 `[[models]]` 里的 `name` 覆盖来自 `default_model` 的
-/// 裸 id 项）；否则保持原样。
+/// Append a [`ModelInfo`] deduplicated by `id`. If an entry with the same `id` already
+/// exists and the new one has a display name while the existing one does not, update the
+/// existing entry with the new name (so that a `name` from `[[models]]` overrides a bare
+/// id from `default_model`); otherwise leave it unchanged.
 fn push_unique_model(models: &mut Vec<ModelInfo>, id: &str, name: Option<&str>) {
     if let Some(existing) = models.iter_mut().find(|m| m.id == id) {
         if existing.display_name.is_none() {
@@ -405,7 +417,8 @@ async fn build_bedrock_provider(
         ),
         base_url: provider.base_url,
         default_model: provider.default_model,
-        // Bedrock provider 的 model 列表只需 id；展示名在 entry_models 链路另取。
+        // For the Bedrock provider's model list, only the id is needed; display names are
+        // fetched separately in the `entry_models` pipeline.
         models: provider
             .models
             .unwrap_or_default()
@@ -448,9 +461,9 @@ fn build_openai_provider(
     Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
 }
 
-/// 给 OpenAI-兼容 provider 填默认 base_url / api_key_env。
+/// Fill default `base_url` / `api_key_env` for OpenAI-compatible providers.
 ///
-/// `pub(crate)` 暴露给 unit test——LiteLLM 装配走这条路径。
+/// `pub(crate)` is exposed for unit tests — LiteLLM assembly uses this path.
 #[cfg(feature = "provider-openai")]
 pub(crate) struct ProviderDefaults {
     pub(crate) base_url: &'static str,

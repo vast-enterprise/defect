@@ -1,34 +1,43 @@
-//! 单轮无人值守模式 —— `defect --message <prompt>`。
+//! Single-turn unattended mode —— `defect --message <prompt>`.
 //!
-//! 定位：CI / 脚本里"跑一个 prompt、产出结果、按成败退出"。与交互 REPL、ACP
-//! server 三者**平级**，只共享 [`AgentCore`] 内核：
+//! Purpose: in CI / scripts, "run one prompt, produce a result, exit by
+//! success/failure". On **equal footing** with the interactive REPL and the
+//! ACP server; the three only share the [`AgentCore`] kernel:
 //!
-//! - **不**复用 REPL 的 [`crate::repl`] 渲染（那套带 ANSI / 行编辑，绑死在
-//!   `repl` feature 的 crossterm/owo-colors 上）。本模块自带极简、无 ANSI 的
-//!   事件投影，可在 `--no-default-features --features oneshot` 下编出不含 TUI
-//!   依赖的精简 CI 二进制。
-//! - 走进程内直连 `AgentCore`（像 REPL），不走 wire——CI 跑的是自己的 agent，
-//!   不需要 ACP 的跨进程通用性。
+//! - Does **not** reuse the REPL's [`crate::repl`] rendering (that stack carries
+//!   ANSI / line editing, bound to the `repl` feature's crossterm/owo-colors).
+//!   This module ships its own minimal, ANSI-free event projection, so under
+//!   `--no-default-features --features oneshot` it builds a slim CI binary with
+//!   no TUI dependencies.
+//! - Connects in-process directly to `AgentCore` (like the REPL), bypassing the
+//!   wire —— CI runs its own agent and does not need ACP's cross-process
+//!   generality.
 //!
-//! ## 输出约定：stdout = agent 内容，stderr = 框架日志
+//! ## Output contract: stdout = agent content, stderr = framework logs
 //!
-//! agent 的**全部内容**（助手正文 / 思考 / 工具调用）按事件顺序打到 **stdout**
-//! 一条流；框架级诊断（被拒警告、turn error、goal 未达成）走 `tracing`——而
-//! `tracing` 由 `defect_obs::init_tracing` 统一写 **stderr**。于是 `2>/dev/null`
-//! 干净滤掉框架噪音、保留 agent 完整工作记录；两条流不再共用光标、不再黏连。
+//! **All agent content** (assistant body / thinking / tool calls) goes to
+//! **stdout** as a single stream in event order; framework-level diagnostics
+//! (denial warnings, turn errors, unreached goals) go through `tracing` —— and
+//! `tracing` is uniformly written to **stderr** by `defect_obs::init_tracing`.
+//! So `2>/dev/null` cleanly filters out framework noise while preserving the
+//! agent's complete work record; the two streams no longer share a cursor or
+//! run together.
 //!
-//! ## 退出码（CI 判断成败的命脉）
+//! ## Exit codes (CI's lifeline for judging success/failure)
 //!
-//! 优先级从高到低：`TurnError` > `Refusal` > `MaxTokens`/`MaxTurnRequests` >
-//! `Cancelled` > 无人值守被拒(`denied`) > `EndTurn`(0)。见 `ExitOutcome`。
+//! Priority high to low: `TurnError` > `Refusal` > `MaxTokens`/`MaxTurnRequests`
+//! > `Cancelled` > unattended denial (`denied`) > `EndTurn`(0). See `ExitOutcome`.
 //!
-//! ## 非交互权限
+//! ## Non-interactive permissions
 //!
-//! 调用方（`bin/cli.rs`）负责把 session 的 policy 包一层
-//! [`defect_agent::policy::NonInteractivePolicy`]，使 `Ask` 降级为 `Deny`、
-//! 不在无 TTY 环境挂死等输入。本模块监听事件流里的 `PolicyDecision::Deny`：
-//! 一旦发生，经 `tracing` 打警告（→ stderr）并置 `denied` 标志，turn 即便正常
-//! `EndTurn` 也用非 0 退出码——fail loud，让 CI 知道"有操作被拒、本次结果不可信"。
+//! The caller (`bin/cli.rs`) is responsible for wrapping the session's policy in
+//! [`defect_agent::policy::NonInteractivePolicy`], so that `Ask` degrades to
+//! `Deny` and it does not hang waiting for input in a TTY-less environment. This
+//! module listens for `PolicyDecision::Deny` in the event stream: once one
+//! occurs, it logs a warning via `tracing` (→ stderr) and sets the `denied`
+//! flag, so even if the turn ends normally with `EndTurn` it exits with a
+//! non-zero code —— fail loud, letting CI know "an operation was denied, this
+//! result is not trustworthy".
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,17 +54,20 @@ use tokio::io::{AsyncWriteExt, Stdout};
 use crate::args::OutputFormat;
 use crate::session_open::open_session;
 
-/// 跑一个单轮 prompt 并返回进程退出码。
+/// Runs a single-turn prompt and returns the process exit code.
 ///
-/// `track_denied = true` 时（调用方包了 `NonInteractivePolicy`）才把
-/// `PolicyDecision::Deny` 视作"无人值守缺口"参与退出码——`deny-all` 等用户
-/// 明知会拒的模式下应传 `false`，避免误报非 0。
+/// Only when `track_denied = true` (the caller wrapped `NonInteractivePolicy`)
+/// is `PolicyDecision::Deny` treated as an "unattended gap" that affects the
+/// exit code —— modes like `deny-all`, where the user knowingly expects
+/// denials, should pass `false` to avoid spuriously reporting non-zero.
 ///
 /// # Errors
 ///
-/// session 开启失败、stdin 读取失败、stdout/stderr 写入失败。
-/// `goal` 为 `Some` 时（`--goal` 模式）：turn 结束后若目标未达成（续命耗尽仍没调
-/// `goal_done`），用 Exhausted 退出码——避免 CI 把"跑满轮数仍未达成"误判成功。
+/// Session open failure, stdin read failure, stdout/stderr write failure.
+/// When `goal` is `Some` (`--goal` mode): if the goal is unreached after the
+/// turn ends (turns exhausted without ever calling `goal_done`), exits with the
+/// Exhausted code —— prevents CI from mistaking "ran out of turns without
+/// reaching the goal" for success.
 pub async fn run(
     agent: Arc<dyn AgentCore>,
     cwd: PathBuf,
@@ -71,8 +83,10 @@ pub async fn run(
 
     let session = open_session(&agent, &cwd, resume).await?;
 
-    // 循环外订阅一次，跨本轮排空（含 driver 自主续转 turn）——与交互 REPL /
-    // ACP event pump 同构。turn future 只给最终 StopReason，本轮内容经事件流推。
+    // Subscribe once outside the loop, draining across this turn (including the
+    // driver's autonomous turn continuations) —— isomorphic to the interactive
+    // REPL / ACP event pump. The turn future only yields the final StopReason;
+    // this turn's content is pushed through the event stream.
     let mut events = session.subscribe();
     let mut sink = EventSink::new(format, track_denied);
 
@@ -82,8 +96,10 @@ pub async fn run(
 
     let result = loop {
         tokio::select! {
-            // biased + 先排事件：turn future 与事件流可能同时就绪（turn 飞快结束、
-            // 尾部事件已在 buffer）。先 poll events 保证不漏渲染。
+            // biased + drain events first: the turn future and the event stream
+            // may become ready at the same time (turn finishes fast, trailing
+            // events already in the buffer). Poll events first to avoid dropping
+            // any rendering.
             biased;
             ev = events.next() => {
                 if let Some(ev) = ev {
@@ -94,12 +110,14 @@ pub async fn run(
         }
     };
 
-    // turn 已结束，buffer 里可能还有刚 send、未被 poll 的尾部事件——立即就绪的全排掉。
+    // Turn has ended, but the buffer may still hold just-sent, not-yet-polled
+    // trailing events —— drain everything that is immediately ready.
     while let Some(Some(ev)) = events.next().now_or_never() {
         sink.emit(&mut out, ev).await?;
     }
 
-    // goal 模式：turn 正常结束但目标未达成（续命耗尽仍没调 goal_done）→ Exhausted。
+    // goal mode: turn ended normally but the goal is unreached (turns exhausted
+    // without ever calling goal_done) → Exhausted.
     let goal_unreached = goal.as_ref().is_some_and(|g| !g.is_reached());
     if goal_unreached {
         tracing::warn!(
@@ -112,7 +130,8 @@ pub async fn run(
     Ok(outcome.code())
 }
 
-/// 解析 prompt 来源：`-` 或在 stdin 被管道时从 stdin 读，否则用字面值。
+/// Resolves the prompt source: `-`, or read from stdin when stdin is piped;
+/// otherwise use the literal value.
 async fn resolve_prompt(message: String) -> anyhow::Result<String> {
     use std::io::IsTerminal;
 
@@ -127,7 +146,7 @@ async fn resolve_prompt(message: String) -> anyhow::Result<String> {
     }
 }
 
-/// turn 结果到进程退出码的归约。
+/// Reduction from the turn result to the process exit code.
 enum ExitOutcome {
     Success,
     Denied,
@@ -135,7 +154,8 @@ enum ExitOutcome {
     MaxTokens,
     Refusal,
     Error,
-    /// goal 模式：turn 正常结束但目标未达成（续命耗尽 / 模型放弃）。
+    /// goal mode: turn ended normally but the goal is unreached (turns exhausted
+    /// / model gave up).
     GoalUnreached,
 }
 
@@ -146,14 +166,15 @@ impl ExitOutcome {
             Ok(StopReason::Refusal) => Self::Refusal,
             Ok(StopReason::MaxTokens) | Ok(StopReason::MaxTurnRequests) => Self::MaxTokens,
             Ok(StopReason::Cancelled) => Self::Cancelled,
-            // EndTurn（及未来新增的成功类终态）：被拒过 > 目标未达成 > 成功。
+            // EndTurn (and any future success-class terminal states): denied >
+            // goal unreached > success.
             Ok(_) if denied => Self::Denied,
             Ok(_) if goal_unreached => Self::GoalUnreached,
             Ok(_) => Self::Success,
         }
     }
 
-    /// 数值退出码（0 = 成功）。
+    /// Numeric exit code (0 = success).
     fn raw(&self) -> u8 {
         match self {
             Self::Success => 0,
@@ -171,17 +192,25 @@ impl ExitOutcome {
     }
 }
 
-/// 事件投影器：把 [`AgentEvent`] 流按 [`OutputFormat`] 写到 stdout/stderr。
+/// Event projector: writes the [`AgentEvent`] stream to stdout/stderr according
+/// to the [`OutputFormat`].
 struct EventSink {
     format: OutputFormat,
     track_denied: bool,
-    /// 是否发生过无人值守被拒。
+    /// Whether an unattended denial has occurred.
     denied: bool,
-    /// `ToolCallId → 工具名`，用于在 `PolicyDecision::Deny` 时报出是哪个工具。
+    /// `ToolCallId → tool name`, used to report which tool was involved on a
+    /// `PolicyDecision::Deny`.
     tool_names: HashMap<ToolCallId, String>,
-    /// text 格式下：stdout 上是否还停在一行中间（最后写的不是 `\n`）。goal 模式下
-    /// 多轮助手输出之间靠它补换行，避免「上一段尾巴 + 下一段开头」黏成一行。
+    /// In text format: whether stdout is still mid-line (the last thing written
+    /// was not a `\n`). In goal mode it inserts newlines between multi-turn
+    /// assistant outputs, avoiding "previous tail + next head" running together
+    /// on one line.
     mid_line: bool,
+    /// In text format: whether we are currently inside a thinking block. A
+    /// thinking block's multiple deltas share one `[thinking] ` prefix (printed
+    /// only on the first delta), so consecutive deltas merge into one block.
+    in_thought: bool,
 }
 
 impl EventSink {
@@ -192,17 +221,19 @@ impl EventSink {
             denied: false,
             tool_names: HashMap::new(),
             mid_line: false,
+            in_thought: false,
         }
     }
 
     async fn emit(&mut self, out: &mut Stdout, event: AgentEvent) -> anyhow::Result<()> {
-        // 记录工具名（任何格式都要，用于被拒报告）。
+        // Record tool names (needed for every format, used for denial reports).
         if let AgentEvent::ToolCallStarted { id, name, fields } = &event {
             let label = fields.title.clone().unwrap_or_else(|| name.clone());
             self.tool_names.insert(id.clone(), label);
         }
 
-        // 无人值守被拒：框架级诊断走 tracing（→ stderr）+ 置标志（fail loud）。
+        // Unattended denial: framework-level diagnostic via tracing (→ stderr) +
+        // set the flag (fail loud).
         if self.track_denied
             && let AgentEvent::PolicyDecision {
                 id,
@@ -228,43 +259,60 @@ impl EventSink {
         }
     }
 
-    /// NDJSON：每个事件一行。`AgentEvent` 已 derive Serialize（`LlmCallStarted.request`
-    /// 是 `#[serde(skip)]`，不会进 JSON）。
+    /// NDJSON: one line per event. `AgentEvent` already derives Serialize
+    /// (`LlmCallStarted.request` is `#[serde(skip)]`, so it never enters JSON).
     async fn emit_json(&self, out: &mut Stdout, event: &AgentEvent) -> anyhow::Result<()> {
         let line = serde_json::to_string(event)?;
         write_raw(out, &line).await?;
         write_raw(out, "\n").await
     }
 
-    /// 纯文本：**agent 的全部内容**（正文 / 思考 / 工具）都到 stdout，按事件顺序
-    /// 一条流——框架级日志（tracing）走 stderr，两者井水不犯河水（见模块头 §输出约定）。
+    /// Plain text: **all agent content** (body / thinking / tools) goes to
+    /// stdout as a single stream in event order —— framework logs (tracing) go
+    /// to stderr, the two never interfere (see the module header §output
+    /// contract).
     ///
-    /// 边界换行：助手正文常无尾换行，而紧随其后可能是思考 / 工具行或下一轮生成。
-    /// 在切到「非正文行」（思考 / 工具）或开新生成段前，若 stdout 还停在行中间就补
-    /// 一个 `\n`，让每段各占整行、不黏连。
+    /// Boundary newlines: assistant body often has no trailing newline, while
+    /// what immediately follows may be a thinking / tool line or the next
+    /// generation. Before switching to a "non-body line" (thinking / tool) or
+    /// starting a new generation segment, if stdout is still mid-line insert a
+    /// `\n`, so each segment occupies whole lines and does not run together.
     async fn emit_text(&mut self, out: &mut Stdout, event: &AgentEvent) -> anyhow::Result<()> {
         match event {
-            // 新一次 LLM 生成开始：上一段助手正文若没换行，先补一个再开新段。
+            // A new LLM generation starts: if the previous assistant body had no
+            // newline, insert one before starting the new segment.
             AgentEvent::LlmCallStarted { .. } | AgentEvent::TurnEnded { .. } => {
+                self.end_thought(out).await?;
                 self.break_line(out).await?;
             }
             AgentEvent::AssistantText { content } => {
                 if let Some(text) = block_text(content)
                     && !text.is_empty()
                 {
+                    self.end_thought(out).await?;
                     write_raw(out, &text).await?;
                     out.flush().await?;
                     self.mid_line = !text.ends_with('\n');
                 }
             }
+            // A thinking block's multiple deltas share one `[thinking] ` prefix
+            // —— consecutive deltas merge, with each delta written raw.
             AgentEvent::AssistantThought { content } => {
-                if let Some(text) = block_text(content) {
-                    self.break_line(out).await?;
-                    write(out, &format!("[thinking] {text}\n")).await?;
+                if let Some(text) = block_text(content)
+                    && !text.is_empty()
+                {
+                    if !self.in_thought {
+                        self.break_line(out).await?;
+                        write(out, "[thinking] ").await?;
+                        self.in_thought = true;
+                    }
+                    write_raw(out, &text).await?;
                     out.flush().await?;
+                    self.mid_line = !text.ends_with('\n');
                 }
             }
             AgentEvent::ToolCallStarted { name, fields, .. } => {
+                self.end_thought(out).await?;
                 self.break_line(out).await?;
                 let title = fields.title.clone().unwrap_or_else(|| name.clone());
                 write(out, &format!("[tool] {title}\n")).await?;
@@ -275,8 +323,21 @@ impl EventSink {
         Ok(())
     }
 
-    /// 若 stdout 还停在行中间，补一个 `\n` 收尾并 flush。用于在「非正文行」（思考 /
-    /// 工具）或新生成段前，让上一段助手正文独占整行——同一条流里也要按行分隔。
+    /// Ends the current thinking block: if inside one, clears the flag and
+    /// inserts a `\n`. Called before switching to body / tool / a new generation
+    /// / turn end, so the thinking block occupies whole lines.
+    async fn end_thought(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
+        if self.in_thought {
+            self.in_thought = false;
+            self.break_line(out).await?;
+        }
+        Ok(())
+    }
+
+    /// If stdout is still mid-line, insert a `\n` to close it and flush. Used
+    /// before a "non-body line" (thinking / tool) or a new generation segment,
+    /// so the previous assistant body occupies its own whole line —— even within
+    /// a single stream, content is separated by line.
     async fn break_line(&mut self, out: &mut Stdout) -> anyhow::Result<()> {
         if self.mid_line {
             write_raw(out, "\n").await?;
@@ -286,7 +347,8 @@ impl EventSink {
         Ok(())
     }
 
-    /// turn 结束后的收尾输出。框架级诊断（turn error）走 tracing（→ stderr）。
+    /// Wrap-up output after the turn ends. Framework-level diagnostics (turn
+    /// errors) go through tracing (→ stderr).
     async fn finish(
         &self,
         out: &mut Stdout,
@@ -298,14 +360,16 @@ impl EventSink {
         }
         match self.format {
             OutputFormat::Text => {
-                // 助手正文流式无尾随换行时补一个，避免和后续 shell 提示符黏在一起；
-                // 已在行首（mid_line=false）则不补，免得多出一行空白。
+                // When the streamed assistant body has no trailing newline,
+                // insert one to avoid running into the following shell prompt;
+                // if already at line start (mid_line=false) skip it, to not emit
+                // an extra blank line.
                 if self.mid_line {
                     write_raw(out, "\n").await?;
                 }
             }
             OutputFormat::Json => {
-                // 末行汇总：最终状态 + 退出码语义。
+                // Final summary line: terminal state + exit-code semantics.
                 let summary = serde_json::json!({
                     "type": "oneshot_result",
                     "stop_reason": result.as_ref().ok().map(|r| format!("{r:?}")),
@@ -322,7 +386,7 @@ impl EventSink {
     }
 }
 
-/// 从 [`ContentBlock`] 取文本；非文本块返回 `None`。
+/// Extracts text from a [`ContentBlock`]; non-text blocks return `None`.
 fn block_text(block: &ContentBlock) -> Option<String> {
     match block {
         ContentBlock::Text(t) => Some(t.text.clone()),
@@ -330,7 +394,7 @@ fn block_text(block: &ContentBlock) -> Option<String> {
     }
 }
 
-/// 写一段字符串到任意 async writer。
+/// Writes a string to any async writer.
 async fn write<W>(out: &mut W, s: &str) -> anyhow::Result<()>
 where
     W: AsyncWriteExt + Unpin,
@@ -339,7 +403,8 @@ where
     Ok(())
 }
 
-/// `write` 的别名，语义上强调"不加任何修饰原样写"。
+/// Alias for `write`, semantically emphasizing "write as-is, with no
+/// decoration".
 async fn write_raw<W>(out: &mut W, s: &str) -> anyhow::Result<()>
 where
     W: AsyncWriteExt + Unpin,

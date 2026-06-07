@@ -1,37 +1,44 @@
-//! 运行环境上下文：被注入 system prompt `# Environment` 段的事实信息。
+//! Environment context: factual information injected into the `# Environment` section of
+//! the system prompt.
 //!
-//! 聚合体 [`RunningContext`] 持有「随会话变化」的部分（接入方式、cwd），
-//! 「整进程不变」的平台 / 版本 / shell 探测结果用 [`OnceLock`] 缓存——
-//! `os_info::get()` 会读文件/跑探测，每个 turn 重算并不划算。
+//! The [`RunningContext`] aggregate holds session-varying parts (access method, cwd),
+//! while platform/version/shell detection results that are invariant for the entire
+//! process are cached with [`OnceLock`] — `os_info::get()` reads files and runs probes,
+//! so recomputing it every turn is not worthwhile.
 
 use std::path::Path;
 use std::sync::OnceLock;
 
-/// agent 被如何接入——决定它对文件与命令执行环境的认知。
+/// How the agent is connected — determines its understanding of the file and command
+/// execution environment.
 ///
-/// 注意：defect 的命令行二进制本身就是跑在 stdio 上的 ACP server，当前真实
-/// 路径都走 [`Frontend::Acp`]。[`Frontend::Cli`] / [`Frontend::Headless`] 是
-/// 为将来的形态预留的变体（裸命令行 user、服务器后台服务）。
+/// Note: The `defect` CLI binary itself runs as an ACP server over stdio; all real paths
+/// currently go through [`Frontend::Acp`]. [`Frontend::Cli`] and [`Frontend::Headless`]
+/// are variants reserved for future forms (bare CLI user, server backend service).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Frontend {
-    /// 命令行直接交互（预留：未来的本地 CLI user 模式）。
+    /// Direct CLI interaction (reserved for a future local CLI user mode).
     Cli,
-    /// 经 ACP 协议接入（编辑器 / IDE 客户端）。
+    /// Accessed via the ACP protocol (editor / IDE client).
     ///
-    /// `fs_delegated` / `shell_delegated` 来自 ACP `initialize` 握手协商：
-    /// `true` 表示文件读写 / 命令执行委托给客户端代理，`false` 表示在
-    /// 本地直接执行。agent 据此知道自己面对的是本地环境还是远端代理。
+    /// `fs_delegated` / `shell_delegated` come from the ACP `initialize` handshake
+    /// negotiation:
+    /// `true` means file I/O / command execution is delegated to the client proxy,
+    /// `false` means
+    /// executed locally. The agent uses this to know whether it is facing a local
+    /// environment or a remote proxy.
     Acp {
         fs_delegated: bool,
         shell_delegated: bool,
     },
-    /// 无人值守（预留：服务器上的后台服务）。
+    /// Headless (reserved for a background service on the server).
     Headless,
 }
 
 impl Frontend {
-    /// 文件系统是否委托给客户端代理。仅 [`Frontend::Acp`] 且协商出
-    /// `fs_delegated = true` 时为真；其余形态都在本地直接读写。
+    /// Whether the filesystem is delegated to the client proxy. Only true for
+    /// [`Frontend::Acp`] when `fs_delegated = true` is negotiated; all other variants
+    /// read and write directly on the local side.
     fn fs_delegated(self) -> bool {
         matches!(
             self,
@@ -42,7 +49,7 @@ impl Frontend {
         )
     }
 
-    /// 渲染进 `# Environment` 段的单行描述。
+    /// A single-line description rendered into the `# Environment` section.
     fn describe(self) -> String {
         match self {
             Self::Cli => "CLI".to_owned(),
@@ -63,10 +70,10 @@ fn delegation(delegated: bool) -> &'static str {
     if delegated { "delegated" } else { "local" }
 }
 
-/// 注入 system prompt 的运行环境上下文。
+/// Injects runtime environment context into the system prompt.
 ///
-/// 静态部分（平台、版本、shell）由本类型内部探测并缓存；调用方只需提供
-/// 「随会话变化」的 [`Frontend`] 与 cwd。
+/// Static parts (platform, version, shell) are detected and cached internally by this
+/// type; callers only need to provide the session‑varying [`Frontend`] and `cwd`.
 pub struct RunningContext<'a> {
     pub frontend: Frontend,
     pub cwd: &'a Path,
@@ -77,8 +84,9 @@ impl<'a> RunningContext<'a> {
         Self { frontend, cwd }
     }
 
-    /// 渲染 `# Environment` 段的正文（不含标题与分隔线，由
-    /// [`crate::session::resolve_system_prompt`] 负责包裹）。
+    /// Renders the body of the `# Environment` section (the title and separator are
+    /// handled by
+    /// [`crate::session::resolve_system_prompt`]).
     pub fn render(&self) -> String {
         let mut lines = Vec::with_capacity(6);
         lines.push(format!("- platform: {}", platform_line()));
@@ -86,8 +94,10 @@ impl<'a> RunningContext<'a> {
         lines.push(format!("- frontend: {}", self.frontend.describe()));
         lines.push(format!("- cwd: {}", self.cwd.display()));
         lines.push(format!("- shell: {}", shell_line()));
-        // 委托文件系统（ACP）的反向通道只能传文本，read_file 读图片会失败。
-        // 明确告诉模型别对图片用 read_file，避免无谓的报错往返。
+        // The delegated filesystem (ACP) backchannel only supports text; `read_file` will
+        // fail on images.
+        // Explicitly instruct the model not to use `read_file` on images to avoid
+        // unnecessary error round-trips.
         if self.frontend.fs_delegated() {
             lines.push(
                 "- note: the filesystem is delegated and only supports text reads; \
@@ -99,8 +109,8 @@ impl<'a> RunningContext<'a> {
     }
 }
 
-/// `linux / x86_64 (Ubuntu 22.04)` 形式。OS / 架构来自编译期 std 常量，
-/// 发行版与版本来自运行期 `os_info` 探测。整进程缓存。
+/// Format: `linux / x86_64 (Ubuntu 22.04)`. OS/arch from compile-time `std` constants,
+/// distro and version from runtime `os_info` detection. Cached for the entire process.
 fn platform_line() -> &'static str {
     static PLATFORM: OnceLock<String> = OnceLock::new();
     PLATFORM.get_or_init(|| {
@@ -115,7 +125,8 @@ fn platform_line() -> &'static str {
     })
 }
 
-/// 默认 shell：读 `$SHELL`，缺失时 `unknown`。整进程缓存。
+/// Default shell: reads `$SHELL`, falls back to `unknown`. Cached for the process
+/// lifetime.
 fn shell_line() -> &'static str {
     static SHELL: OnceLock<String> = OnceLock::new();
     SHELL.get_or_init(|| std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_owned()))

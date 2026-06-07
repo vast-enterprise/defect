@@ -6,9 +6,9 @@ use crate::llm::{CompletionRequest, Message, MessageContent};
 const HASH_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const HASH_PRIME: u64 = 0x0000_0001_0000_01b3;
 
-/// 相邻 LLM 请求稳定性审计器。
+/// Auditor for stability between consecutive LLM requests.
 ///
-/// 仅输出结构化 tracing 日志，不改变请求内容。
+/// Only emits structured tracing logs; does not modify request content.
 #[derive(Default)]
 pub(crate) struct RequestAuditTracker {
     previous: Mutex<Option<RequestAuditSnapshot>>,

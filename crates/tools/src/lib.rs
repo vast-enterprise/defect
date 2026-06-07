@@ -1,7 +1,8 @@
-//! 内置工具集。
+//! Built-in tool set.
 //!
-//! 实现 [`defect_agent`] 中的 `Tool` trait，提供文件读写、bash 执行、
-//! 文本检索等基础能力。每个工具放在独立子模块中，后续按需启用。
+//! Implements the `Tool` trait from [`defect_agent`], providing basic capabilities such
+//! as file I/O, bash execution, and text search. Each tool resides in its own submodule
+//! and can be enabled as needed.
 
 #![cfg_attr(not(test), warn(clippy::indexing_slicing, clippy::unwrap_used))]
 

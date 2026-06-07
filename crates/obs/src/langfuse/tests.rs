@@ -1,7 +1,9 @@
-//! Langfuse model / projector 的单元测试。
+//! Unit tests for the Langfuse model and projector.
 //!
-//! model 测试锁定 wire 契约（字段名 camelCase、type 判别值、None 跳过）；
-//! projector 测试锁定事件翻译（trace/generation/span 结构、usage 映射、id 配对）。
+//! Model tests lock down the wire contract (camelCase field names, type discriminant
+//! values, `None` skipping);
+//! projector tests lock down event translation (trace/generation/span structure, usage
+//! mapping, id pairing).
 
 use agent_client_protocol_schema::{
     ContentBlock, StopReason, TextContent, ToolCallId, ToolCallStatus, ToolCallUpdateFields,
@@ -15,7 +17,7 @@ use super::model::{
 };
 use super::projector::TraceProjector;
 
-/// 确定性 id 生成器：`env-1`、`env-2`…，便于断言。
+/// Deterministic ID generator: `id-1`, `id-2`, …, for easy assertion.
 fn counter_ids() -> impl FnMut() -> String {
     let mut n = 0u32;
     move || {
@@ -30,7 +32,7 @@ fn text_block(s: &str) -> ContentBlock {
     ContentBlock::Text(TextContent::new(s.to_string()))
 }
 
-/// 一个最小请求快照：system + 一条 user 文本消息。
+/// A minimal request snapshot: system prompt + one user text message.
 fn snapshot(system: Option<&str>, user: &str) -> std::sync::Arc<LlmRequestSnapshot> {
     std::sync::Arc::new(LlmRequestSnapshot {
         system: system.map(std::sync::Arc::from),
@@ -63,12 +65,12 @@ fn trace_create_envelope_shape() {
     assert_eq!(v["id"], "env-1");
     assert_eq!(v["type"], "trace-create");
     assert_eq!(v["timestamp"], "2026-05-29T00:00:00Z");
-    // body 字段 camelCase，sessionId 而非 session_id。
+    // The `body` field uses camelCase: `sessionId` instead of `session_id`.
     assert_eq!(v["body"]["id"], "trace-1");
     assert_eq!(v["body"]["sessionId"], "sess-1");
     assert_eq!(v["body"]["name"], "turn");
     assert_eq!(v["body"]["input"], "hello");
-    // 未设的字段不出现在 JSON 里。
+    // Unset fields are omitted from the JSON output.
     assert!(v["body"].get("output").is_none());
     assert!(v["body"].get("metadata").is_none());
 }
@@ -105,7 +107,7 @@ fn generation_body_usage_details_camel_case() {
     assert_eq!(v["body"]["usageDetails"]["cache_read_input_tokens"], 8);
     assert_eq!(v["body"]["level"], "ERROR");
     assert_eq!(v["body"]["statusMessage"], "boom");
-    // parentObservationId 为 None 时不出现。
+    // parentObservationId is omitted when it is None.
     assert!(v["body"].get("parentObservationId").is_none());
 }
 
@@ -127,22 +129,26 @@ fn span_with_parent_observation() {
     let v = serde_json::to_value(&ev).unwrap();
     assert_eq!(v["type"], "span-create");
     assert_eq!(v["body"]["parentObservationId"], "gen-1");
-    // span 不带 model / usageDetails。
+    // Span has no model / usageDetails.
     assert!(v["body"].get("model").is_none());
     assert!(v["body"].get("usageDetails").is_none());
 }
 
-// ---- ingestion response 解析（207 误报修复回归） ----
+// ---- ingestion response parsing (207 false-positive fix regression) ----
 
 #[test]
 fn parses_207_all_success_as_no_errors() {
-    // 这是真实 207 响应体（全部成功）——errors 为空，不应被当作错误。
+    // This is a real 207 response body (all success) — errors is empty and should not be
+    // treated as an error.
     let body =
         r#"{"successes":[{"id":"be5dbe21-a204-407b-bf52-6ec031164650","status":201}],"errors":[]}"#;
     let parsed: IngestionResponse = serde_json::from_str(body).unwrap();
     assert_eq!(parsed.successes.len(), 1);
     assert_eq!(parsed.successes[0].status, 201);
-    assert!(parsed.errors.is_empty(), "全成功的 207 不应有 errors");
+    assert!(
+        parsed.errors.is_empty(),
+        "a fully successful 207 should have no errors"
+    );
 }
 
 #[test]
@@ -157,7 +163,8 @@ fn parses_207_with_partial_errors() {
 
 // ---- projector ----
 
-/// 把 projector 产出的 ingestion 事件序列化成 `Vec<Value>`，便于断言。
+/// Serializes the ingestion events produced by the projector into a `Vec<Value>` for
+/// easier assertion.
 fn project_json(
     proj: &mut TraceProjector,
     event: AgentEvent,
@@ -176,7 +183,7 @@ fn turn_started_emits_trace_create_with_session() {
     let out = project_json(&mut proj, AgentEvent::TurnStarted, &mut ids);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["type"], "trace-create");
-    // trace_id 是第一个分配的 id；信封 id 是第二个。
+    // The trace_id is the first allocated id; the envelope id is the second.
     assert_eq!(out[0]["body"]["id"], "id-1");
     assert_eq!(out[0]["id"], "id-2");
     assert_eq!(out[0]["body"]["sessionId"], "sess-abc");
@@ -189,7 +196,8 @@ fn llm_call_lifecycle_creates_step_then_generation() {
     let mut ids = counter_ids();
     project_json(&mut proj, AgentEvent::TurnStarted, &mut ids); // trace_id = id-1
 
-    // LlmCallStarted → 先建 step span（容器），再建挂在 step 下的 generation。
+    // LlmCallStarted first creates a step span (the container), then creates a generation
+    // attached under that step.
     let created = project_json(
         &mut proj,
         AgentEvent::LlmCallStarted {
@@ -199,12 +207,12 @@ fn llm_call_lifecycle_creates_step_then_generation() {
         },
         &mut ids,
     );
-    // [0] = step span-create；[1] = generation-create（父 = step）。
+    // [0] = step span-create; [1] = generation-create (parent = step).
     assert_eq!(created[0]["type"], "span-create");
     assert_eq!(created[0]["body"]["name"], "step");
     let step_id = created[0]["body"]["id"].as_str().unwrap().to_string();
     assert_eq!(step_id, "id-1-step-1");
-    // 顶层 step 直接挂 trace（无 parentObservationId）。
+    // The top-level step is attached directly to the trace (no `parentObservationId`).
     assert!(created[0]["body"].get("parentObservationId").is_none());
 
     assert_eq!(created[1]["type"], "generation-create");
@@ -214,13 +222,13 @@ fn llm_call_lifecycle_creates_step_then_generation() {
     assert_eq!(created[1]["body"]["traceId"], "id-1");
     assert_eq!(created[1]["body"]["model"], "claude-opus-4-8");
     assert_eq!(created[1]["body"]["metadata"]["attempt"], 1);
-    // input 是 chat messages 数组：system 第一条，user 第二条。
+    // input is a chat messages array: system first, user second.
     assert_eq!(created[1]["body"]["input"][0]["role"], "system");
     assert_eq!(created[1]["body"]["input"][0]["content"], "you are helpful");
     assert_eq!(created[1]["body"]["input"][1]["role"], "user");
     assert_eq!(created[1]["body"]["input"][1]["content"], "hi there");
 
-    // output/thinking 流式到达。
+    // output/thinking arrives in streaming fashion.
     project_json(
         &mut proj,
         AgentEvent::AssistantThought {
@@ -243,7 +251,7 @@ fn llm_call_lifecycle_creates_step_then_generation() {
         &mut ids,
     );
 
-    // LlmCallFinished → generation **当即收尾**（gen 时长 = 纯 LLM，不含工具）。
+    // LlmCallFinished → generation ends immediately (gen duration = pure LLM, no tools).
     let finished = project_json(
         &mut proj,
         AgentEvent::LlmCallFinished {
@@ -262,14 +270,15 @@ fn llm_call_lifecycle_creates_step_then_generation() {
     assert_eq!(finished[0]["body"]["id"], gen_id);
     assert_eq!(finished[0]["body"]["name"], "llm_call");
     assert_eq!(finished[0]["body"]["output"], "hello world");
-    // thinking 放 metadata.reasoning，不进 output。
+    // The `thinking` field goes into `metadata.reasoning`, not into `output`.
     assert_eq!(finished[0]["body"]["metadata"]["reasoning"], "let me think");
     assert!(finished[0]["body"].get("level").is_none());
-    // generation 的 usageDetails = 本次调用 usage（80/12）。
+    // generation's usageDetails = this call's usage (80/12).
     assert_eq!(finished[0]["body"]["usageDetails"]["input"], 80);
     assert_eq!(finished[0]["body"]["usageDetails"]["output"], 12);
 
-    // TurnEnded → 关闭 step span（[0]），再 trace 收尾（[1]，usage = turn 累计）。
+    // TurnEnded closes the step span ([0]), then finalizes the trace ([1], usage =
+    // cumulative turn usage).
     let ended = project_json(
         &mut proj,
         AgentEvent::TurnEnded {
@@ -293,13 +302,14 @@ fn llm_call_lifecycle_creates_step_then_generation() {
 
 #[test]
 fn two_llm_calls_get_distinct_per_call_usage() {
-    // 多轮（工具循环）场景：一个 turn 内两次 LLM 调用，各自 usage 不同——
-    // 这是本次修复的核心（之前 generation 全无 usage / 只有 turn 总和）。
+    // Multi-turn (tool loop) scenario: two LLM calls within one turn, each with distinct
+    // usage — this is the core of the fix (previously generations had no usage, only the
+    // turn total).
     let mut proj = TraceProjector::new("s");
     let mut ids = counter_ids();
     project_json(&mut proj, AgentEvent::TurnStarted, &mut ids);
 
-    // 第 1 次调用：usage 50/10。LlmCallFinished 当即收尾 gen1。
+    // First call: usage 50/10. `LlmCallFinished` immediately closes gen1.
     project_json(
         &mut proj,
         AgentEvent::LlmCallStarted {
@@ -323,12 +333,12 @@ fn two_llm_calls_get_distinct_per_call_usage() {
         },
         &mut ids,
     );
-    // gen1 在自己的 LlmCallFinished 收尾，带它自己的 50/10。
+    // gen1 finishes with its own LlmCallFinished, carrying its own 50/10.
     assert_eq!(gen1_flush[0]["type"], "generation-update");
     assert_eq!(gen1_flush[0]["body"]["usageDetails"]["input"], 50);
     assert_eq!(gen1_flush[0]["body"]["usageDetails"]["output"], 10);
 
-    // 第 2 次调用开始 → 关闭 step-1，开 step-2，建 gen2。
+    // Second call starts → close step-1, open step-2, create gen2.
     let step2 = project_json(
         &mut proj,
         AgentEvent::LlmCallStarted {
@@ -338,7 +348,7 @@ fn two_llm_calls_get_distinct_per_call_usage() {
         },
         &mut ids,
     );
-    // [0] = step-1 span-update（关闭）；[1] = step-2 span-create；[2] = gen2 create。
+    // [0] = step-1 span-update (closed); [1] = step-2 span-create; [2] = gen2 create.
     assert_eq!(step2[0]["type"], "span-update");
     assert_eq!(step2[0]["body"]["id"], "id-1-step-1");
     assert_eq!(step2[1]["type"], "span-create");
@@ -346,7 +356,8 @@ fn two_llm_calls_get_distinct_per_call_usage() {
     assert_eq!(step2[2]["type"], "generation-create");
     assert_eq!(step2[2]["body"]["id"], "id-1-step-2-gen");
 
-    // 第 2 次调用 usage 200/40（明显不同于第 1 次）→ 当即收尾 gen2。
+    // Second call with usage 200/40 (clearly different from the first) → immediately
+    // finalize gen2.
     let gen2_flush = project_json(
         &mut proj,
         AgentEvent::LlmCallFinished {
@@ -361,7 +372,7 @@ fn two_llm_calls_get_distinct_per_call_usage() {
         },
         &mut ids,
     );
-    // gen2 收尾带它自己的 200/40，不是 turn 累计 250/50。
+    // gen2 flush carries its own 200/40, not the turn cumulative 250/50.
     assert_eq!(gen2_flush[0]["type"], "generation-update");
     assert_eq!(gen2_flush[0]["body"]["usageDetails"]["input"], 200);
     assert_eq!(gen2_flush[0]["body"]["usageDetails"]["output"], 40);
@@ -378,7 +389,7 @@ fn two_llm_calls_get_distinct_per_call_usage() {
         },
         &mut ids,
     );
-    // TurnEnded 关闭 step-2（[0]），trace 收尾带 turn 总和 250/50（[1]）。
+    // TurnEnded closes step-2 ([0]); the trace ends with a turn total of 250/50 ([1]).
     assert_eq!(ended[0]["type"], "span-update");
     assert_eq!(ended[0]["body"]["id"], "id-1-step-2");
     assert_eq!(ended[1]["body"]["metadata"]["usage"]["input"], 250);
@@ -398,7 +409,8 @@ fn llm_error_sets_error_level_and_status() {
         },
         &mut ids,
     );
-    // error 记在 generation 上，LlmCallFinished 当即写出 level/statusMessage。
+    // The error is recorded on the generation; `LlmCallFinished` immediately writes out
+    // the level/statusMessage.
     let finished = project_json(
         &mut proj,
         AgentEvent::LlmCallFinished {
@@ -419,7 +431,8 @@ fn tool_call_creates_and_updates_span_with_pairing() {
     let mut proj = TraceProjector::new("s");
     let mut ids = counter_ids();
     project_json(&mut proj, AgentEvent::TurnStarted, &mut ids); // trace = id-1
-    // 工具恒在某次 llm_call 之后——先起一次 LLM 调用建出 step（容器）。
+    // A tool always follows an `llm_call` — first start an LLM call to create the step
+    // (container).
     project_json(
         &mut proj,
         AgentEvent::LlmCallStarted {
@@ -446,7 +459,7 @@ fn tool_call_creates_and_updates_span_with_pairing() {
     assert_eq!(span_id, "id-1-tool-call-7");
     assert_eq!(started[0]["body"]["name"], "bash");
     assert_eq!(started[0]["body"]["input"]["cmd"], "ls");
-    // 工具挂在当前 step 下（与 llm_call 互为兄弟）。
+    // The tool is attached under the current step (sibling to `llm_call`).
     assert_eq!(started[0]["body"]["parentObservationId"], "id-1-step-1");
 
     let mut done_fields = ToolCallUpdateFields::default();
@@ -461,7 +474,7 @@ fn tool_call_creates_and_updates_span_with_pairing() {
         &mut ids,
     );
     assert_eq!(finished[0]["type"], "span-update");
-    // 配对到同一 span id。
+    // Matches the same span id.
     assert_eq!(finished[0]["body"]["id"], span_id);
     assert_eq!(finished[0]["body"]["output"]["stdout"], "a\nb");
     assert!(finished[0]["body"].get("level").is_none());
@@ -499,7 +512,7 @@ fn turn_ended_updates_trace_with_same_id() {
     let mut proj = TraceProjector::new("sess-x");
     let mut ids = counter_ids();
 
-    // 真实顺序：主循环先发 UserPromptCommitted，再发 TurnStarted。
+    // Real order: the main loop emits `UserPromptCommitted` first, then `TurnStarted`.
     let pre = project_json(
         &mut proj,
         AgentEvent::UserPromptCommitted {
@@ -507,12 +520,14 @@ fn turn_ended_updates_trace_with_same_id() {
         },
         &mut ids,
     );
-    // UserPromptCommitted 本身不产出 ingestion 事件（只暂存 input）。
+    // UserPromptCommitted itself does not produce an ingestion event; it only buffers the
+    // input.
     assert!(pre.is_empty());
 
     let started = project_json(&mut proj, AgentEvent::TurnStarted, &mut ids);
     let trace_id = started[0]["body"]["id"].as_str().unwrap().to_string();
-    // input 在 trace-create 时就带上（不必等 TurnEnded）——这是本次回归点。
+    // input is attached at trace-create time (no need to wait for TurnEnded) — this is
+    // the regression point.
     assert_eq!(started[0]["body"]["input"], "do something");
 
     project_json(
@@ -544,13 +559,14 @@ fn turn_ended_updates_trace_with_same_id() {
         },
         &mut ids,
     );
-    // 本轮没单独发 LlmCallFinished：TurnEnded 兜底——先 flush generation-update（[0]），
-    // 再关闭 step span（[1]），最后发 trace 更新（[2]）。
+    // This turn did not emit a separate LlmCallFinished; TurnEnded serves as a fallback —
+    // first flush the generation-update ([0]), then close the step span ([1]), and
+    // finally send the trace update ([2]).
     assert_eq!(ended[0]["type"], "generation-update");
     assert_eq!(ended[1]["type"], "span-update");
     assert!(ended[1]["body"]["name"].is_null() || ended[1]["body"]["name"] == "step");
     assert_eq!(ended[2]["type"], "trace-create");
-    // trace 用同一 trace_id 更新（合并 input/output/endTime）。
+    // The trace is updated with the same `trace_id` (merging input, output, and endTime).
     assert_eq!(ended[2]["body"]["id"], trace_id);
     assert_eq!(ended[2]["body"]["name"], "turn");
     assert_eq!(ended[2]["body"]["sessionId"], "sess-x");
@@ -581,7 +597,8 @@ fn two_turns_get_distinct_trace_ids() {
 fn events_before_turn_started_are_ignored() {
     let mut proj = TraceProjector::new("s");
     let mut ids = counter_ids();
-    // 没有 TurnStarted 就来 LLM/工具事件：projector 不应 panic，返回空。
+    // LLM/tool events without a preceding TurnStarted: the projector should not panic and
+    // should return empty.
     let out = project_json(
         &mut proj,
         AgentEvent::LlmCallStarted {
@@ -613,17 +630,19 @@ fn context_compressed_emits_event_observation() {
     assert_eq!(out[0]["body"]["metadata"]["tokens_after"], 1200);
 }
 
-// ---- subagent 投影：前台嵌套 / 后台相邻（用户构想的两层 span）----
+// ---- subagent projection: foreground nested / background adjacent (user's envisioned
+// two-layer span) ----
 
-/// 前台 subagent：spawn_agent 工具 span 仍张开时，子事件到达 → 独立 subagent span
-/// 挂在工具 span 下，子 generation 再挂在 subagent span 下。
+/// Foreground subagent: when the `spawn_agent` tool span is still open, an incoming child
+/// event creates a separate subagent span nested under the tool span, and the child
+/// generation is then nested under that subagent span.
 #[test]
 fn foreground_subagent_nests_under_open_tool_span() {
     let mut proj = TraceProjector::new("s");
     let mut ids = counter_ids();
     project_json(&mut proj, AgentEvent::TurnStarted, &mut ids); // trace = id-1
 
-    // 父 spawn_agent 工具开始（span 张开，登记锚点）。
+    // Parent spawn_agent tool starts (span opens, anchor registered).
     let started = project_json(
         &mut proj,
         AgentEvent::ToolCallStarted {
@@ -636,7 +655,8 @@ fn foreground_subagent_nests_under_open_tool_span() {
     let tool_span_id = started[0]["body"]["id"].as_str().unwrap().to_string();
     assert_eq!(tool_span_id, "id-1-tool-sa-1");
 
-    // 子 turn 第一个事件：LlmCallStarted → 建 subagent span + step span + 子 generation。
+    // First event of the sub-turn: `LlmCallStarted` → creates subagent span + step span +
+    // child generation.
     let out = project_json(
         &mut proj,
         AgentEvent::Subagent {
@@ -650,11 +670,11 @@ fn foreground_subagent_nests_under_open_tool_span() {
         },
         &mut ids,
     );
-    // 三个 observation：subagent span-create + step span-create + generation-create。
+    // Three observations: subagent span-create, step span-create, and generation-create.
     assert_eq!(out[0]["type"], "span-create");
     let subagent_span_id = out[0]["body"]["id"].as_str().unwrap().to_string();
     assert_eq!(subagent_span_id, "id-1-sub-sa-1");
-    // subagent span 挂在父工具 span 下（嵌套）。
+    // The subagent span is nested under the parent tool span.
     assert_eq!(out[0]["body"]["parentObservationId"], tool_span_id);
     assert!(
         out[0]["body"]["name"]
@@ -663,7 +683,7 @@ fn foreground_subagent_nests_under_open_tool_span() {
             .contains("reviewer")
     );
 
-    // 子 turn 的 step 挂在 subagent span 下。
+    // The child turn's step is nested under the subagent span.
     assert_eq!(out[1]["type"], "span-create");
     assert_eq!(out[1]["body"]["name"], "step");
     let sub_step_id = out[1]["body"]["id"].as_str().unwrap().to_string();
@@ -671,25 +691,27 @@ fn foreground_subagent_nests_under_open_tool_span() {
     assert_eq!(out[1]["body"]["parentObservationId"], subagent_span_id);
 
     assert_eq!(out[2]["type"], "generation-create");
-    // 子 generation 挂在子 step 下。
+    // The child generation is attached under the child step.
     assert_eq!(out[2]["body"]["parentObservationId"], sub_step_id);
     assert_eq!(out[2]["body"]["traceId"], "id-1");
-    // 子 generation 的 input 必须还原成 chat messages（system + user）。
+    // The child generation's input must be restored to chat messages (system + user).
     assert_eq!(out[2]["body"]["input"][0]["role"], "system");
     assert_eq!(out[2]["body"]["input"][0]["content"], "sub system");
     assert_eq!(out[2]["body"]["input"][1]["role"], "user");
     assert_eq!(out[2]["body"]["input"][1]["content"], "do it");
 }
 
-/// 后台 subagent：spawn_agent 工具 span 先正常关闭、发起 turn 也 TurnEnded，**之后**
-/// 子事件才到达——仍能经 session 级锚点把 subagent span 挂回原工具 span 下（相邻而非嵌套）。
+/// Background subagent: the `spawn_agent` tool span closes normally, the initiating turn
+/// also ends with `TurnEnded`, and **only then** do the child events arrive — the
+/// subagent span can still be attached under the original tool span via the session-level
+/// anchor (as a sibling, not nested).
 #[test]
 fn background_subagent_attaches_after_tool_and_turn_closed() {
     let mut proj = TraceProjector::new("s");
     let mut ids = counter_ids();
     project_json(&mut proj, AgentEvent::TurnStarted, &mut ids); // trace = id-1
 
-    // spawn_agent 工具开始 + **立即结束**（后台：返回"已启动"）。
+    // spawn_agent tool starts and finishes immediately (background: returns "started").
     project_json(
         &mut proj,
         AgentEvent::ToolCallStarted {
@@ -709,9 +731,9 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
         },
         &mut ids,
     );
-    assert_eq!(fin[0]["type"], "span-update"); // 工具 span 正常关闭
+    assert_eq!(fin[0]["type"], "span-update"); // Tool span closed normally
 
-    // 发起 turn 结束。
+    // Initiate turn end.
     project_json(
         &mut proj,
         AgentEvent::TurnEnded {
@@ -721,7 +743,8 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
         &mut ids,
     );
 
-    // **现在**后台子事件才到达（工具 span 与发起 turn 都已收尾）。
+    // Now the background sub-event arrives (both the tool span and the initiating turn
+    // have been finalized).
     let out = project_json(
         &mut proj,
         AgentEvent::Subagent {
@@ -735,13 +758,14 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
         },
         &mut ids,
     );
-    // 仍然建出 subagent span，挂在原工具 span 下（锚点跨 turn 存活）。
+    // Still creates a subagent span, attached under the original tool span (anchor
+    // survives across turns).
     assert_eq!(out[0]["type"], "span-create");
     assert_eq!(out[0]["body"]["id"], "id-1-sub-sa-9");
     assert_eq!(out[0]["body"]["parentObservationId"], "id-1-tool-sa-9");
-    // 复用原 trace（即便该 trace 的 turn 已 TurnEnded）。
+    // Reuse the original trace even though its turn has already ended.
     assert_eq!(out[0]["body"]["traceId"], "id-1");
-    // step span 挂在 subagent span 下。
+    // The step span is attached under the subagent span.
     assert_eq!(out[1]["type"], "span-create");
     assert_eq!(out[1]["body"]["name"], "step");
     assert_eq!(out[1]["body"]["parentObservationId"], "id-1-sub-sa-9");
@@ -752,7 +776,7 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
     );
     let gen_id = out[2]["body"]["id"].as_str().unwrap().to_string();
 
-    // 子 turn 的流式输出：output 正文 + thinking。
+    // Streaming output for the sub-turn: output body + thinking.
     let sub_event = |inner: AgentEvent| AgentEvent::Subagent {
         ancestor_path: vec![ToolCallId::new("sa-9")],
         agent_type: "worker".into(),
@@ -772,7 +796,8 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
         }),
         &mut ids,
     );
-    // 本次调用的 usage（流 drain 后到达）→ LlmCallFinished 当即 flush 子 generation。
+    // The usage from this call (arriving after the stream is drained) triggers
+    // `LlmCallFinished` to immediately flush the child generation.
     let gen_flush = project_json(
         &mut proj,
         sub_event(AgentEvent::LlmCallFinished {
@@ -788,7 +813,8 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
         }),
         &mut ids,
     );
-    // 子 generation-update：output / reasoning / usageDetails 都写到位（与父 turn 同形）。
+    // Sub generation-update: output, reasoning, and usageDetails are all populated (same
+    // shape as the parent turn).
     let gen_update = gen_flush
         .iter()
         .find(|e| e["type"] == "generation-update" && e["body"]["id"] == gen_id)
@@ -798,7 +824,7 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
     assert_eq!(gen_update["body"]["usageDetails"]["input"], 11);
     assert_eq!(gen_update["body"]["usageDetails"]["output"], 7);
 
-    // 子 turn 结束 → 关闭子 step span + 关闭 subagent span。
+    // Sub-turn ends → close child step span + close subagent span.
     let closed = project_json(
         &mut proj,
         sub_event(AgentEvent::TurnEnded {
@@ -807,26 +833,27 @@ fn background_subagent_attaches_after_tool_and_turn_closed() {
         }),
         &mut ids,
     );
-    // 子 step 收尾。
+    // Finalize the sub-step.
     assert!(closed.iter().any(|e| e["type"] == "span-update"
         && e["body"]["id"] == "id-1-sub-sa-9-step-1"
         && e["body"]["endTime"].is_string()));
-    // subagent span 收尾（end_time）。
+    // Subagent span finalization (end_time).
     assert!(closed.iter().any(|e| e["type"] == "span-update"
         && e["body"]["id"] == "id-1-sub-sa-9"
         && e["body"]["endTime"].is_string()));
 }
 
-/// 递归 subagent（深度 2）：A 派生 B（path=[A]），B 又派生 C（path=[A,B]）。
-/// projector 用 ancestor_path 确定性派生层级，C 的 step/gen 挂在 C 的 subagent span 下，
-/// C 的 subagent span 挂在 B 内那次 spawn_agent 工具 span 下。
+/// Recursive subagent (depth 2): A spawns B (path=[A]), then B spawns C (path=[A,B]).
+/// The projector uses `ancestor_path` to deterministically derive the hierarchy: C's
+/// step/gen is nested under C's subagent span,
+/// and C's subagent span is nested under the `spawn_agent` tool span inside B.
 #[test]
 fn recursive_subagent_depth_two_nests_correctly() {
     let mut proj = TraceProjector::new("s");
     let mut ids = counter_ids();
     project_json(&mut proj, AgentEvent::TurnStarted, &mut ids); // trace = id-1
 
-    // 顶层 spawn_agent 工具 A（锚定 trace）。
+    // Top-level spawn_agent tool A (anchors the trace).
     project_json(
         &mut proj,
         AgentEvent::ToolCallStarted {
@@ -837,8 +864,9 @@ fn recursive_subagent_depth_two_nests_correctly() {
         &mut ids,
     );
 
-    // 子 agent B 内：先一次 llm_call（建 B 的 subagent span + step + gen），
-    // 再在 B 里调一次 spawn_agent 工具 "B"（这是 C 的发起 tool span，挂在 B 的 step 下）。
+    // Inside sub-agent B: first, one `llm_call` (creates B's subagent span + step + gen),
+    // then a `spawn_agent` tool call "B" inside B (this is C's initiating tool span,
+    // attached under B's step).
     project_json(
         &mut proj,
         AgentEvent::Subagent {
@@ -865,7 +893,8 @@ fn recursive_subagent_depth_two_nests_correctly() {
         },
         &mut ids,
     );
-    // B 内的 spawn_agent 工具 span：id = {B scope}-tool-B，挂在 B 的 step 下。
+    // The `spawn_agent` tool span inside B: id = `{B scope}-tool-B`, parented under B's
+    // step.
     assert_eq!(b_spawn[0]["type"], "span-create");
     assert_eq!(b_spawn[0]["body"]["id"], "id-1-sub-A-tool-B");
     assert_eq!(
@@ -873,7 +902,7 @@ fn recursive_subagent_depth_two_nests_correctly() {
         "id-1-sub-A-step-1"
     );
 
-    // 孙 agent C 的事件：path=[A,B]。建 C 的 subagent span + step + gen。
+    // Subagent C event: path=[A,B]. Create C's subagent span + step + gen.
     let c = project_json(
         &mut proj,
         AgentEvent::Subagent {
@@ -887,17 +916,18 @@ fn recursive_subagent_depth_two_nests_correctly() {
         },
         &mut ids,
     );
-    // C 的 subagent span：id = {trace}-sub-A-sub-B，父 = B 内的 spawn_agent 工具 span。
+    // C's subagent span: id = {trace}-sub-A-sub-B, parent = the spawn_agent tool span
+    // inside B.
     assert_eq!(c[0]["type"], "span-create");
     assert_eq!(c[0]["body"]["id"], "id-1-sub-A-sub-B");
     assert_eq!(c[0]["body"]["parentObservationId"], "id-1-sub-A-tool-B");
     assert!(c[0]["body"]["name"].as_str().unwrap().contains("worker"));
-    // C 的 step 挂在 C 的 subagent span 下。
+    // C's step is nested under C's subagent span.
     assert_eq!(c[1]["type"], "span-create");
     assert_eq!(c[1]["body"]["name"], "step");
     assert_eq!(c[1]["body"]["id"], "id-1-sub-A-sub-B-step-1");
     assert_eq!(c[1]["body"]["parentObservationId"], "id-1-sub-A-sub-B");
-    // C 的 generation 挂在 C 的 step 下。
+    // C's generation is nested under C's step.
     assert_eq!(c[2]["type"], "generation-create");
     assert_eq!(c[2]["body"]["id"], "id-1-sub-A-sub-B-step-1-gen");
     assert_eq!(

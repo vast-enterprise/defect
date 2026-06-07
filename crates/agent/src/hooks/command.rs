@@ -1,16 +1,17 @@
-//! Command hook handler — 把 step 信封 JSON 喂给一个外部子进程，按
+//! Command hook handler — feeds the step envelope JSON to an external subprocess.
 //! The IO protocol passes stdout through as verdict JSON.
 //!
-//! ## 形态
+//! ## Shape
 //!
-//! - [`CommandSpec`]：handler 配置——argv 直 spawn / 显式 shell 二选一
-//! - [`CommandHandler`]：实现 [`StepHandler`]；spawn /
-//!   kill_on_drop / 超时走 §4.2.3 的语义
+//! - [`CommandSpec`]: handler configuration — either direct argv spawn or explicit shell.
+//! - [`CommandHandler`]: implements [`StepHandler`]; spawn / kill_on_drop / timeout
+//!   follow the semantics of §4.2.3.
 //!
-//! 不依赖任何 shell：argv 直 spawn 是默认；显式 `shell` 字段才走 shell。
+//! No shell dependency: direct argv spawn is the default; only the explicit `shell` field
+//! uses a shell.
 //!
-//! 平台兜底：在 `cfg(unix)` 与 `cfg(windows)` 下用 `tokio::process::Command`
-//! spawn 子进程。
+//! Platform fallback: on `cfg(unix)` and `cfg(windows)`, spawns the child process via
+//! `tokio::process::Command`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -30,24 +31,26 @@ use super::{HookCtx, HookError, StepHandler};
 // Spec
 // ---------------------------------------------------------------------------
 
-/// Command handler 的配置。
+/// Configuration for a command handler.
 ///
 /// See module-level docs.
 ///
-/// 设计上等价于 `defect_config::HookCommandSpec`，但放在 agent crate
-/// 这一层，CLI 装配期把 config 形态翻译过来——agent crate 不依赖 config。
+/// Conceptually equivalent to `defect_config::HookCommandSpec`, but lives in the agent
+/// crate. During CLI assembly, the config shape is translated into this form — the agent
+/// crate does not depend on the config crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandSpec {
-    /// 直接 spawn argv，不经任何 shell。
+    /// Spawn `argv` directly, without any shell.
     Argv {
         argv: Vec<String>,
-        /// Windows 平台覆盖；`None` 时 fall back 到 `argv`。
+        /// Windows override; `None` falls back to `argv`.
         argv_windows: Option<Vec<String>>,
         cwd: Option<PathBuf>,
         env: BTreeMap<String, String>,
         timeout_sec: Option<u64>,
     },
-    /// 显式 shell。引擎不再"自动选 sh"；shell 形态写错走配置层报错。
+    /// Explicit shell. The engine no longer auto-selects `sh`; an invalid shell kind is
+    /// reported as a configuration error.
     Shell {
         shell: ShellKind,
         command: String,
@@ -57,19 +60,19 @@ pub enum CommandSpec {
     },
 }
 
-/// 显式 shell 形态。引擎按这条标记选可执行 + flag。
+/// Explicit shell kind. The engine uses this tag to select the executable and its flag.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellKind {
-    /// `sh -c <command>`。
+    /// `sh -c <command>`.
     Sh,
-    /// `bash -c <command>`。
+    /// `bash -c <command>`.
     Bash,
-    /// `pwsh -NoProfile -NonInteractive -Command <command>`。
+    /// `pwsh -NoProfile -NonInteractive -Command <command>`.
     Pwsh,
-    /// `cmd /C <command>`。
+    /// `cmd /C <command>`.
     Cmd,
-    /// 用户提供的 program + 透传 args（不含 command 本身）。
+    /// A user-supplied program with passthrough args (excluding the command itself).
     Custom { program: String, args: Vec<String> },
 }
 
@@ -86,13 +89,14 @@ impl CommandSpec {
 // Handler
 // ---------------------------------------------------------------------------
 
-/// `Command` handler 实现。
+/// `Command` handler implementation.
 ///
 /// IO protocol:
-/// - stdin = step 信封的 JSON 序列化，单行
-/// - stdout = verdict JSON 对象（空 = 不干预），原样透传给引擎
-/// - stderr 透传 tracing
-/// - exit 0 = 按 stdout 决定；非 0 = `HookError::HandlerFailed`
+/// - stdin = JSON serialization of the step envelope, one line
+/// - stdout = verdict JSON object (empty = no intervention), passed through to the engine
+///   as-is
+/// - stderr = forwarded to tracing
+/// - exit 0 = determined by stdout; non-zero = `HookError::HandlerFailed`
 pub struct CommandHandler {
     spec: CommandSpec,
 }
@@ -103,8 +107,9 @@ impl CommandHandler {
         Self { spec }
     }
 
-    /// 该 handler 配置上自带的超时。CLI 装配把它翻进
-    /// [`StepHandlerEntry::with_timeout`](super::StepHandlerEntry::with_timeout)，引擎默认值兜底见 §8。
+    /// The timeout configured on this handler. The CLI assembly forwards it into
+    /// [`StepHandlerEntry::with_timeout`](super::StepHandlerEntry::with_timeout); the
+    /// engine's default fallback is described in §8.
     #[must_use]
     pub fn timeout(&self) -> Option<Duration> {
         self.spec.timeout()
@@ -112,10 +117,13 @@ impl CommandHandler {
 }
 
 impl StepHandler for CommandHandler {
-    /// Step 模型：把 step 信封作为 JSON 喂子进程 stdin，stdout 即 verdict JSON（空 stdout = 不干预）。
+    /// Feeds the step envelope as JSON to the child process's stdin; stdout is the
+    /// verdict JSON (empty stdout means no intervention).
     ///
-    /// 比旧 `handle` 简单——信封已经是 `Value`，不再需要 `CommandEventEnvelope` 转换；stdout 直接
-    /// 当 verdict 透传给引擎的 `apply_verdict`，IO 协议从"解析成 HookOutcome"简化成"原样回传 JSON"。
+    /// Simpler than the old `handle` — the envelope is already a `Value`, so no
+    /// `CommandEventEnvelope` conversion is needed. stdout is passed directly as the
+    /// verdict to the engine's `apply_verdict`, and the IO protocol is reduced from
+    /// "parse into `HookOutcome`" to "pass JSON through as-is".
     fn handle_step<'a>(
         &'a self,
         envelope: &'a Value,
@@ -138,10 +146,13 @@ impl StepHandler for CommandHandler {
                 .map_err(|err| HookError::HandlerFailed(BoxError::new(err)))?;
 
             if let Some(mut stdin) = child.stdin.take() {
-                // 写 stdin 可能撞上子进程不读 stdin 就先退出（如 `exit 2` 类脚本）——
-                // 此时管道被对端关闭，write 报 `BrokenPipe`。这是合法情形：脚本有权
-                // 忽略 stdin，退出码才是它的输出。把 BrokenPipe 当成"喂完了"静默收尾，
-                // 让后续按退出码裁决；其它写错误才视为 handler 失败。
+                // Writing to stdin may race with the child process exiting before reading
+                // it (e.g. a script like `exit 2`). In that case the pipe is closed by
+                // the peer and `write` returns `BrokenPipe`. This is legitimate: the
+                // script is allowed to ignore stdin; its exit code is the output. Treat
+                // `BrokenPipe` as "done feeding" and silently continue, letting the exit
+                // code decide the outcome. Other write errors are considered handler
+                // failures.
                 let write_res = async {
                     stdin.write_all(&stdin_payload).await?;
                     stdin.write_all(b"\n").await
@@ -168,11 +179,13 @@ impl StepHandler for CommandHandler {
                 tracing::debug!(target: "defect_agent::hooks::command", stderr = %stderr_text, "command stderr");
             }
 
-            // 退出码约定（对齐 Claude exit code 2）：
-            // - 0   → 按 stdout 决定（stdout 空 / 非 JSON = 不干预）
-            // - 2   → veto 本步（具体语义由 step 的 apply_verdict 解读：turn-end→continue、
-            //         tool/turn/session→break、compact→skip）；stderr 作为反馈注入
-            // - 其它非零 / 信号 → handler 错误（引擎降级跳过）
+            // Exit code convention (aligned with Claude exit code 2):
+            // - 0 → decision based on stdout (empty or non-JSON stdout = no intervention)
+            // - 2 → veto this step (exact semantics interpreted by the step's
+            //   `apply_verdict`: turn-end → continue,
+            //         tool/turn/session → break, compact → skip); stderr is injected as
+            //         feedback
+            // - other non-zero / signal → handler error (engine degrades and skips)
             match output.status.code() {
                 Some(0) => {
                     let trimmed = output.stdout.trim_ascii();
@@ -208,9 +221,7 @@ impl StepHandler for CommandHandler {
     }
 }
 
-// ---------------------------------------------------------------------------
-// command construction
-// ---------------------------------------------------------------------------
+// Command construction
 
 fn build_command(
     spec: &CommandSpec,
@@ -300,7 +311,8 @@ fn build_shell_command(shell: &ShellKind, command: &str) -> Command {
     }
 }
 
-/// Step 模型的环境变量：通用头 + 从信封提取的工具名（若有）。脚本作者可读 env 也可读 stdin JSON。
+/// Environment variables for the step model: common headers plus the tool name extracted
+/// from the envelope (if any). Script authors can read both env and stdin JSON.
 fn step_env_vars(envelope: &Value, ctx: &HookCtx<'_>) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     out.insert(
@@ -317,9 +329,7 @@ fn step_env_vars(envelope: &Value, ctx: &HookCtx<'_>) -> BTreeMap<String, String
     out
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
+// Helpers
 
 fn io_invalid(msg: impl Into<String>, detail: impl std::fmt::Display) -> std::io::Error {
     let s = msg.into();
@@ -354,7 +364,7 @@ mod tests {
         }
     }
 
-    /// 空 stdout（exit 0）→ 不干预（`Ok(None)`）。
+    /// Empty stdout (exit 0) → no intervention (`Ok(None)`).
     #[tokio::test]
     async fn step_empty_stdout_is_no_verdict() {
         if !Path::new("/bin/true").exists() {
@@ -371,7 +381,7 @@ mod tests {
         assert!(v.is_none());
     }
 
-    /// 非 JSON stdout → 不干预（审计脚本可只 echo 日志）。
+    /// Non-JSON stdout → no intervention (audit scripts may simply echo logs).
     #[tokio::test]
     async fn step_non_json_stdout_is_no_verdict() {
         if !Path::new("/bin/sh").exists() {
@@ -388,7 +398,7 @@ mod tests {
         assert!(v.is_none());
     }
 
-    /// JSON stdout → 原样作为 verdict 透传。
+    /// JSON stdout is passed through as the verdict verbatim.
     #[tokio::test]
     async fn step_json_stdout_becomes_verdict() {
         if !Path::new("/bin/sh").exists() {
@@ -410,7 +420,7 @@ mod tests {
         assert_eq!(v["control"], "break");
     }
 
-    /// 退出码 2 → veto verdict（stderr 作为反馈注入）。
+    /// Exit code 2 → veto verdict (stderr used as feedback injection).
     #[tokio::test]
     async fn step_exit_2_yields_veto() {
         if !Path::new("/bin/sh").exists() {
@@ -433,11 +443,14 @@ mod tests {
         assert_eq!(v["additional_context"][0], "tests failed\n");
     }
 
-    /// 脚本不读 stdin 就退出（exit 2）且 envelope 大于管道缓冲 → 写 stdin 撞
-    /// `BrokenPipe`，但必须按退出码裁决（veto），不能把 BrokenPipe 当 handler 失败。
-    /// 回归测试：曾因把 BrokenPipe 直接上抛 HandlerFailed 而在 CI 偶发挂。
-    /// 用一个远超 64KiB 管道缓冲的 envelope，让 write_all 必然在子进程退出前阻塞，
-    /// 稳定复现竞态（小 payload 会侥幸塞进缓冲而漏掉这条路径）。
+    /// Script exits (exit 2) without reading stdin, and the envelope exceeds the pipe
+    /// buffer → writing stdin hits `BrokenPipe`, but the verdict must be based on the
+    /// exit code (veto), not treating `BrokenPipe` as a handler failure.
+    /// Regression test: previously, `BrokenPipe` was directly propagated as
+    /// `HandlerFailed`, causing intermittent CI failures.
+    /// Use an envelope far larger than the 64 KiB pipe buffer so that `write_all`
+    /// necessarily blocks before the child exits, reliably reproducing the race (small
+    /// payloads can fit in the buffer and miss this path).
     #[tokio::test]
     async fn step_exit_2_vetoes_even_when_script_ignores_large_stdin() {
         if !Path::new("/bin/sh").exists() {
@@ -450,7 +463,7 @@ mod tests {
         ]));
         let session_id = SessionId::new("s1");
         let cwd = Path::new("/");
-        // 1 MiB padding，远超典型 64KiB 管道缓冲。
+        // 1 MiB padding, far exceeding the typical 64 KiB pipe buffer.
         let env = serde_json::json!({"tool": "bash", "pad": "x".repeat(1024 * 1024)});
         let v = h
             .handle_step(&env, ctx(&session_id, cwd))
@@ -461,7 +474,7 @@ mod tests {
         assert_eq!(v["additional_context"][0], "tests failed\n");
     }
 
-    /// 其它非零退出（非 2）→ HandlerFailed。
+    /// Other non-zero exit (not 2) → HandlerFailed.
     #[tokio::test]
     async fn step_nonzero_exit_is_handler_failed() {
         if !Path::new("/bin/sh").exists() {
@@ -478,7 +491,7 @@ mod tests {
         assert!(matches!(err, HookError::HandlerFailed(_)));
     }
 
-    /// 取消 → Timeout。
+    /// Cancellation → Timeout.
     #[tokio::test]
     async fn step_cancellation_returns_timeout() {
         if !Path::new("/bin/sh").exists() {

@@ -1,9 +1,9 @@
-//! `defect-acp` 的对外入口。
+//! Public entry point for `defect-acp`.
 //!
-//! 起 stdio JSON-RPC 服务，注册 ACP v1 的 client→agent 方法处理器，
-//! 把 [`AgentCore`] / [`Session`] 暴露在线上。
+//! Starts a stdio JSON-RPC service, registers ACP v1 client-to-agent method handlers,
+//! and exposes [`AgentCore`] / [`Session`] over the wire.
 //!
-//! ACP server — serves the agent over stdin/stdout or Unix socket.
+//! ACP server — serves the agent over stdin/stdout or a Unix socket.
 
 use std::sync::{Arc, RwLock};
 
@@ -31,16 +31,17 @@ use crate::fs::AcpFsBackend;
 use crate::project::{PermissionAsk, Projection, project, replay_notifications};
 use crate::shell::AcpShellBackend;
 
-/// 客户端 fs 能力协商结果（连接级）。
+/// Negotiated client fs capabilities (connection-level).
 ///
-/// 在 `initialize` handler 里读 [`ClientCapabilities::fs`] 后写入，
-/// `session/new` handler 据此选 [`AcpFsBackend`] / [`LocalFsBackend`]。
+/// Read from [`ClientCapabilities::fs`] in the `initialize` handler and stored; the
+/// `session/new` handler uses this to select [`AcpFsBackend`] or [`LocalFsBackend`].
 /// See ACP filesystem design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FsMode {
-    /// 客户端同时声明 `read_text_file` 与 `write_text_file`：完全委托。
+    /// Client declares both `read_text_file` and `write_text_file`: full delegation.
     Delegated,
-    /// 任一能力缺失或 fs 字段未声明：整组退回本地（不混用，§1.2 决策表）。
+    /// If either capability is missing or the `fs` field is not declared, the entire
+    /// group falls back to local (no mixing; see §1.2 decision table).
     Local,
 }
 
@@ -52,16 +53,17 @@ fn decide_fs_mode(client_caps: &ClientCapabilities) -> FsMode {
     }
 }
 
-/// 客户端 terminal 能力协商结果（连接级）。
+/// Result of terminal capability negotiation at the connection level.
 ///
-/// `initialize` handler 读 [`ClientCapabilities::terminal`] 后写入，
-/// `session/new` / `session/load` 据此选 [`AcpShellBackend`] /
+/// Written by the `initialize` handler after reading [`ClientCapabilities::terminal`];
+/// used by `session/new` / `session/load` to select [`AcpShellBackend`] /
 /// See ACP shell design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellMode {
-    /// 客户端声明完整 `terminal/*` 支持：完全委托。
+    /// Client declares full `terminal/*` support: fully delegated.
     Delegated,
-    /// 字段为 false 或缺失：整组退回本地（不混用，§1.2 决策表）。
+    /// Field is false or missing: entire group falls back to local (no mixing; see §1.2
+    /// decision table).
     Local,
 }
 
@@ -73,48 +75,52 @@ fn decide_shell_mode(client_caps: &ClientCapabilities) -> ShellMode {
     }
 }
 
-/// `defect-acp` 公共错误类型。
+/// Public error type for `defect-acp`.
 ///
-/// 划线规则：每个 variant 对应一种 wire 上能稳定区分的错误形态——
-/// session 是否存在、会话创建是否成功、turn 是否跑完。下游 LLM /
-/// 工具失败由 [`TurnError`] 自己分类承载（这一层不再细拆）。
+/// Demarcation rule: each variant corresponds to a wire-stable error shape — whether the
+/// session exists, session creation succeeded, or a turn completed. Downstream LLM / tool
+/// failures are classified by [`TurnError`] itself (this layer does not further decompose
+/// them).
 ///
-/// 投影规则见 [`AcpError::into_wire_error`]：variant → JSON-RPC ErrorCode +
-/// 结构化 `data` 字段。诊断字段（`session_id` / `request_id` 等）走 `data`，
-/// 不糊在 `message` 里。
+/// Projection rule: see [`AcpError::into_wire_error`]; variant → JSON-RPC ErrorCode +
+/// structured `data` field. Diagnostic fields (`session_id` / `request_id` etc.) go into
+/// `data`, not smeared into `message`.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AcpError {
-    /// JSON-RPC / stdio 传输层失败。仅 [`serve_on`] 的顶层 `?` 用得上；
-    /// handler 内部任何地方都不会构造这个 variant。
+    /// JSON-RPC / stdio transport layer failure. Only used by the top-level `?` in
+    /// [`serve_on`]; this variant is never constructed inside any handler.
     #[error("acp transport error: {0}")]
     Transport(agent_client_protocol::Error),
 
-    /// `session/prompt` / `session/cancel` 引用的 session 在 agent 侧不存在。
+    /// The session referenced by `session/prompt` or `session/cancel` does not exist on
+    /// the agent side.
     #[error("session not found: {session_id}")]
     SessionNotFound { session_id: String },
 
-    /// `session/new` 创建 session 失败（cwd 不存在 / MCP 启动失败等）。
+    /// `session/new` failed to create a session (e.g., cwd does not exist, MCP startup
+    /// failed).
     #[error("create_session failed: {0}")]
     CreateSession(#[source] AgentError),
 
     #[error("load_session failed: {0}")]
     LoadSession(#[source] AgentError),
 
-    /// `session/set_config_option` 收到未知 config_id 或非法 value。
+    /// `session/set_config_option` received an unknown config_id or invalid value.
     #[error("invalid session config option: {0}")]
     InvalidConfigOption(String),
 
-    /// `session/prompt` 跑 turn 时失败（重试用尽的 provider 错误 / 主循环
-    /// invariant 被破坏）。
+    /// `session/prompt` failed while running a turn (provider error after retries
+    /// exhausted / main loop invariant broken).
     #[error("turn failed: {0}")]
     Turn(#[source] TurnError),
 
-    /// turn task 在返回 stop reason 之前被 drop（理应不可达，留作安全网）。
+    /// The turn task was dropped before returning a stop reason (should be unreachable;
+    /// kept as a safety net).
     #[error("turn task dropped before completion")]
     TurnDropped,
 
-    /// 客户端请求 `authenticate`，但 v0 不支持。
+    /// Client requested `authenticate`, but v0 does not support it.
     #[error("authentication not supported")]
     AuthNotSupported,
 }
@@ -126,11 +132,14 @@ impl From<agent_client_protocol::Error> for AcpError {
 }
 
 impl AcpError {
-    /// 投影成 ACP wire `Error`：选 ErrorCode + 在 `data` 里挂结构化诊断字段。
+    /// Project into an ACP wire `Error`: selects an `ErrorCode` and attaches structured
+    /// diagnostic fields in `data`.
     ///
-    /// 调用方（handler）在 [`agent_client_protocol::Responder::respond_with_error`]
-    /// 处用它替代手搓的 [`agent_client_protocol::util::internal_error`] +
-    /// `format!`，让客户端能稳定 match `code` / 读 `data.kind` 而非解析字符串。
+    /// Callers (handlers) use this in
+    /// [`agent_client_protocol::Responder::respond_with_error`]
+    /// instead of hand-rolling [`agent_client_protocol::util::internal_error`] +
+    /// `format!`, so clients can reliably match on `code` / read `data.kind` rather than
+    /// parsing strings.
     pub fn into_wire_error(self) -> agent_client_protocol::Error {
         use agent_client_protocol::Error as Wire;
         use agent_client_protocol::schema::ErrorCode;
@@ -138,15 +147,17 @@ impl AcpError {
             AcpError::Transport(err) => err,
 
             AcpError::SessionNotFound { session_id } => {
-                // 用 ResourceNotFound 而不是 InternalError——这是"客户端引用了
-                // 不存在的资源"，是客户端可恢复的 4xx 类语义。
+                // Use `ResourceNotFound` instead of `InternalError` — this is "client
+                // referenced a non-existent resource", a client-recoverable 4xx-class
+                // semantic.
                 Wire::resource_not_found(Some(session_id))
             }
 
             AcpError::CreateSession(err) => {
-                // 把内层 Display 放到 wire `message`——客户端 UI（acpx 等）
-                // 渲染时直接读 message，默认占位 "Internal error" 把诊断信息
-                // 全埋在 `data` 里，导致用户只看见 "RUNTIME: Internal error"。
+                // Place the inner Display impl into the wire `message` — client UIs
+                // (acpx, etc.) read `message` directly for rendering. The default
+                // placeholder "Internal error" buries all diagnostic information inside
+                // `data`, so users only see "RUNTIME: Internal error".
                 Wire::new(ErrorCode::InternalError.into(), err.to_string()).data(json!({
                     "kind": "create_session_failed",
                     "message": err.to_string(),
@@ -168,13 +179,14 @@ impl AcpError {
             }
 
             AcpError::Turn(err) => {
-                // 把内层 Display 灌进 wire `message`——客户端 UI 默认只读
-                // message 字段；占位 "Internal error" 把实际信息埋在 `data` 里
-                // 会让用户只看见 "RUNTIME: Internal error" 这种无意义占位。
-                // 注意：code 选择有坑——acpx 把 -32001/-32002 映射成 NO_SESSION
-                // （会议会话误判），所以 Provider 也走 InternalError，由 message
-                // 自身的文本（"rate limit" / "model not found"）让 acpx 的
-                // text-error-rules 命中合适的 hint。
+                // Use the inner `Display` as the wire `message` — client UIs only read
+                // the `message` field by default. Putting "Internal error" as a
+                // placeholder and burying the real detail in `data` would show users
+                // meaningless text like "RUNTIME: Internal error".
+                // Note: choosing the right code is tricky — acpx maps -32001/-32002 to
+                // NO_SESSION (misidentifying a meeting session), so the Provider also
+                // uses `InternalError`. The message text itself ("rate limit" / "model
+                // not found") lets acpx's text-error-rules match the appropriate hint.
                 let code = match &err {
                     TurnError::TurnInProgress => ErrorCode::InvalidRequest,
                     _ => ErrorCode::InternalError,
@@ -191,7 +203,8 @@ impl AcpError {
                 "message": "turn task dropped before completion",
             })),
 
-            // method_not_found 比 internal_error 更对位"未实现的方法"
+            // method_not_found is more appropriate than internal_error for "unimplemented
+            // method"
             AcpError::AuthNotSupported => Wire::method_not_found().data(json!({
                 "kind": "auth_not_supported",
                 "message": "authentication not supported",
@@ -200,10 +213,11 @@ impl AcpError {
     }
 }
 
-/// 把 [`TurnError`] 拍成 wire `data` 字段。区分两个 sub-kind：
-/// - `provider` —— 重试用尽后仍失败的 provider 错误，附 `retry_hint` /
-///   `request_id`，让客户端能据此提示用户"换模型 / 等一会再试"
-/// - `internal` —— 主循环 invariant 被破坏，纯诊断用
+/// Serializes a [`TurnError`] into the wire `data` field. Distinguishes two sub-kinds:
+/// - `provider` — a provider error that still fails after retries are exhausted, includes
+///   `retry_hint` / `request_id` so the client can prompt the user to "switch models /
+///   try again later"
+/// - `internal` — a main-loop invariant was violated, for diagnostics only
 fn turn_error_data(err: &TurnError) -> serde_json::Value {
     match err {
         TurnError::TurnInProgress => json!({
@@ -215,8 +229,9 @@ fn turn_error_data(err: &TurnError) -> serde_json::Value {
             "kind": "internal",
             "message": err.to_string(),
         }),
-        // TurnError 是 #[non_exhaustive]：未来新 variant 落到这里走 internal
-        // 兜底，不阻塞编译；新增分类时优先把它提到上面写专门 arm。
+        // `TurnError` is `#[non_exhaustive]`; future variants fall through to this
+        // internal catch-all, keeping compilation unblocked. When adding a new variant,
+        // prefer writing a dedicated arm above this one.
         _ => json!({
             "kind": "internal",
             "message": err.to_string(),
@@ -238,30 +253,33 @@ fn provider_error_data(err: &ProviderError) -> serde_json::Value {
     data
 }
 
-/// `session/set_config_option` 里 thought-level 选择器的稳定 config id。
+/// The stable config id for the thought-level selector in `session/set_config_option`.
 const THOUGHT_LEVEL_CONFIG_ID: &str = "reasoning_effort";
 
-/// `session/set_config_option` 里权限模式选择器的稳定 config id。
+/// Stable config id for the permission mode selector in `session/set_config_option`.
 ///
-/// Session Config Options 取代了旧的 Session Modes API：现代客户端（如 Zed
-/// ≥ 1.4）只读 `configOptions`、忽略响应里 deprecated 的 `modes` 字段。故权限
-/// 模式必须**也**作为一个 `category = Mode` 的 config option 暴露，否则客户端
-/// 不渲染模式选择器。`modes` 字段仍保留以兼容老客户端。
+/// Session Config Options replace the old Session Modes API: modern clients (e.g. Zed
+/// ≥ 1.4) only read `configOptions` and ignore the deprecated `modes` field in the
+/// response.
+/// Therefore the permission mode must **also** be exposed as a config option with
+/// `category = Mode`, otherwise the client will not render the mode selector. The `modes`
+/// field is kept for backward compatibility with older clients.
 const MODE_CONFIG_ID: &str = "permission_mode";
 
-/// `session/set_config_option` 里模型选择器的稳定 config id。
+/// Stable config id for the model selector in `session/set_config_option`.
 ///
-/// 与 [`MODE_CONFIG_ID`] 同理——现代客户端只读 config_options，故模型也必须
-/// 作为 `category = Model` 的 config option 暴露，否则不渲染模型选择器。响应里
-/// deprecated 的 `models` 字段仍保留以兼容老客户端。
+/// Analogous to [`MODE_CONFIG_ID`] — modern clients only read `config_options`, so the
+/// model must also be exposed as a config option with `category = Model`, otherwise the
+/// model selector is not rendered. The deprecated `models` field in the response is kept
+/// for backward compatibility with older clients.
 const MODEL_CONFIG_ID: &str = "model";
 
-/// thought-level 的 "不设置"（沿用 provider 默认）档位的 value id。
-/// 其余档位用 [`ReasoningEffort`] 的 wire token（`minimal` / `low` / …）。
+/// The value id for the "not set" tier at the thought level (uses the provider default).
+/// Other tiers use [`ReasoningEffort`] wire tokens (`minimal` / `low` / …).
 const REASONING_DEFAULT_VALUE: &str = "default";
 
-/// 把 ACP value id 解析成 [`ReasoningEffort`] 覆盖。`"default"` → `None`
-/// （清除覆盖）；其余按 wire token 匹配；未知 token 返回 `Err`。
+/// Parses an ACP value id into a [`ReasoningEffort`] override. `"default"` → `None`
+/// (clears the override); otherwise matches wire tokens; unknown tokens return `Err`.
 fn parse_reasoning_value(value: &str) -> Result<Option<ReasoningEffort>, ()> {
     match value {
         REASONING_DEFAULT_VALUE => Ok(None),
@@ -275,7 +293,8 @@ fn parse_reasoning_value(value: &str) -> Result<Option<ReasoningEffort>, ()> {
     }
 }
 
-/// 当前 [`ReasoningEffort`] 覆盖对应的 ACP value id。`None` → `"default"`。
+/// Returns the ACP value id corresponding to the given [`ReasoningEffort`] override.
+/// `None` maps to `"default"`.
 fn reasoning_value_id(effort: Option<ReasoningEffort>) -> &'static str {
     match effort {
         None => REASONING_DEFAULT_VALUE,
@@ -288,27 +307,31 @@ fn reasoning_value_id(effort: Option<ReasoningEffort>) -> &'static str {
     }
 }
 
-/// 构造 session 的配置项列表（ACP `config_options`）。
+/// Build the session's config option list (ACP `config_options`).
 ///
-/// 含三个 select：模型（`category = Model`）、权限模式（`category = Mode`，来自
-/// session 的模式目录）、thought-level（`category = ThoughtLevel`，6 档
-/// `reasoning_effort` + "default"）。
+/// Contains three selects: model (`category = Model`), permission mode (`category =
+/// Mode`, from the session's mode directory), and thought-level (`category =
+/// ThoughtLevel`, 6 levels of `reasoning_effort` + "default").
 ///
-/// **三者都必须经 config option 暴露**：Session Config Options 取代了旧的
-/// Session Modes / Models API，现代客户端（如 Zed ≥ 1.4）只渲染 config_options
-/// 里的选择器、忽略响应里 deprecated 的 `models` / `modes` 字段（后两者仍保留
-/// 以兼容老客户端）。见 [`MODE_CONFIG_ID`] / [`MODEL_CONFIG_ID`]。
+/// **All three must be exposed via config options**: Session Config Options replace the
+/// old Session Modes / Models API. Modern clients (e.g. Zed ≥ 1.4) only render selectors
+/// from `config_options` and ignore the deprecated `models` / `modes` fields in the
+/// response (those are kept for backward compatibility with older clients). See
+/// [`MODE_CONFIG_ID`] / [`MODEL_CONFIG_ID`].
 async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOption> {
     let mut out = Vec::new();
 
-    // 0) 模型选择器。候选来自 registry（不发网络请求，恒可解析）。拿不到候选
-    //    时退而只列当前模型，保证 dropdown 非空。
+    // 0) Model selector. Candidates come from the registry (no network request, always
+    // resolvable). If no candidates are available, fall back to listing only the current
+    // model to ensure the dropdown is non-empty.
     {
         let current_model = session.current_model();
         let current_vendor = session.provider_info().vendor;
-        // 选择键是 (vendor, model) 对——同名 model 可来自多个 provider。value id
-        // 编码成 `vendor::model`（vendor 是 TOML section 名，不含 `::`；model 可含
-        // 任意字符，故解析时按首个 `::` 切）。当前值同样编码这对。
+        // The selection key is a `(vendor, model)` pair — models with the same name can
+        // come from multiple providers. The value ID is encoded as `vendor::model`
+        // (vendor is a TOML section name and never contains `::`; model may contain
+        // arbitrary characters, so parsing splits on the first `::`). The current value
+        // is encoded the same way.
         let current_value = encode_model_value(&current_vendor, &current_model);
         let candidates = session.list_candidates().await.unwrap_or_default();
         let mut model_options = candidates
@@ -329,7 +352,8 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
             .iter()
             .any(|o| o.value.0.as_ref() == current_value)
         {
-            // 兜底：候选里没有当前模型（理论不该发生）。仍列出它，避免空 dropdown。
+            // Fallback: the current model is not in the candidates (should not happen in
+            // theory). Still list it to avoid an empty dropdown.
             model_options.insert(
                 0,
                 SessionConfigSelectOption::new(
@@ -346,11 +370,11 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
                 model_options,
             )
             .category(Some(SessionConfigOptionCategory::Model))
-            .description(Some("本会话使用的模型".to_string())),
+            .description(Some("The model this session uses".to_string())),
         );
     }
 
-    // 1) 权限模式选择器（仅当 session 装配了模式目录）。
+    // 1) Permission mode selector (only when the session has a mode directory).
     if let Some(current_mode) = session.current_mode() {
         let mode_options = session
             .available_modes()
@@ -372,13 +396,13 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
             )
             .category(Some(SessionConfigOptionCategory::Mode))
             .description(Some(
-                "工具调用的放行策略：只读 / 写前询问 / 全放行 / 全拒绝".to_string(),
+                "Approval policy for tool calls: read-only / ask before writes / allow all / deny all".to_string(),
             )),
         );
     }
 
-    // 2) thought-level 选择器。顺序：default 在最前，其余按强度递增——与
-    //    OpenAI wire 枚举一致。
+    // 2) thought-level selector. Order: default first, then increasing intensity —
+    // matching the OpenAI wire enum.
     let current_effort = reasoning_value_id(session.current_reasoning_effort());
     let effort_options = vec![
         SessionConfigSelectOption::new(
@@ -386,7 +410,7 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
             "Default",
         )
         .description(Some(
-            "沿用 provider 默认，不下发 reasoning_effort".to_string(),
+            "Follow the provider default; do not send reasoning_effort".to_string(),
         )),
         SessionConfigSelectOption::new(SessionConfigValueId::new("none"), "None"),
         SessionConfigSelectOption::new(SessionConfigValueId::new("minimal"), "Minimal"),
@@ -404,15 +428,15 @@ async fn session_config_options(session: &dyn Session) -> Vec<SessionConfigOptio
         )
         .category(Some(SessionConfigOptionCategory::ThoughtLevel))
         .description(Some(
-            "OpenAI 兼容协议的思考强度等级；不支持的 provider 忽略".to_string(),
+            "Reasoning-effort level for the OpenAI-compatible protocol; ignored by providers that do not support it".to_string(),
         )),
     );
 
     out
 }
 
-/// 一个模型候选在 config-option 选择器里的描述串：`provider: X,
-/// context_window=…, max_output_tokens=…, deprecated`（缺的字段省略）。
+/// A description string for a model candidate in the config-option selector: `provider:
+/// X, context_window=…, max_output_tokens=…, deprecated` (omitted fields are skipped).
 fn model_option_description(candidate: &ModelCandidate) -> String {
     let mut parts = vec![format!("provider: {}", candidate.provider.display_name)];
     if let Some(context_window) = candidate.model.context_window {
@@ -427,18 +451,19 @@ fn model_option_description(candidate: &ModelCandidate) -> String {
     parts.join(", ")
 }
 
-/// 模型选择器 value id 的分隔符。vendor 是 TOML `[providers.<name>]` 段名，不含
-/// `::`；model id 可含任意字符（如 `us.anthropic.claude:1`），故 [`decode_model_value`]
-/// 只按**首个** `::` 切，保证 model 一侧完整保留。
+/// Separator for model-selector value IDs. The vendor is a TOML `[providers.<name>]`
+/// section name, which never contains `::`; the model ID may contain arbitrary characters
+/// (e.g. `us.anthropic.claude:1`), so [`decode_model_value`] splits only on the **first**
+/// `::` to preserve the model side intact.
 const MODEL_VALUE_SEP: &str = "::";
 
-/// 把 `(vendor, model)` 选择对编码成单个 ACP value id。
+/// Encodes a `(vendor, model)` selection pair into a single ACP value id.
 fn encode_model_value(vendor: &str, model: &str) -> String {
     format!("{vendor}{MODEL_VALUE_SEP}{model}")
 }
 
-/// 把 [`encode_model_value`] 产出的 value id 解码回 [`ModelSelection`]。无分隔符
-/// （非法/老格式）⇒ `None`。
+/// Decode a value id produced by [`encode_model_value`] back into a [`ModelSelection`].
+/// Returns `None` if the separator is missing (invalid/legacy format).
 fn decode_model_value(value: &str) -> Option<ModelSelection> {
     let (vendor, model) = value.split_once(MODEL_VALUE_SEP)?;
     Some(ModelSelection {
@@ -447,22 +472,27 @@ fn decode_model_value(value: &str) -> Option<ModelSelection> {
     })
 }
 
-/// 连接级共享状态。`serve_on` 给每个 handler 克隆一份 `Arc<ServeState>`。
+/// Connection-level shared state. `serve_on` clones an `Arc<ServeState>` for each
+/// handler.
 ///
-/// `agent` 是注入的核心，连接生命周期内只读。`fs_mode` / `shell_mode` 由
-/// `initialize` 写入、后续 `session/new` 与 `session/load` 读取——RwLock 在
-/// 读多写少的前提下保护这一次握手结果。
+/// `agent` is the injected core, read-only for the connection's lifetime. `fs_mode` /
+/// `shell_mode` are written by `initialize` and read by subsequent `session/new` and
+/// `session/load` — the `RwLock` protects this one-time handshake result under a
+/// read-heavy, write-light workload.
 struct ServeState {
     agent: Arc<dyn AgentCore>,
-    /// 客户端按 ACP 规范应当先 initialize 再 session/new。Default = `Local`
-    /// 是回归保守值——initialize 还没到时就 session/new 是协议违规，但即便如此
-    /// 我们也宁可走本地盘也不裸调反向请求。
+    /// Per the ACP spec, clients must call `initialize` before `session/new`. The default
+    /// `Local` is a conservative fallback — calling `session/new` before `initialize` is
+    /// a protocol violation, but even so we prefer to use the local disk rather than
+    /// making a raw reverse request.
     fs_mode: RwLock<FsMode>,
-    /// shell 后端选择。Default = `Local`——同 [`Self::fs_mode`] 取保守降级。
+    /// Shell backend selection. Defaults to `Local` — same conservative fallback as
+    /// [`Self::fs_mode`].
     shell_mode: RwLock<ShellMode>,
-    /// `--resume` 目标。ACP 客户端驱动会话生命周期，CLI 无法直接发起 load，
-    /// 故把目标 id 暂存于此：**首个** `session/new` 透明改走 load_session 并
-    /// 回放该会话，之后清空（一次性）。`None` = 不 resume。
+    /// `--resume` target. The ACP client drives the session lifecycle; the CLI cannot
+    /// directly initiate a load, so the target id is stored here: the **first**
+    /// `session/new` transparently switches to `load_session` and replays that session,
+    /// then is cleared (one-shot). `None` = no resume.
     resume_target: RwLock<Option<SessionId>>,
 }
 
@@ -476,7 +506,7 @@ impl ServeState {
         }
     }
 
-    /// 取出并清空一次性 resume 目标。第二次起返回 `None`。
+    /// Takes and clears the one-shot resume target. Returns `None` on subsequent calls.
     fn take_resume_target(&self) -> Option<SessionId> {
         self.resume_target.write().ok().and_then(|mut g| g.take())
     }
@@ -492,8 +522,9 @@ impl ServeState {
             .unwrap_or(ShellMode::Local)
     }
 
-    /// 由当前协商出的 fs / shell mode 组装 [`Frontend::Acp`]——agent 据此在
-    /// system prompt 的 `# Environment` 段标明文件 / 命令执行是本地还是委托。
+    /// Assemble the negotiated fs / shell modes into a [`Frontend::Acp`] — the agent uses
+    /// this to indicate in the `# Environment` section of the system prompt whether
+    /// file/command execution is local or delegated.
     fn frontend(&self) -> Frontend {
         Frontend::Acp {
             fs_delegated: self.current_fs_mode() == FsMode::Delegated,
@@ -501,7 +532,8 @@ impl ServeState {
         }
     }
 
-    /// 在 connection 级 fs_mode 与 session 级 cwd 之间组装 fs 后端。
+    /// Assemble the fs backend from the connection-level `fs_mode` and the session-level
+    /// `cwd`.
     fn fs_backend(
         &self,
         cx: &ConnectionTo<Client>,
@@ -518,7 +550,8 @@ impl ServeState {
         }
     }
 
-    /// 在 connection 级 shell_mode 与 session 级 cwd 之间组装 shell 后端。
+    /// Assemble a shell backend from the connection-level shell mode and session-level
+    /// cwd.
     fn shell_backend(
         &self,
         cx: &ConnectionTo<Client>,
@@ -566,7 +599,8 @@ impl ServeState {
             agent_client_protocol::schema::AuthenticateResponse,
         >,
     ) -> Result<(), agent_client_protocol::Error> {
-        // v0 不开 auth；任何客户端发起的 auth 请求都按未实现拒绝。
+        // v0 does not enable auth; any auth request from a client is rejected as
+        // unimplemented.
         responder.respond_with_error(AcpError::AuthNotSupported.into_wire_error())
     }
 
@@ -576,8 +610,9 @@ impl ServeState {
         responder: agent_client_protocol::Responder<NewSessionResponse>,
         cx: ConnectionTo<Client>,
     ) -> Result<(), agent_client_protocol::Error> {
-        // `--resume`：首个 session/new 透明改走 load_session（一次性）。客户端
-        // 拿回的是被恢复的旧 session id，并在响应前收到回放的历史 transcript。
+        // `--resume`: transparently redirects the first `session/new` to `load_session`
+        // (one-shot). The client receives the restored old session ID and gets the
+        // replayed history transcript before the response.
         if let Some(target) = self.take_resume_target() {
             return self.resume_on_session_new(target, req, responder, cx).await;
         }
@@ -594,8 +629,9 @@ impl ServeState {
         {
             Ok(session) => {
                 let config_options = session_config_options(session.as_ref()).await;
-                // 起持久 event pump：把本 session 全生命周期的事件（含 driver 自主续转
-                // turn）转成 session/update。§5.3。
+                // Spawn a persistent event pump that forwards all events for the lifetime
+                // of this session (including driver-initiated turn continuations) as
+                // `session/update`. §5.3.
                 spawn_session_pump(session.clone(), session.id().clone(), cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
@@ -614,11 +650,17 @@ impl ServeState {
         }
     }
 
-    /// `--resume` 路径下的 `session/new`：加载目标 session，回放 transcript，
-    /// 把恢复出的（旧）session id 作为 `NewSessionResponse` 回给客户端。
+    /// `session/new` on the `--resume` path: loads the target session, replays the
+    /// transcript,
+    /// and returns the recovered (old) session id as a `NewSessionResponse` to the
+    /// client.
     ///
-    /// fs/shell 后端按本次 `session/new` 请求的 cwd 协商（resume 是在“此处此刻”
-    /// 继续旧对话，运行环境用当前连接的协商结果，而非旧会话落盘的 cwd）。
+    /// The fs/shell backends are negotiated based on the cwd of this `session/new`
+    /// request
+    /// (resume continues the old conversation "here and now"; the runtime environment
+    /// uses
+    /// the current connection's negotiation result, not the cwd persisted in the old
+    /// session).
     async fn resume_on_session_new(
         &self,
         target: SessionId,
@@ -689,7 +731,8 @@ impl ServeState {
                         tracing::warn!(?err, "failed to replay loaded session transcript");
                     }
                 }
-                // 起持久 event pump（同 session/new）——replay 之后，新事件由它接力。
+                // Start a persistent event pump (same as session/new) — after replay, it
+                // takes over new events.
                 spawn_session_pump(session.clone(), session_id.clone(), cx);
                 tracing::info!(
                     session_id = %short_session_id(session.id()),
@@ -729,16 +772,18 @@ impl ServeState {
         let config_id = req.config_id.0.to_string();
         let value = req.value.0.to_string();
 
-        // 设值成功后统一回带刷新过的完整配置项集合——协议要求
-        // SetSessionConfigOptionResponse 携带全量 config_options。
+        // After a successful set, the response must carry the full refreshed set of
+        // config options — the protocol requires that `SetSessionConfigOptionResponse`
+        // includes all `config_options`.
         let invalid_value = || {
             AcpError::InvalidConfigOption(format!(
                 "unknown value `{value}` for config option `{config_id}`"
             ))
         };
         let apply_result = match config_id.as_str() {
-            // 模型：转调 session.set_model（与 deprecated `session/set_model`
-            // 同一后端）。未知 / 越界 model id → InvalidConfigOption。
+            // Model: delegates to `session.set_model` (same backend as the deprecated
+            // `session/set_model`). Unknown or out-of-range model id →
+            // `InvalidConfigOption`.
             MODEL_CONFIG_ID => match decode_model_value(&value) {
                 Some(selection) => session
                     .set_model(selection)
@@ -746,10 +791,10 @@ impl ServeState {
                     .map_err(|_| invalid_value()),
                 None => Err(invalid_value()),
             },
-            // 权限模式：转调 session.set_mode（与 deprecated `session/set_mode`
-            // 同一后端）。未知 mode id → InvalidConfigOption。
+            // Permission mode: delegates to `session.set_mode` (same backend as the
+            // deprecated `session/set_mode`). Unknown mode id → `InvalidConfigOption`.
             MODE_CONFIG_ID => session.set_mode(value.clone()).map_err(|_| invalid_value()),
-            // thought-level：解析成 ReasoningEffort 覆盖。
+            // thought-level: parse into a `ReasoningEffort` override.
             THOUGHT_LEVEL_CONFIG_ID => match parse_reasoning_value(&value) {
                 Ok(effort) => {
                     session.set_reasoning_effort(effort);
@@ -788,11 +833,12 @@ impl ServeState {
                 .into_wire_error(),
             );
         };
-        // 把 turn 的执行扔到 spawn 任务里，handler 立即返回，
-        // 让 dispatch loop 不被阻塞——这样后续 cancel / resolve
-        // 等消息能在 turn 跑的同时被处理。事件投射不在这里做：由 session 级
-        // 持久 event pump（session/new · load 时起）统一转发，含 driver 自发的
-        // Autonomously continue to next turn.
+        // Spawn the turn execution into a background task so the handler returns
+        // immediately and the dispatch loop is not blocked; this allows subsequent
+        // cancel/resolve messages to be processed while the turn runs. Event projection
+        // is not done here — it is handled uniformly by the session-level persistent
+        // event pump (started on session/new and load), including the driver's autonomous
+        // continuation to the next turn.
         cx.spawn(async move { run_prompt_turn(session, req.prompt, responder).await })
     }
 
@@ -807,16 +853,18 @@ impl ServeState {
     }
 }
 
-/// 启动 stdio ACP 服务，阻塞到对端断开。
+/// Starts the stdio ACP service, blocking until the peer disconnects.
 ///
-/// `agent` 由 `defect-cli` 装配（含 provider / 工具 / 配置）后注入。
+/// `agent` is assembled by `defect-cli` (with provider, tools, and configuration) and
+/// then injected.
 pub async fn serve(agent: Arc<dyn AgentCore>) -> Result<(), AcpError> {
     serve_on(agent, Stdio::new()).await
 }
 
-/// 同 [`serve`]，但带一次性 `--resume` 目标：首个 `session/new` 透明改走
-/// load_session 恢复该会话（见 `ServeState::resume_on_session_new`）。
-/// `resume = None` 时与 [`serve`] 等价。
+/// Like [`serve`], but with a one-shot `--resume` target: the first `session/new`
+/// transparently calls `load_session` to restore that session (see
+/// `ServeState::resume_on_session_new`). When `resume = None`, behaves identically to
+/// [`serve`].
 pub async fn serve_with_resume(
     agent: Arc<dyn AgentCore>,
     resume: Option<SessionId>,
@@ -824,9 +872,10 @@ pub async fn serve_with_resume(
     serve_on_with_resume(agent, Stdio::new(), resume).await
 }
 
-/// 在自定义 transport 上跑同一套 ACP handler。
+/// Runs the same ACP handler on a custom transport.
 ///
-/// 公共入口 [`serve`] 用 stdio；集成测试用 `Channel` 在进程内对接。
+/// The public entry point [`serve`] uses stdio; integration tests use `Channel` for
+/// in-process communication.
 pub async fn serve_on<T>(agent: Arc<dyn AgentCore>, transport: T) -> Result<(), AcpError>
 where
     T: ConnectTo<Agent> + 'static,
@@ -834,7 +883,7 @@ where
     serve_on_with_resume(agent, transport, None).await
 }
 
-/// [`serve_on`] + 一次性 resume 目标。见 [`serve_with_resume`]。
+/// [`serve_on`] with a one-shot resume target. See [`serve_with_resume`].
 pub async fn serve_on_with_resume<T>(
     agent: Arc<dyn AgentCore>,
     transport: T,
@@ -915,23 +964,29 @@ where
     Ok(())
 }
 
-/// 一次 `session/prompt`：跑 turn、按 run_turn 返回值 respond `PromptResponse`。
+/// A single `session/prompt`: runs a turn and responds with a `PromptResponse` based on
+/// the `run_turn` return value.
 ///
-/// **不**在这里订阅 / 投射事件——`session/update` 通知由 session 级**持久 event pump**
-/// （[`spawn_session_pump`]，session/new · load 时起）统一转发，含 driver 自发的自主续转
-/// turn。本函数只负责把这一条 prompt 的 turn 结果回成 JSON-RPC 响应。
+/// **Does not** subscribe to or emit events here — `session/update` notifications are
+/// forwarded uniformly by the session-level **persistent event pump**
+/// ([`spawn_session_pump`], started at session/new · load time), including
+/// driver-initiated autonomous turn continuations. This function only returns the turn
+/// result for this single prompt as a JSON-RPC response.
 ///
-/// **排队（§5.2）**：撞上 `TurnInProgress`（driver 的自主续转 turn 恰在跑，或并发 prompt）
-/// 时不立刻报错，短暂退避重试，让这条 prompt 排队等到 slot 空出——`session/prompt` 在
-/// 协议语义上期望被处理。
+/// **Queuing (§5.2)**: When a `TurnInProgress` is encountered (the driver's autonomous
+/// continuation turn is running, or a concurrent prompt is in progress), instead of
+/// immediately returning an error, briefly back off and retry, allowing this prompt to
+/// queue until a slot becomes available — `session/prompt` is expected to be processed
+/// per the protocol semantics.
 #[tracing::instrument(name = "acp_prompt_turn", skip_all)]
 async fn run_prompt_turn(
     session: Arc<dyn Session>,
     prompt: Vec<agent_client_protocol::schema::ContentBlock>,
     responder: agent_client_protocol::Responder<PromptResponse>,
 ) -> Result<(), agent_client_protocol::Error> {
-    // 排队重试：自主续转 turn 通常很短，退避几次即可拿到 slot。退避上限兜底防止
-    // 卡死（极端情况下退化为报错，让客户端重发）。
+    // Retry with backoff: a self-continued turn is usually short, so a few backoff
+    // attempts should acquire the slot. The backoff cap prevents deadlock (in extreme
+    // cases it degrades to an error, letting the client retry).
     const MAX_RETRIES: u32 = 100;
     const BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
 
@@ -956,22 +1011,27 @@ async fn run_prompt_turn(
     }
 }
 
-/// Session 级**持久 event pump**：订阅一次该 session 的事件流，把每个事件投射到 wire，
-/// 跨所有 turn 存活（含 driver 自发的自主续转 turn）。session/new · load 时 spawn。
+/// A persistent event pump at the session level: subscribes once to the session's event
+/// stream and projects each event onto the wire, surviving across all turns (including
+/// driver-initiated automatic turn renewal). Spawned on `session/new` and `load`.
 ///
-/// 这是阶段二补齐的关键一环：原先事件只在一次 `session/prompt` 期间被订阅转发，自主续转
-/// No consumer for turn events — in background mode, events are dropped.
+/// This is a key piece of phase-two completion: previously events were only subscribed
+/// and forwarded during a single `session/prompt`; automatic turn renewal had no consumer
+/// for turn events — in background mode, events were dropped.
 ///
-/// 生命周期：`session.subscribe()` 的事件流在 session drop（EventEmitter 析构）时结束，
-/// `events.next()` 返回 `None`，pump 自然退出。pump 持 `Arc<dyn Session>`，与 AgentCore
-/// 的 sessions 表同样强引用——v0 session 随进程存活，pump 亦然。
+/// Lifecycle: the event stream from `session.subscribe()` ends when the session is
+/// dropped (the `EventEmitter` is destroyed), at which point `events.next()` returns
+/// `None` and the pump exits naturally. The pump holds an `Arc<dyn Session>`, the same
+/// strong reference used by `AgentCore`'s sessions table — v0 sessions live for the
+/// process lifetime, and so does the pump.
 fn spawn_session_pump(session: Arc<dyn Session>, session_id: SessionId, cx: ConnectionTo<Client>) {
     let mut events = session.subscribe();
     let cx_for_pump = cx.clone();
     let _ = cx.spawn(async move {
         while let Some(event) = events.next().await {
-            // TurnStarted / TurnEnded 是 turn 边界标记，wire 上由 PromptResponse 表达，
-            // 不投射成 session/update（project 已把它们归到 EndTurn/Ignore）。
+            // TurnStarted / TurnEnded are turn boundary markers; on the wire they are
+            // represented as PromptResponse and are not projected into session/update
+            // (the project already classifies them as EndTurn/Ignore).
             if let Err(err) = handle_event(&session, &session_id, event, &cx_for_pump) {
                 tracing::warn!(?err, "session pump failed to project agent event");
             }
@@ -997,7 +1057,7 @@ fn handle_event(
     }
 }
 
-/// 给 tracing span / log 用的 session id 短形：按字符取前 12 个。仅诊断用。
+/// Short session ID for tracing spans / logs: first 12 characters. Diagnostic use only.
 fn short_session_id(id: &SessionId) -> &str {
     let s: &str = id.0.as_ref();
     match s.char_indices().nth(12) {
@@ -1006,7 +1066,8 @@ fn short_session_id(id: &SessionId) -> &str {
     }
 }
 
-/// 反向请求 `session/request_permission`，等客户端响应后回写到 [`Session`]。
+/// Sends a reverse request `session/request_permission` and writes the client's response
+/// back to [`Session`].
 fn spawn_permission_request(
     session: Arc<dyn Session>,
     session_id: SessionId,

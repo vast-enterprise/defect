@@ -28,9 +28,9 @@ fn token_estimate_none_when_empty() {
 
 #[test]
 fn token_estimate_char_heuristic_without_baseline() {
-    // 无真实基线：整份 snapshot 走 chars/4 兜底。
+    // No real baseline: entire snapshot falls back to chars/4.
     let h = VecHistory::new();
-    h.append(user(&"a".repeat(40))); // 40 chars → 10 token
+    h.append(user(&"a".repeat(40))); // 40 chars → 10 tokens
     assert_eq!(h.token_estimate(), Some(10));
 }
 
@@ -38,10 +38,10 @@ fn token_estimate_char_heuristic_without_baseline() {
 fn record_input_tokens_becomes_baseline_plus_increment() {
     let h = VecHistory::new();
     h.append(user("seed"));
-    // 真实基线 1000；其后追加的消息走字符增量叠加。
+    // Baseline is 1000; subsequent messages use character-based incremental accumulation.
     h.record_input_tokens(1_000);
     assert_eq!(h.token_estimate(), Some(1_000));
-    h.append(user(&"b".repeat(40))); // +10 token
+    h.append(user(&"b".repeat(40))); // +10 tokens
     assert_eq!(h.token_estimate(), Some(1_010));
 }
 
@@ -51,7 +51,7 @@ fn record_input_tokens_refreshes_baseline_and_resets_increment() {
     h.record_input_tokens(1_000);
     h.append(user(&"b".repeat(40))); // +10
     assert_eq!(h.token_estimate(), Some(1_010));
-    // 新一轮真实回报：基线刷新、增量归零。
+    // A new real round-trip: baseline refreshed, increment reset to zero.
     h.record_input_tokens(2_000);
     assert_eq!(h.token_estimate(), Some(2_000));
 }
@@ -64,10 +64,10 @@ fn replace_swaps_messages_and_clears_baseline() {
     h.record_input_tokens(5_000);
     assert_eq!(h.token_estimate(), Some(5_000));
 
-    h.replace(vec![user(&"c".repeat(80))]); // 80 chars → 20 token
+    h.replace(vec![user(&"c".repeat(80))]); // 80 chars → 20 tokens
     let snap = h.snapshot();
     assert_eq!(snap.len(), 1);
-    // 基线清空 → 整份字符启发式。
+    // Baseline cleared → full character heuristic.
     assert_eq!(h.token_estimate(), Some(20));
 }
 
@@ -89,12 +89,13 @@ fn splice_prefix_replaces_head_keeps_tail() {
     h.append(user("turn two"));
     h.append(assistant("reply two"));
 
-    // 丢掉前 2 条（turn one + reply one），换成摘要，保留后 2 条。
+    // Drop the first 2 entries (turn one + reply one), replace them with a summary, and
+    // keep the remaining 2.
     let dropped = h.splice_prefix(2, assistant("[summary]"));
     assert_eq!(dropped, 2);
 
     let snap = h.snapshot();
-    assert_eq!(snap.len(), 3); // summary + 保留的 2 条
+    assert_eq!(snap.len(), 3); // summary + 2 retained
     assert_eq!(snap[0].role, Role::Assistant);
     assert!(matches!(
         &snap[0].content[0],
@@ -108,12 +109,13 @@ fn splice_prefix_replaces_head_keeps_tail() {
 
 #[test]
 fn splice_prefix_preserves_tail_appended_during_flight() {
-    // 模拟后台压缩：在旧 snapshot（len=2）上算出 drop_count=2，
-    // 但回写前前台又 append 了 2 条尾部消息——splice_prefix 必须保住它们。
+    // Simulate background compaction: drop_count=2 was computed on the old snapshot
+    // (len=2), but the frontend appended 2 tail messages before the write-back —
+    // splice_prefix must preserve them.
     let h = VecHistory::new();
     h.append(user("old one"));
     h.append(assistant("old reply"));
-    // 飞行期间前台尾插。
+    // Append two messages from the frontend while compaction is in flight.
     h.append(user("new one"));
     h.append(assistant("new reply"));
 
@@ -121,7 +123,8 @@ fn splice_prefix_preserves_tail_appended_during_flight() {
     assert_eq!(dropped, 2);
 
     let snap = h.snapshot();
-    // summary + 期间新增的 2 条尾部，绝不能丢。
+    // The summary and the two new trailing messages added during that time must never be
+    // lost.
     assert_eq!(snap.len(), 3);
     assert!(matches!(
         &snap[1].content[0],
@@ -136,8 +139,10 @@ fn splice_prefix_preserves_tail_appended_during_flight() {
 #[test]
 #[should_panic(expected = "splice_prefix invariant violated")]
 fn splice_prefix_overlong_drop_count_trips_invariant_in_debug() {
-    // drop_count 超过当前长度意味着飞行期间有人删了中段消息——违反 single-flight
-    // 不变式。debug 下 debug_assert 炸出来（本测试断言它确实炸）；release 下 clamp 兜底。
+    // A `drop_count` exceeding the current length means someone deleted a middle message
+    // mid-flight, violating the single-flight invariant. In debug builds the
+    // `debug_assert` fires (this test asserts it does); in release builds `clamp` handles
+    // it.
     let h = VecHistory::new();
     h.append(user("only one"));
     let _ = h.splice_prefix(99, assistant("[summary]"));
@@ -151,7 +156,7 @@ fn splice_prefix_clears_baseline() {
     h.record_input_tokens(5_000);
     assert_eq!(h.token_estimate(), Some(5_000));
 
-    h.splice_prefix(1, assistant(&"c".repeat(80))); // summary 80 chars → 20
-    // 基线清空 → 整份字符启发式（summary 20 + "seed two" 8 chars→2）。
+    h.splice_prefix(1, assistant(&"c".repeat(80))); // summary: 80 chars → 20 tokens
+    // Baseline cleared → full character heuristic (summary 20 + "seed two" 8 chars → 2).
     assert_eq!(h.token_estimate(), Some(22));
 }

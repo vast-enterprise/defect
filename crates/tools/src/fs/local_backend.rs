@@ -1,13 +1,14 @@
-//! [`LocalFsBackend`]：直接打盘的 [`FsBackend`] 实现。
+//! [`LocalFsBackend`]: a direct-to-disk [`FsBackend`] implementation.
 //!
 //! Local filesystem backend — implements two key invariants:
-//! - **行末符规范化**（§6.1）：写文件时如果文件已存在，按文件原有的主流
-//!   行末符（CRLF / LF）规范化新内容，避免混合行末符
-//! - **原子写**（§6.2）：通过临时文件 + `rename` 完成全量覆盖，避免半截
-//!   文件
+//! - **Line-ending normalization** (§6.1): when writing to an existing file, normalizes
+//!   new content to match the file's dominant line ending (CRLF / LF), avoiding mixed
+//!   line endings.
+//! - **Atomic writes** (§6.2): performs full overwrites via a temporary file + `rename`,
+//!   preventing partial files.
 //!
-//! 路径校验由 [`defect_agent::fs::resolve_workspace_path`] 兜底——
-//! `LocalFsBackend` 与 `AcpFsBackend` 共用同一份函数。
+//! Path validation is delegated to [`defect_agent::fs::resolve_workspace_path`] —
+//! `LocalFsBackend` and `AcpFsBackend` share the same function.
 
 use std::borrow::Cow;
 use std::io;
@@ -19,16 +20,18 @@ use defect_agent::error::BoxError;
 use defect_agent::fs::{Fingerprint, FsBackend, FsError, resolve_workspace_path};
 use futures::future::BoxFuture;
 
-/// 单文件大小硬上限（read 与 write 共用）。详见 `tools-fs.md` §3.1 / §4.1。
+/// Hard upper bound for single-file size (shared by read and write). See `tools-fs.md`
+/// §3.1 / §4.1.
 pub const MAX_FS_BYTES: u64 = 10 * 1024 * 1024;
 
-/// `tmp + rename` 时用到的进程内单调计数器，避免同进程同路径并发写打架。
+/// Monotonic in-process counter used during `tmp + rename` to prevent concurrent writes
+/// to the same path within the same process.
 static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
-/// 直接打盘的 [`FsBackend`] 实现。
+/// A disk-backed [`FsBackend`] implementation.
 ///
-/// 持有 session 的 workspace root；所有 read / write 都先经过
-/// [`resolve_workspace_path`] 校验。
+/// Holds the session's workspace root; all reads and writes are first validated by
+/// [`resolve_workspace_path`].
 pub struct LocalFsBackend {
     workspace_root: PathBuf,
 }
@@ -58,10 +61,12 @@ impl FsBackend for LocalFsBackend {
                 _ => FsError::Backend(BoxError::new(e)),
             })?;
 
-            // 全文读：硬上限阻挡。窗口读（line / limit 任一为 Some）：
-            // 走 chunked-read 路径——逐行流式扫描，只缓冲请求窗口。
-            // v1 §3.1 的"大文件分页"：让 LLM 在不超过整体内存预算的前提下
-            // 通过 offset/limit 巡读超过 10 MiB 的日志 / 数据文件。
+            // Full reads are blocked by a hard size limit. Windowed reads (when `line` or
+            // `limit` is `Some`) use a chunked-read path that streams line by line,
+            // buffering only the requested window. This implements the "large file
+            // pagination" from v1 §3.1, allowing the LLM to navigate log/data files
+            // larger than 10 MiB via offset/limit without exceeding the overall memory
+            // budget.
             let windowed = line.is_some() || limit.is_some();
             if !windowed && metadata.len() > MAX_FS_BYTES {
                 return Err(FsError::TooLarge {
@@ -115,9 +120,9 @@ impl FsBackend for LocalFsBackend {
         })
     }
 
-    /// 用 mtime + size 做指纹——比走默认的"读全文 + hash"路径便宜得多，
-    /// 且对 v1 conflict detection 的语义足够：mtime 变了 / size 变了
-    /// 即视为冲突。
+    /// Use mtime + size as the fingerprint — much cheaper than the default "read entire
+    /// file + hash" approach, and sufficient for v1 conflict detection semantics: a
+    /// change in mtime or size is treated as a conflict.
     fn fingerprint(&self, path: PathBuf) -> BoxFuture<'_, Result<Fingerprint, FsError>> {
         Box::pin(async move {
             let abs = resolve_workspace_path(&self.workspace_root, &path)?;
@@ -134,8 +139,9 @@ impl FsBackend for LocalFsBackend {
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0);
 
-            // 把 mtime_nanos 折进 hash 字段，size 折进 bytes 字段——
-            // [`Fingerprint`] 的等值比较直接对位 (size, mtime)。
+            // Store `mtime_nanos` in the `hash` field and `size` in the `bytes` field —
+            // [`Fingerprint`] equality compares the two fields directly as `(size,
+            // mtime)`.
             Ok(Fingerprint {
                 bytes: size,
                 hash: mtime_nanos,
@@ -154,7 +160,9 @@ impl FsBackend for LocalFsBackend {
                 });
             }
 
-            // 行末符规范化：仅在文件已存在时按原行末符规范；新文件保持 LLM 给的原貌。
+            // Normalize line endings: only normalize when the file already exists, using
+            // its existing line-ending convention; for new files, preserve the original
+            // line endings from the LLM output.
             let final_content: Cow<'_, str> = match tokio::fs::read(&abs).await {
                 Ok(prev_bytes) => {
                     let prev = String::from_utf8_lossy(&prev_bytes);
@@ -174,14 +182,16 @@ impl FsBackend for LocalFsBackend {
     }
 }
 
-/// 流式读窗口：逐行扫描文件，只在 [start, start+take) 范围内累积内容。
+/// Streaming read window: scans the file line by line, accumulating content only within
+/// the range [start, start+take).
 ///
-/// 与 [`slice_lines`] 的差异：后者要求整个文件已经在内存里（[`String`]）；
-/// 这里走 `BufReader::read_line`，跳过的行直接丢弃，不进字节预算。这样
-/// 即便文件远超 [`MAX_FS_BYTES`]，只要 `limit` 收得够紧就不会爆。
+/// Unlike [`slice_lines`], which requires the entire file to be in memory as a
+/// [`String`], this approach uses `BufReader::read_line` and discards skipped lines
+/// without counting them toward the byte budget. This means even files far exceeding
+/// [`MAX_FS_BYTES`] won't cause memory issues as long as `limit` is tight enough.
 ///
-/// 二进制启发式：扫到的字节里出现 NUL 即拒，与全量路径的 [`looks_binary`]
-/// 语义对齐。
+/// Binary heuristic: rejects the file if a NUL byte is encountered during scanning,
+/// matching the semantics of the full-path [`looks_binary`].
 async fn read_window_streaming(
     path: &Path,
     line: Option<u32>,
@@ -223,9 +233,10 @@ async fn read_window_streaming(
         }
 
         if idx >= start {
-            // 仅累积窗口内的行——超过 MAX_FS_BYTES 即拒，避免单次窗口
-            // 自身把内存吃爆。窗口大小由 LLM 选 limit 决定，命中阈值
-            // 时报 TooLarge 让上层据此把 limit 收小再试。
+            // Only accumulate lines within the window; reject if they exceed
+            // `MAX_FS_BYTES` to prevent a single window from exhausting memory. The
+            // window size is determined by the LLM-chosen `limit`; when the threshold is
+            // hit, return `TooLarge` so the caller can retry with a smaller `limit`.
             total_window_bytes = total_window_bytes.saturating_add(n as u64);
             if total_window_bytes > MAX_FS_BYTES {
                 return Err(FsError::TooLarge {
@@ -271,14 +282,16 @@ fn normalize(content: &str, target: LineEnding) -> Cow<'_, str> {
             }
         }
         LineEnding::Crlf => {
-            // 先归一到 LF，再统一替换为 CRLF——避免 "\r\n\n" 类输入二次拼接成 "\r\r\n"。
+            // Normalize to LF first, then replace all LF with CRLF — this avoids
+            // double-converting sequences like "\r\n\n" into "\r\r\n".
             let lf = content.replace("\r\n", "\n");
             Cow::Owned(lf.replace('\n', "\r\n"))
         }
     }
 }
 
-/// 以 `\0` 出现 / 高比例非可打印字节作为二进制启发式。仅扫前 8 KiB。
+/// Binary heuristic: presence of `\0` or a high ratio of non-printable bytes. Only scans
+/// the first 8 KiB.
 fn looks_binary(bytes: &[u8]) -> bool {
     let head = bytes.get(..8 * 1024).unwrap_or(bytes);
     if head.is_empty() {
@@ -294,7 +307,8 @@ fn looks_binary(bytes: &[u8]) -> bool {
     non_printable * 100 / head.len() > 30
 }
 
-/// 按 `line` (1-based 起始) / `limit` 切片。两者皆 None 时返回全文。
+/// Slices the text by `line` (1-based) and `limit`. Returns the full text when both are
+/// `None`.
 fn slice_lines(text: &str, line: Option<u32>, limit: Option<u32>) -> String {
     if line.is_none() && limit.is_none() {
         return text.to_string();
@@ -314,8 +328,9 @@ fn slice_lines(text: &str, line: Option<u32>, limit: Option<u32>) -> String {
     out
 }
 
-/// `tmp + rename` 原子写。tmp 文件落在同一父目录以避免跨设备 rename。
-/// 父目录不存在时自动创建（`mkdir -p`）。
+/// Atomic write via `tmp + rename`. The temporary file is placed in the same parent
+/// directory to avoid cross-device renames. The parent directory is created automatically
+/// if it does not exist (`mkdir -p`).
 async fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
@@ -331,7 +346,7 @@ async fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         file_name.to_string_lossy()
     ));
 
-    // RAII：err 路径上自动 remove tmp，避免残留。
+    // RAII: automatically removes tmp on error paths to avoid leftover files.
     let cleanup = TmpCleanup {
         path: Some(tmp_path.clone()),
     };
@@ -354,7 +369,8 @@ impl TmpCleanup {
 impl Drop for TmpCleanup {
     fn drop(&mut self) {
         if let Some(p) = self.path.take() {
-            // best-effort：失败留个 .tmp 比留半截目标文件好
+            // Best-effort: leaving a .tmp file is better than leaving a partial target
+            // file.
             let _ = std::fs::remove_file(&p);
         }
     }

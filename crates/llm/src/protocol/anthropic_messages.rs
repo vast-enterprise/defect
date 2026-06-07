@@ -1,9 +1,9 @@
-//! Anthropic Messages 协议编解码。
+//! Anthropic Messages protocol encoding and decoding.
 //!
-//! 把 [`defect_agent::llm::CompletionRequest`] 编为 wire
-//! [`crate::wire::anthropic::components::CreateMessageParams`]，
-//! 把 SSE [`Sse`] 流（[`MessageStreamEvent`]）解码为
-//! [`defect_agent::llm::ProviderChunk`] 流。
+//! Encodes [`defect_agent::llm::CompletionRequest`] into the wire format
+//! [`crate::wire::anthropic::components::CreateMessageParams`],
+//! and decodes an SSE [`Sse`] stream ([`MessageStreamEvent`]) into a
+//! [`defect_agent::llm::ProviderChunk`] stream.
 //!
 //! Anthropic Messages API protocol mapping.
 //!
@@ -29,22 +29,22 @@ use tracing::warn;
 
 use crate::wire::anthropic::components as wire;
 
-// ---------- encode -------------------------------------------------------
+// encode
 
-/// 默认 max_tokens——`CompletionRequest::sampling.max_tokens` 为 `None`
-/// 且模型缓存里查不到 max_output_tokens 时使用的兜底值。
+/// Fallback value used when `CompletionRequest::sampling.max_tokens` is `None` and no
+/// `max_output_tokens` is found in the model cache.
 ///
-/// Anthropic Messages API `max_tokens` 是 **必填**，没有合理默认值，
-/// 协议层不能少传。4096 是 Anthropic 文档里"old default"标注，覆盖
-/// 绝大多数情况；调用方有更精确的值时应通过 sampling 显式给出。
+/// The Anthropic Messages API requires `max_tokens` — it has no sensible default and must
+/// always be sent. 4096 is documented as the "old default" in Anthropic's docs and covers
+/// most cases; callers with a more precise value should set it explicitly via `sampling`.
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
 
-/// Anthropic prompt cache 最多接受 4 个 ephemeral cache breakpoint。
+/// Anthropic prompt cache accepts at most 4 ephemeral cache breakpoints.
 const MAX_CACHE_BREAKPOINTS: usize = 4;
 
-/// 把 [`CompletionRequest`] 编为 wire 请求体。
+/// Encodes a [`CompletionRequest`] into the wire request body.
 ///
-/// 强制 `stream = true`：协议层只跑 SSE 分支。
+/// Forces `stream = true`: the protocol layer only uses the SSE path.
 pub fn encode_request(req: &CompletionRequest) -> wire::CreateMessageParams {
     let max_tokens = req.sampling.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
     let mut prompt_cache = PromptCache::new();
@@ -127,9 +127,11 @@ fn encode_content(
             },
         )),
         MessageContent::Thinking { text, signature } => {
-            // Anthropic wire 上 `signature` 是 required —— 缺失等价于
-            // 伪造，服务端拒。OpenAI / DeepSeek 兼容路径不会带 signature；
-            // 跨 provider 切回 Anthropic 时 thinking 块没法回放，整块跳过。
+            // On the Anthropic wire, `signature` is required — a missing value is
+            // equivalent to forgery and will be rejected by the server. The OpenAI /
+            // DeepSeek compatibility path never includes a signature; when switching
+            // providers back to Anthropic, the thinking block cannot be replayed, so the
+            // entire block is skipped.
             let signature = signature.as_ref()?;
             Some(wire::ContentBlockParam::ThinkingBlockParam(
                 wire::ThinkingBlockParam {
@@ -166,8 +168,9 @@ fn encode_content(
                 cache_control: prompt_cache.next_breakpoint(),
             },
         )),
-        // 内部枚举是 non_exhaustive；新增 variant 时落到此处的回退是
-        // 一段空文本——明显的 placeholder，方便 grep 出来补真正的映射。
+        // The inner enum is `non_exhaustive`; when a new variant is added, the fallback
+        // here is an empty string — an obvious placeholder so it can be grepped for a
+        // real mapping.
         _ => Some(wire::ContentBlockParam::TextBlockParam(
             wire::TextBlockParam {
                 text: String::new(),
@@ -185,7 +188,8 @@ fn encode_tool_result(
     is_error: bool,
     prompt_cache: &mut PromptCache,
 ) -> wire::ContentBlockParam {
-    // Anthropic 的 tool_result 块原生支持文本与 image 子块，逐块映射即可。
+    // Anthropic's `tool_result` block natively supports text and image sub-blocks; map
+    // each block accordingly.
     let content: Vec<wire::ToolResultBlockParamContent> = match output {
         ToolResultBody::Text { text } => vec![text_result_block(text.clone())],
         ToolResultBody::Json { value } => vec![text_result_block(value.to_string())],
@@ -339,8 +343,9 @@ impl PromptCache {
     }
 }
 
-/// 拆 JSON Schema 顶层为 `properties` / `required` —— `ToolInputSchema`
-/// 受限只接 object schema，多余字段送丢即可（codegen 出来的 wire 不存）。
+/// Splits the top-level JSON Schema into `properties` / `required` — `ToolInputSchema`.
+/// Only accepts object schemas; extra fields are discarded (the codegen wire does not
+/// store them).
 fn split_input_schema(
     schema: &serde_json::Value,
 ) -> (
@@ -372,8 +377,8 @@ fn json_value_to_object(v: &serde_json::Value) -> BTreeMap<String, serde_json::V
 
 // ---------- decode -------------------------------------------------------
 
-/// 在解码状态机里追踪每个 content_block 的种类——只有
-/// [`BlockKind::ToolUse`] 需要在 ArgsDelta / Stop 时反查 `tool_use_id`。
+/// Tracks the kind of each `content_block` in the decoding state machine — only
+/// [`BlockKind::ToolUse`] needs to look up `tool_use_id` on `ArgsDelta` / `Stop`.
 #[derive(Debug, Clone)]
 enum BlockKind {
     Text,
@@ -381,26 +386,28 @@ enum BlockKind {
     ToolUse {
         id: String,
     },
-    /// 已知但暂不投影为 chunk（server tool / citation 等）。
+    /// Known but not yet projected as a chunk (server tool, citation, etc.).
     Other,
 }
 
-/// 内部状态。每次 `message_start` 重置，理论上一条流只 start 一次，
-/// 这里仍按"宽容"原则：上游若重复发，沿用已有状态而不直接报错。
+/// Internal state. Reset on each `message_start`. In theory a stream should only start
+/// once, but we follow a lenient policy: if the upstream sends a duplicate start, we
+/// reuse the existing state rather than erroring out.
 #[derive(Debug, Default)]
 struct DecoderState {
     blocks: HashMap<i64, BlockKind>,
     started: bool,
     stopped: bool,
-    /// 见过 `error` event 后置位，下游应停止消费。
+    /// Set when an `error` event is seen; downstream should stop consuming.
     fatal: bool,
 }
 
-/// SSE 流 → ProviderChunk 流。返回值实现 [`Stream`]，调用方通过 `.next()`
-/// 拉取，drop 该流即等同取消。
+/// Converts an SSE stream into a `ProviderChunk` stream. The return value implements
+/// [`Stream`]; callers pull from it via `.next()`, and dropping the stream is equivalent
+/// to cancellation.
 ///
-/// `cancel` 来自 [`defect_agent::llm::LlmProvider::complete`]，触发后流静默
-/// terminates without yielding `Err(Canceled)`.
+/// The `cancel` token originates from [`defect_agent::llm::LlmProvider::complete`]. When
+/// triggered, the stream silently terminates without yielding `Err(Canceled)`.
 pub fn decode_stream(
     sse: SseEventStream,
     cancel: CancellationToken,
@@ -408,11 +415,12 @@ pub fn decode_stream(
     decode_stream_generic(sse, cancel)
 }
 
-/// 与 [`decode_stream`] 同形态，但对入参的具体 `Stream` 类型泛化。
+/// Same shape as [`decode_stream`], but generic over the concrete `Stream` type of the
+/// input.
 ///
-/// 运行期由 [`decode_stream`] 喂 [`SseEventStream`]；测试可以喂任意
-/// `Stream<Item = Result<Sse, E>>`（例如 `futures::stream::iter`），
-/// 无需经过 toac 的 `SseBody`（其 `new` 是 crate-private）。
+/// At runtime [`decode_stream`] feeds it a [`SseEventStream`]; tests can feed any
+/// `Stream<Item = Result<Sse, E>>` (e.g. `futures::stream::iter`),
+/// without going through toac's `SseBody` (whose `new` is crate-private).
 pub fn decode_stream_generic<S, E>(
     sse: S,
     cancel: CancellationToken,
@@ -427,9 +435,9 @@ where
     decode_stream_provider_errors(sse, cancel)
 }
 
-/// 与 [`decode_stream_generic`] 同形态，但入参错误已统一成
-/// [`ProviderError`]。Bedrock 这类非 SSE transport 会在 event-stream 层
-/// 产生已分类错误，直接走此入口复用 Anthropic 状态机。
+/// Same shape as [`decode_stream_generic`], but input errors are already unified to
+/// [`ProviderError`]. Non-SSE transports like Bedrock produce classified errors at the
+/// event-stream layer; this entry point reuses the Anthropic state machine directly.
 pub fn decode_stream_provider_errors<S>(
     sse: S,
     cancel: CancellationToken,
@@ -450,8 +458,8 @@ struct AnthropicSseDecoder<S> {
     inner: S,
     cancel: CancellationToken,
     state: DecoderState,
-    /// 单个 SSE event 可能产出多个 chunk（如 `message_start` 同时给
-    /// MessageStart + Usage）。先存到 `pending`，逐个吐。
+    /// A single SSE event may produce multiple chunks (e.g. `message_start` yields both
+    /// MessageStart and Usage). These are buffered in `pending` and yielded one by one.
     pending: Vec<Result<ProviderChunk, ProviderError>>,
     finished: bool,
 }
@@ -463,8 +471,8 @@ where
     type Item = Result<ProviderChunk, ProviderError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // SAFETY: standard pin-projection through a single field. We never
-        // move `inner` out.
+        // Safety: standard pin-projection through a single field. We never move `inner`
+        // out.
         let this = unsafe { self.get_unchecked_mut() };
         loop {
             if let Some(item) = this.pending.pop() {
@@ -523,9 +531,10 @@ fn process_sse(
     let evt = match parsed {
         Ok(e) => e,
         Err(e) => {
-            // 协议噪声：单条解析失败不终止整个流。把原始 payload 也打到 warn
-            // 日志——不同 transport（Bedrock event-stream / Messages SSE）
-            // 之间字段差异要靠原文对比定位。
+            // Protocol noise: a single parse failure does not terminate the entire
+            // stream. Also log the raw payload at warn level — field differences between
+            // transports (Bedrock event-stream / Messages SSE) must be located by
+            // comparing the original text.
             warn!(
                 error = %e,
                 event_name = ?event_name,
@@ -539,7 +548,8 @@ fn process_sse(
         }
     };
 
-    // event_name 与 evt 内 type 字段冗余但理论一致；不一致只 warn。
+    // event_name and the `type` field inside `evt` are redundant but should agree; log a
+    // warning if they don't.
     if let Some(name) = event_name {
         let ty = event_type_of(&evt);
         if ty != name {
@@ -574,7 +584,8 @@ fn handle_event(
 ) {
     use wire::MessageStreamEvent::*;
 
-    // poll_next 用 `pop()` 取出，这里反序压栈让它按时间顺序吐出。
+    // poll_next drains with `pop()`, so push in reverse order to preserve chronological
+    // output.
     let mut buf = Vec::new();
     match evt {
         MessageStartEvent(e) => {
@@ -623,7 +634,7 @@ fn handle_event(
                     _ => warn!(index = e.index, "input_json_delta for non-tool_use block"),
                 },
                 wire::ContentBlockDelta::CitationsDelta(_) => {
-                    // citations 不投影到 v0 ProviderChunk；忽略。
+                    // Citations are not projected into v0 `ProviderChunk`; ignore them.
                 }
             }
         }
@@ -683,8 +694,9 @@ fn stop_reason_from_wire(r: wire::StopReason) -> StopReason {
         wire::StopReason::ToolUse => StopReason::ToolUse,
         wire::StopReason::Refusal => StopReason::Refusal,
         wire::StopReason::PauseTurn => {
-            // pause_turn 是 server tool 中途让步信号。v0 主循环没有
-            // 对应语义，按 EndTurn 处理并 warn——后续要单独建 variant。
+            // `pause_turn` is a server-tool yield signal. The v0 main loop has no
+            // corresponding semantics, so it is treated as `EndTurn` with a warning; a
+            // dedicated variant should be added later.
             warn!("anthropic stop_reason=pause_turn folded to EndTurn");
             StopReason::EndTurn
         }

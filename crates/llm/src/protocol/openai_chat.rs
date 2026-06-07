@@ -1,9 +1,9 @@
-//! OpenAI Chat Completions 协议编解码。
+//! OpenAI Chat Completions protocol encoding and decoding.
 //!
-//! 把 [`defect_agent::llm::CompletionRequest`] 编为 wire
-//! [`crate::wire::openai::components::CreateChatCompletionRequest`]，
-//! 把 SSE [`Sse`] 流（[`CreateChatCompletionStreamResponse`]）解码为
-//! [`defect_agent::llm::ProviderChunk`] 流。
+//! Encodes [`defect_agent::llm::CompletionRequest`] into the wire format
+//! [`crate::wire::openai::components::CreateChatCompletionRequest`],
+//! and decodes an SSE [`Sse`] stream of [`CreateChatCompletionStreamResponse`] into a
+//! [`defect_agent::llm::ProviderChunk`] stream.
 //!
 //! OpenAI Chat Completions API protocol mapping.
 //!
@@ -30,7 +30,7 @@ use tracing::warn;
 
 use crate::wire::openai::components as wire;
 
-// ---------- encode -------------------------------------------------------
+// encode
 
 const PROMPT_CACHE_KEY_PREFIX: &str = "defect:chat:v1:";
 const PROMPT_CACHE_KEY_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -64,13 +64,12 @@ pub fn encode_request(req: &CompletionRequest) -> wire::CreateChatCompletionRequ
     encode_request_with_echo(req, ThinkingEcho::Forbidden)
 }
 
-/// 与 [`encode_request`] 同形态，但显式接收 thinking 回放策略。
+/// Same shape as [`encode_request`], but explicitly accepts a thinking-echo policy.
 ///
-/// `echo_mode` 由 provider 层从 [`defect_agent::llm::Capabilities`] 读取
-/// 并传入：`Required` 时 assistant message 上的
-/// [`MessageContent::Thinking`] 文本会被写到 wire 的非标
-/// `reasoning_content` field;
-/// `Forbidden`（含未配置）一律不写。
+/// `echo_mode` is read by the provider layer from [`defect_agent::llm::Capabilities`]
+/// and passed in: when `Required`, the [`MessageContent::Thinking`] text on the
+/// assistant message is written to the non-standard `reasoning_content` field on the
+/// wire; when `Forbidden` (including unconfigured), it is never written.
 pub fn encode_request_with_echo(
     req: &CompletionRequest,
     echo_mode: ThinkingEcho,
@@ -78,10 +77,10 @@ pub fn encode_request_with_echo(
     encode_request_full(req, echo_mode, None)
 }
 
-/// 与 [`encode_request_with_echo`] 同形态，但允许 provider 层强制覆盖
-/// `reasoning_effort` 字段。`effort_override` = `Some(_)` 时无视
-/// `SamplingParams::thinking` 的取值，直接落到 wire；`None` 时维持
-/// 旧行为（thinking enabled → medium）。
+/// Same shape as [`encode_request_with_echo`], but allows the provider layer to forcibly
+/// override the `reasoning_effort` field. When `effort_override` is `Some(_)`, the value
+/// of `SamplingParams::thinking` is ignored and the override is written directly to the
+/// wire; when `None`, the old behavior (thinking enabled → medium) is preserved.
 pub fn encode_request_full(
     req: &CompletionRequest,
     echo_mode: ThinkingEcho,
@@ -92,7 +91,8 @@ pub fn encode_request_full(
 
 /// OpenAI Chat-compatible request dialect.
 ///
-/// OpenAI 官方与兼容厂商在同一个 JSON schema 下仍有少量字段语义差异。
+/// Even though OpenAI and compatible providers share the same JSON schema, there are
+/// still minor semantic differences in a few fields.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ChatDialect {
     #[default]
@@ -100,7 +100,8 @@ pub enum ChatDialect {
     DeepSeek,
 }
 
-/// 与 [`encode_request_full`] 同形态，但允许 provider 指定兼容厂商方言。
+/// Same shape as [`encode_request_full`], but allows the provider to specify a compatible
+/// vendor dialect.
 pub fn encode_request_with_dialect(
     req: &CompletionRequest,
     echo_mode: ThinkingEcho,
@@ -118,7 +119,7 @@ pub fn encode_request_with_dialect(
     let max_tokens = req.sampling.max_tokens.map(i64::from);
     #[allow(deprecated)]
     wire::CreateChatCompletionRequest {
-        // ---- 我们使用的字段 ----
+        // ---- fields we use ----
         messages,
         model: wire::ModelIdsShared::ModelIdsSharedVariant0(req.model.clone()),
         stream: Some(true),
@@ -149,9 +150,10 @@ pub fn encode_request_with_dialect(
                 req.sampling.stop_sequences.clone(),
             ))
         },
-        // 优先级：per-session `sampling.reasoning_effort`（ACP thought-level，
-        // 运行时可切）> provider 级 `effort_override`（config 固定）> 从
-        // `thinking` 推导。前两者都直接物化等级；最后一档只能映射到 medium。
+        // Priority: per-session `sampling.reasoning_effort` (ACP thought-level,
+        // switchable at runtime) > provider-level `effort_override` (fixed in config) >
+        // derived from `thinking`. The first two directly materialize the level; the last
+        // can only map to medium.
         reasoning_effort: req
             .sampling
             .reasoning_effort
@@ -164,7 +166,7 @@ pub fn encode_request_with_dialect(
             Some(req.tools.iter().map(encode_tool).collect())
         },
         tool_choice: encode_tool_choice(&req.tool_choice),
-        // ---- 不使用的字段：显式 None，方便日后 grep ----
+        // Unused fields: explicitly set to None for easy grepping later
         metadata: None,
         top_logprobs: None,
         user: None,
@@ -280,11 +282,11 @@ fn encode_system_message(text: &str) -> wire::ChatCompletionRequestMessage {
     )
 }
 
-/// 一条 [`Message`] 可能 fan-out 成多条 wire message：
-/// - user 里夹带的每个 [`MessageContent::ToolResult`] 都要拆出独立 tool
-///   message；
-/// - assistant 的 [`MessageContent::ToolUse`] 抽到顶层 `tool_calls` 字段，
-///   而不是 content。
+/// A single [`Message`] may fan out into multiple wire messages:
+/// - Each [`MessageContent::ToolResult`] embedded in a user message becomes a separate
+///   tool message.
+/// - Each [`MessageContent::ToolUse`] in an assistant message is lifted to the top-level
+///   `tool_calls` field instead of being part of the content.
 fn encode_message_into(
     m: &Message,
     echo_mode: ThinkingEcho,
@@ -321,14 +323,16 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
                 output,
                 is_error: _,
             } => {
-                // OpenAI 的 tool message 没有 is_error 字段；用 prefix 标记，
-                // 让模型从 content 里读到错误状态。is_error 主要给 Anthropic
-                // 用的；这里保留它的语义但形态不一样。
+                // OpenAI's tool message has no `is_error` field; we use a prefix to
+                // signal the error state so the model can read it from the content.
+                // `is_error` is primarily for Anthropic; here we preserve its semantics
+                // but in a different form.
                 //
-                // OpenAI 的 tool message 只接受文本——多模态结果里的图片塞不进
-                // tool message。编排：图片块剥出来推到 user_parts（紧随 tool
-                // message 之后的 user message），tool message 里留文本 + 一句
-                // 占位提示，让模型知道图片在下一条消息里。
+                // OpenAI's tool message only accepts text—images from multimodal results
+                // cannot be placed inside a tool message. Strategy: extract image blocks
+                // and push them into `user_parts` (the user message immediately following
+                // the tool message), leaving only text plus a placeholder hint in the
+                // tool message so the model knows the images are in the next message.
                 let text = match output {
                     ToolResultBody::Text { text } => text.clone(),
                     ToolResultBody::Json { value } => value.to_string(),
@@ -364,7 +368,7 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
                 };
                 tool_results.push((tool_use_id.clone(), text));
             }
-            // non_exhaustive 的兜底：保留位置但内容空。
+            // Fallback for `non_exhaustive`: keep the slot but leave the content empty.
             _ => {
                 user_parts.push(
                     wire::ChatCompletionRequestUserMessageContentPart::ChatCompletionRequestMessageContentPartText(
@@ -378,8 +382,9 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
         }
     }
 
-    // OpenAI / LiteLLM 要求：assistant(tool_calls) 之后必须立刻跟对应的
-    // tool messages；不能先插入下一条 user message。
+    // OpenAI / LiteLLM require that an assistant message with tool_calls must be
+    // immediately followed by the corresponding tool messages; a subsequent user message
+    // cannot be inserted in between.
     for (tool_use_id, text) in tool_results {
         out.push(wire::ChatCompletionRequestMessage::ChatCompletionRequestToolMessage(
             wire::ChatCompletionRequestToolMessage {
@@ -420,8 +425,8 @@ fn encode_assistant_message_into(
         match c {
             MessageContent::Text { text } => text_parts.push(text.clone()),
             MessageContent::Thinking { text, .. } => {
-                // signature 字段在 OpenAI 路径上无意义（DeepSeek 不要、
-                // OpenAI 自己也不要），只取文本。
+                // The `signature` field is irrelevant on the OpenAI path (neither
+                // DeepSeek nor OpenAI uses it); only the text is taken.
                 reasoning_text.push_str(text);
             }
             MessageContent::ToolUse { id, name, args } => {
@@ -438,8 +443,9 @@ fn encode_assistant_message_into(
                     ),
                 );
             }
-            // ToolResult/Image 不该出现在 assistant 角色里；non_exhaustive
-            // 兜底也走到这里。忽略，不投到 wire。
+            // ToolResult/Image should not appear in the assistant role; the
+            // non_exhaustive fallback also reaches here. Ignore and do not send over the
+            // wire.
             _ => {}
         }
     }
@@ -448,17 +454,18 @@ fn encode_assistant_message_into(
         ChatDialect::DeepSeek => Some(reasoning_text),
         ChatDialect::OpenAi => match (echo_mode, reasoning_text.is_empty()) {
             (ThinkingEcho::Required, false) => Some(reasoning_text),
-            // Optional 也按 Required 处理：服务端容忍多发的场景下回放更
-            // 安全（DeepSeek-v4-pro 文档把它列为 must、其它 Optional 厂商
-            // 多发也不报错）。
+            // Treat `Optional` the same as `Required`: replaying is safer when the server
+            // tolerates extra thinking fields (DeepSeek-v4-pro docs list it as `must`;
+            // other `Optional` vendors do not error on extra fields either).
             (ThinkingEcho::Optional, false) => Some(reasoning_text),
             _ => None,
         },
     };
     let content = if text_parts.is_empty() {
         if tool_calls.is_empty() && reasoning_content.is_some() {
-            // DeepSeek v4 系列会校验 assistant message 至少带 content 或
-            // tool_calls；thinking-only 的历史回放要补一个空 content。
+            // DeepSeek v4 series validates that assistant messages have at least
+            // `content` or `tool_calls`; replaying a thinking-only history requires
+            // adding an empty `content`.
             Some(wire::ChatCompletionRequestAssistantMessageContent::ChatCompletionRequestAssistantMessageContentVariant0(
                 wire::ChatCompletionRequestAssistantMessageContentVariant0::ChatCompletionRequestAssistantMessageContentVariant0Variant0(
                     EMPTY_ASSISTANT_CONTENT.to_owned(),
@@ -496,8 +503,8 @@ fn encode_assistant_message_into(
     );
 }
 
-/// 构造一个 OpenAI user message 的 image part。`MessageContent::Image` 与
-/// 多模态 tool_result 里剥出来的图片块共用这条。
+/// Build an OpenAI user-message image part. This is shared with the image block extracted
+/// from a multimodal `tool_result` via `MessageContent::Image`.
 fn image_part(mime: &str, data: &ImageData) -> wire::ChatCompletionRequestUserMessageContentPart {
     wire::ChatCompletionRequestUserMessageContentPart::ChatCompletionRequestMessageContentPartImage(
         wire::ChatCompletionRequestMessageContentPartImage {
@@ -514,7 +521,7 @@ fn image_url_string(mime: &str, data: &ImageData) -> String {
     match data {
         ImageData::Url { url } => url.clone(),
         ImageData::Base64 { encoded } => format!("data:{mime};base64,{encoded}"),
-        // non_exhaustive 兜底——空 URL，明显的 placeholder。
+        // Fallback for non_exhaustive — empty URL, an obvious placeholder.
         _ => String::new(),
     }
 }
@@ -522,8 +529,9 @@ fn image_url_string(mime: &str, data: &ImageData) -> String {
 fn encode_thinking(t: ThinkingConfig) -> Option<wire::ReasoningEffort> {
     match t {
         ThinkingConfig::Disabled => None,
-        // OpenAI 的 thinking 不接受 budget_tokens（与 Anthropic 不同），
-        // 只有等级。budget 值送丢，统一映射到 medium。
+        // OpenAI's thinking does not accept `budget_tokens` (unlike Anthropic); it only
+        // supports effort levels. The budget value is discarded and uniformly mapped to
+        // `medium`.
         ThinkingConfig::Enabled { .. } => Some(wire::ReasoningEffort::ReasoningEffortVariant0(
             wire::ReasoningEffortVariant0::Medium,
         )),
@@ -598,36 +606,39 @@ fn json_value_to_parameters(v: &serde_json::Value) -> wire::FunctionParameters {
 
 // ---------- decode -------------------------------------------------------
 
-/// 解码状态机内部状态。
+/// Internal state of the decoding state machine.
 #[derive(Debug, Default)]
 struct DecoderState {
-    /// 已发出 MessageStart。
+    /// MessageStart has been emitted.
     started: bool,
-    /// 已发出 Stop。Stop 之后只允许再发 Usage。
+    /// `Stop` has been emitted. After `Stop`, only `Usage` is allowed.
     stopped: bool,
-    /// 见过 `data: [DONE]` 标记。
+    /// Whether the `data: [DONE]` marker has been seen.
     done: bool,
-    /// 收到致命错误（解析失败重试不能继续）。
+    /// Received a fatal error (parsing failure; retry cannot continue).
     fatal: bool,
-    /// `delta.tool_calls[].index` → `tool_call_id`。OpenAI 流式 chunk
-    /// 的工具调用通过 index 关联，第一帧带 id+name，后续 args 帧只有
-    /// index。我们用此表把 index 还原为 ProviderChunk 里的 id。
+    /// Maps `delta.tool_calls[].index` → `tool_call_id`. OpenAI streaming chunks
+    /// associate tool calls by index: the first frame carries `id` + `name`, while
+    /// subsequent `args` frames only have the index. This table maps the index back to
+    /// the `id` in `ProviderChunk`.
     tool_calls: HashMap<i64, ToolCallState>,
-    /// tool_calls 收到顺序（用于在 Stop 时按出现顺序发 ToolUseEnd）。
+    /// Order in which tool_calls were received (used to emit ToolUseEnd in arrival order
+    /// on Stop).
     tool_call_order: Vec<i64>,
 }
 
 #[derive(Debug, Clone)]
 struct ToolCallState {
     id: String,
-    /// 是否已经发过 ToolUseEnd。
+    /// Whether the `ToolUseEnd` has already been sent.
     closed: bool,
 }
 
-/// SSE 流 → ProviderChunk 流。返回值实现 [`Stream`]，drop 即取消。
+/// SSE stream → `ProviderChunk` stream. The return value implements [`Stream`]; dropping
+/// it cancels the stream.
 ///
-/// `cancel` 触发后流静默终结，与
-/// consistent with the LLM trait contract.
+/// After `cancel` is triggered, the stream silently terminates, consistent with the LLM
+/// trait contract.
 pub fn decode_stream(
     sse: SseEventStream,
     cancel: CancellationToken,
@@ -635,8 +646,9 @@ pub fn decode_stream(
     decode_stream_with_usage_parser(sse, cancel, usage_from_wire)
 }
 
-/// 与 [`decode_stream`] 同形态，但对入参 `Stream` 类型泛化，方便测试
-/// 直接喂 `futures::stream::iter`，不经过 toac transport。
+/// Same shape as [`decode_stream`], but generic over the input `Stream` type for easier
+/// testing — feed it directly with `futures::stream::iter` without going through the toac
+/// transport.
 pub fn decode_stream_generic<S, E>(
     sse: S,
     cancel: CancellationToken,
@@ -648,7 +660,8 @@ where
     decode_stream_generic_with_usage_parser(sse, cancel, usage_from_wire)
 }
 
-/// 与 [`decode_stream`] 同形态，但允许兼容厂商覆写 usage 解析逻辑。
+/// Same shape as [`decode_stream`], but allows vendor-specific overrides of the usage
+/// parsing logic.
 pub(crate) fn decode_stream_with_usage_parser(
     sse: SseEventStream,
     cancel: CancellationToken,
@@ -681,8 +694,9 @@ struct OpenAiSseDecoder<S, E> {
     inner: S,
     cancel: CancellationToken,
     state: DecoderState,
-    /// 单帧可能产出多个 chunk（finish_reason 帧通常会紧跟 ToolUseEnd*N
-    /// + Stop）。先存到 `pending`，poll_next 用 `pop()` 逐个吐。
+    /// A single SSE frame may produce multiple chunks (a finish_reason frame is usually
+    /// followed by ToolUseEnd*N + Stop). Store them in `pending` first, then `poll_next`
+    /// pops them one by one.
     pending: Vec<Result<ProviderChunk, ProviderError>>,
     finished: bool,
     usage_parser: UsageParser,
@@ -697,8 +711,8 @@ where
     type Item = Result<ProviderChunk, ProviderError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // SAFETY: standard pin-projection through a single field. We
-        // never move `inner` out and `_err` is a zero-sized PhantomData.
+        // SAFETY: Standard pin-projection through a single field. We never move `inner`
+        // out, and `_err` is a zero-sized `PhantomData`.
         let this = unsafe { self.get_unchecked_mut() };
         loop {
             if let Some(item) = this.pending.pop() {
@@ -718,7 +732,7 @@ where
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => {
                     this.finished = true;
-                    // 既无 [DONE] 又无 stop chunk —— ProtocolViolation。
+                    // Neither [DONE] nor stop chunk — ProtocolViolation.
                     if !this.state.done
                         && !this.state.stopped
                         && this.state.started
@@ -760,14 +774,16 @@ fn process_sse(
         None => return,
     };
     let trimmed = data.trim();
-    // OpenAI 流终结符。收到后丢掉所有后续数据帧（实际不会有）。
+    // OpenAI stream terminator. Drop all subsequent data frames after receiving it (there
+    // won't be any in practice).
     if trimmed == "[DONE]" {
         state.done = true;
         return;
     }
 
-    // 先 parse 为 raw Value，提取 DeepSeek 私货 `delta.reasoning_content`
-    // —— wire OAS 没有这个字段，结构化 parse 后就丢了。
+    // First parse as a raw `Value` to extract DeepSeek's proprietary
+    // `delta.reasoning_content` — the wire OAS lacks this field, so it would be lost
+    // after structured parsing.
     let raw: serde_json::Value = match serde_json::from_str(trimmed) {
         Ok(v) => v,
         Err(e) => {
@@ -800,11 +816,13 @@ fn handle_chunk(
     out: &mut Vec<Result<ProviderChunk, ProviderError>>,
     usage_parser: UsageParser,
 ) {
-    // poll_next 用 `pop()` 取，按时间顺序吐就要反序压栈。
+    // `poll_next` uses `pop()`, so to emit in chronological order we must push in
+    // reverse.
     let mut buf: Vec<Result<ProviderChunk, ProviderError>> = Vec::new();
 
-    // 第一次见到 chunk → MessageStart。OpenAI 不像 Anthropic 那样
-    // 有专门的 message_start event，每个 chunk 都带 id/model；首帧即起点。
+    // The first chunk seen implies a `MessageStart`. Unlike Anthropic, OpenAI does not
+    // have a dedicated `message_start` event; every chunk carries `id`/`model`, so the
+    // first frame is the start.
     if !state.started {
         state.started = true;
         buf.push(Ok(ProviderChunk::MessageStart {
@@ -813,9 +831,9 @@ fn handle_chunk(
         }));
     }
 
-    // choices 通常长度为 1（`n=1`），final usage chunk 是空数组。
+    // choices are typically length 1 (`n=1`); the final usage chunk is an empty array.
     for (choice_idx, choice) in evt.choices.iter().enumerate() {
-        // 提取 raw delta 用于 reasoning_content。
+        // Extract the raw delta for `reasoning_content`.
         let raw_delta = raw
             .get("choices")
             .and_then(|v| v.as_array())
@@ -824,7 +842,8 @@ fn handle_chunk(
 
         let delta = &choice.delta;
 
-        // DeepSeek `reasoning_content` —— wire OAS 没这字段，从 raw 拿。
+        // DeepSeek `reasoning_content` is not present in the wire OAS, so it is taken
+        // from the raw delta.
         if let Some(rc) = raw_delta
             .and_then(|d| d.get("reasoning_content"))
             .and_then(|v| v.as_str())
@@ -835,7 +854,7 @@ fn handle_chunk(
             }));
         }
 
-        // 文本增量。
+        // Text delta.
         if let Some(
             wire::ChatCompletionStreamResponseDeltaContent::ChatCompletionStreamResponseDeltaContentVariant0(
                 s,
@@ -846,17 +865,17 @@ fn handle_chunk(
             buf.push(Ok(ProviderChunk::TextDelta { text: s.clone() }));
         }
 
-        // tool_calls：第一次出现某个 index 带 id+name → ToolUseStart；
-        // 之后任意带 arguments 的 chunk → ToolUseArgsDelta。
+        // For each tool call index, the first chunk containing `id` and `name` triggers a
+        // `ToolUseStart`; subsequent chunks with `arguments` become `ToolUseArgsDelta`.
         if let Some(calls) = &delta.tool_calls {
             for tc in calls {
                 handle_tool_call_chunk(state, tc, &mut buf);
             }
         }
 
-        // refusal：OpenAI 用 delta.refusal 表达安全拒绝。我们当 TextDelta
-        // 处理（带可识别的前缀），最终 finish_reason=content_filter 时再
-        // 通过 Stop 把语义往上传。
+        // OpenAI uses `delta.refusal` to signal a safety refusal. We treat it as a
+        // `TextDelta` (with a distinguishable prefix), and later, when
+        // `finish_reason=content_filter`, we propagate the semantics upward via `Stop`.
         if let Some(
             wire::ChatCompletionStreamResponseDeltaRefusal::ChatCompletionStreamResponseDeltaRefusalVariant0(
                 s,
@@ -867,18 +886,20 @@ fn handle_chunk(
             buf.push(Ok(ProviderChunk::TextDelta { text: s.clone() }));
         }
 
-        // finish_reason 是必填字段（OAS 上无 Option）；流中绝大多数 chunk
-        // 都是 `Stop`（"non-stop" reason）—— 但 OpenAI 实际 wire 形态下，
-        // 非终结 chunk 的 finish_reason 是 null，由 codegen 投成什么样取决
-        // 于 OAS。我们这里**保守对待**：只在收到 `tool_calls` / `length` /
-        // `content_filter` / `function_call` 中任意一个 + 之后没有更多数据
-        // 时认定为终结；`stop` 同样视作终结。简化策略：每个非空 choices
-        // 的最后一个 chunk 一定带终结 finish_reason，所以收到就立即 emit。
+        // `finish_reason` is required in the OAS (no `Option`); most chunks in the stream
+        // are `Stop` (a "non-stop" reason). However, in OpenAI's actual wire format,
+        // non-terminal chunks have `finish_reason: null`, and what the codegen produces
+        // depends on the OAS. We take a **conservative approach**: only treat a chunk as
+        // terminal when we see any of `tool_calls` / `length` / `content_filter` /
+        // `function_call` and no more data follows; `stop` is also terminal. Simplified
+        // strategy: the last chunk of every non-empty `choices` always carries a terminal
+        // `finish_reason`, so emit immediately upon receipt.
         //
-        // 注：当 wire schema 把 `finish_reason: null` 反序失败时，会落到
-        // 上面的 Malformed 分支，状态机不会到这里。
-        // finish_reason 在中间 chunk 是 null（OAS 已 patch 成 Option），
-        // 终结 chunk 才有值。命中即关 tool_calls + emit Stop。
+        // Note: when the wire schema fails to deserialize `finish_reason: null`, it falls
+        // into the `Malformed` branch above, and the state machine never reaches here.
+        // `finish_reason` is `null` on intermediate chunks (the OAS has been patched to
+        // `Option`); only terminal chunks have a value. When hit, close `tool_calls` and
+        // emit `Stop`.
         if !state.stopped
             && let Some(fr) = choice.finish_reason
         {
@@ -898,7 +919,7 @@ fn handle_chunk(
         }
     }
 
-    // 末尾 usage chunk：choices 为空、usage 有值。
+    // Final usage chunk: choices are empty, usage is present.
     if let Some(usage) = &evt.usage {
         buf.push(Ok(ProviderChunk::Usage(usage_parser(
             raw.get("usage"),
@@ -918,12 +939,14 @@ fn handle_tool_call_chunk(
     let idx = tc.index;
     let entry_existed = state.tool_calls.contains_key(&idx);
 
-    // 第一帧：必须带 id（OpenAI 文档明确：第一个 tool_calls chunk 携带
-    // 完整 id 和 function.name，后续 chunk 只带 arguments）。
+    // First frame: must carry `id` (OpenAI docs specify that the first `tool_calls` chunk
+    // carries the full `id` and `function.name`; subsequent chunks carry only
+    // `arguments`).
     if !entry_existed {
         let Some(id) = tc.id.clone() else {
-            // 没 id 又没 prior state，无法关联 —— 当 ProtocolViolation 但
-            // 不致命，因为下一帧可能就带 id。
+            // No id and no prior state, so the chunk cannot be associated — treat as a
+            // protocol violation, but it is not fatal because the next frame may carry
+            // the id.
             warn!(index = idx, "tool_calls chunk missing id on first frame");
             return;
         };
@@ -976,8 +999,8 @@ fn usage_from_wire(_raw_usage: Option<&serde_json::Value>, u: &wire::CompletionU
             .as_ref()
             .and_then(|d| d.cached_tokens)
             .and_then(|v| u64::try_from(v).ok()),
-        // OpenAI 不报告 cache creation tokens；只 cached_tokens 表
-        // "本次命中缓存的输入 token 数"。
+        // OpenAI does not report cache creation tokens; `cached_tokens` only indicates
+        // the number of input tokens that hit the cache.
         cache_creation_input_tokens: None,
     }
 }
