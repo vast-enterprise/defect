@@ -68,6 +68,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
+# 跨平台标准目录解析（config / state / data）。各平台走 OS 原生约定：
+# Linux 遵循 XDG，Windows 用 %APPDATA%/%LOCALAPPDATA%，macOS 用 ~/Library。
+# 取代手拼 XDG_*/HOME —— 后者在 Windows 上拿不到 HOME 直接失败。
+directories = "6"
+
 # 并发数据结构
 dashmap = "6"
 arc-swap = "1"

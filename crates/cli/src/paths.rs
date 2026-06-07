@@ -1,25 +1,32 @@
 //! Path resolution helpers — session storage root, etc.
 
-use std::env;
 use std::path::{Path, PathBuf};
 
-/// Default session persistence root directory. Priority:
-/// 1. `XDG_STATE_HOME/defect/sessions`
-/// 2. `$HOME/.local/state/defect/sessions`
+use directories::ProjectDirs;
+
+/// Default session persistence root directory, resolved via the platform's standard
+/// per-app state/data location (the `directories` crate):
+/// - Linux: `$XDG_STATE_HOME/defect/sessions` (or `~/.local/state/defect/sessions`)
+/// - macOS: `~/Library/Application Support/defect/sessions`
+/// - Windows: `%LOCALAPPDATA%\defect\sessions`
+///
+/// On Linux `state_dir()` follows XDG; on macOS/Windows there is no separate state
+/// directory, so we fall back to the per-app data directory.
 ///
 /// # Errors
 ///
-/// Returns an error when neither `XDG_STATE_HOME` nor `HOME` is set.
+/// Returns an error when no home directory can be determined at all (e.g. a stripped
+/// environment with no `HOME` on Unix or no profile dir on Windows) — in that case the
+/// OS itself cannot tell us where per-user data belongs.
 pub fn default_sessions_root() -> anyhow::Result<PathBuf> {
-    if let Ok(xdg_state_home) = env::var("XDG_STATE_HOME") {
-        return Ok(PathBuf::from(xdg_state_home).join("defect/sessions"));
-    }
-    if let Ok(home) = env::var("HOME") {
-        return Ok(PathBuf::from(home).join(".local/state/defect/sessions"));
-    }
-    Err(anyhow::anyhow!(
-        "cannot resolve session storage root: neither XDG_STATE_HOME nor HOME is set"
-    ))
+    let dirs = ProjectDirs::from("", "", "defect").ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot resolve session storage root: no home directory found for the current user"
+        )
+    })?;
+    // state_dir() is Some only on Linux (XDG_STATE_HOME); elsewhere use data_dir().
+    let base = dirs.state_dir().unwrap_or_else(|| dirs.data_dir());
+    Ok(base.join("sessions"))
 }
 
 /// Session persistence root directory for `--local` sandbox mode:
