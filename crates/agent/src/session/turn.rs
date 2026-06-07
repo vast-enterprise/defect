@@ -45,9 +45,6 @@ mod sanitize;
 
 mod content;
 
-// Module name differs from file name (`llm_drive` ← `llm.rs`), so an explicit `#[path]`
-// is required.
-#[path = "turn/llm.rs"]
 mod llm_drive;
 
 mod tools;
