@@ -1184,7 +1184,7 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "defect-acp"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol",
  "defect-agent",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "defect-agent"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol-schema",
  "arc-swap",
@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "defect-cli"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema",
@@ -1258,7 +1258,7 @@ dependencies = [
 
 [[package]]
 name = "defect-config"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "defect-agent",
  "globset",
@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "defect-http"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "bytes",
  "client-util",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "defect-llm"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol-schema",
  "aws-config",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "defect-mcp"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol-schema",
  "bytes",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "defect-obs"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -1387,11 +1387,11 @@ dependencies = [
 
 [[package]]
 name = "defect-sandbox"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 
 [[package]]
 name = "defect-storage"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol-schema",
  "defect-agent",
@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "defect-tools"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "agent-client-protocol-schema",
  "base64",

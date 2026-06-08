@@ -26,7 +26,7 @@ codegen-units = 1     # 单 CGU 让 LLVM 做跨函数内联/死代码消除
 too_many_arguments = "deny"
 
 [workspace.package]
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/vast-enterprise/defect"
@@ -35,18 +35,18 @@ repository = "https://github.com/vast-enterprise/defect"
 # 内部 crate 互相引用。
 # version + path 双写：本地构建走 path，发布到 crates.io 时 path 被剥离、只留 version
 # （crates.io 拒绝无版本依赖）。版本对齐 workspace.package.version，发版时一处改全仓库生效。
-defect-agent = { path = "crates/agent", version = "0.1.0-alpha.1" }
-defect-http = { path = "crates/http", version = "0.1.0-alpha.1" }
+defect-agent = { path = "crates/agent", version = "0.1.0-alpha.2" }
+defect-http = { path = "crates/http", version = "0.1.0-alpha.2" }
 # default-features = false：provider 由 defect-cli 的 provider-* feature 显式转发，
 # 让 `--no-default-features --features provider-anthropic` 能裁到单家。
-defect-llm = { path = "crates/llm", version = "0.1.0-alpha.1", default-features = false }
-defect-tools = { path = "crates/tools", version = "0.1.0-alpha.1" }
-defect-mcp = { path = "crates/mcp", version = "0.1.0-alpha.1" }
-defect-sandbox = { path = "crates/sandbox", version = "0.1.0-alpha.1" }
-defect-storage = { path = "crates/storage", version = "0.1.0-alpha.1" }
-defect-config = { path = "crates/config", version = "0.1.0-alpha.1" }
-defect-acp = { path = "crates/acp", version = "0.1.0-alpha.1" }
-defect-obs = { path = "crates/obs", version = "0.1.0-alpha.1" }
+defect-llm = { path = "crates/llm", version = "0.1.0-alpha.2", default-features = false }
+defect-tools = { path = "crates/tools", version = "0.1.0-alpha.2" }
+defect-mcp = { path = "crates/mcp", version = "0.1.0-alpha.2" }
+defect-sandbox = { path = "crates/sandbox", version = "0.1.0-alpha.2" }
+defect-storage = { path = "crates/storage", version = "0.1.0-alpha.2" }
+defect-config = { path = "crates/config", version = "0.1.0-alpha.2" }
+defect-acp = { path = "crates/acp", version = "0.1.0-alpha.2" }
+defect-obs = { path = "crates/obs", version = "0.1.0-alpha.2" }
 
 # 异步运行时
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std", "sync", "fs", "process", "signal", "time"] }
