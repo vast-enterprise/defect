@@ -26,14 +26,18 @@ path = "src/lib.rs"
 name = "defect"
 path = "src/bin/cli.rs"
 
-[[bin]]
+# MCP 测试桩：仅集成测试用，绝不进 release/binstall 产物。放在 examples/ 而非
+# src/bin/ —— `[[bin]]` 会被 cargo-binstall 枚举进已发布 crate 的 bin 列表并告警，
+# examples 则天然被 install/binstall 忽略。`cargo test --features __test-servers`
+# 会先编出 target/<profile>/examples/<name>，smoke test 经 current_exe 旁路定位。
+[[example]]
 name = "defect-mcp-test-server"
-path = "src/bin/mcp_test_server.rs"
+path = "examples/mcp_test_server.rs"
 required-features = ["__test-servers"]
 
-[[bin]]
+[[example]]
 name = "defect-mcp-streamable-http-test-server"
-path = "src/bin/mcp_streamable_http_test_server.rs"
+path = "examples/mcp_streamable_http_test_server.rs"
 required-features = ["__test-servers"]
 
 [features]

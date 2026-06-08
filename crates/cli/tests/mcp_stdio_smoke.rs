@@ -16,6 +16,21 @@ const TEST_OPENAI_API_KEY: &str = "test-openai-key";
 const TEST_OPENAI_AUTH_HEADER: &str = "Bearer test-openai-key";
 const DONE: &str = "[DONE]";
 
+// MCP 测试桩从 `[[bin]]` 改成 `[[example]]`（避免被 cargo-binstall 枚举进 release
+// 产物），故没有 `CARGO_BIN_EXE_*` 编译期 env。example 产物固定落在
+// `target/<profile>/examples/<name>`，与本测试 bin 同处 `target/<profile>/` 下，
+// 经 current_exe 上溯定位。Windows 需补 `.exe` 后缀。
+fn example_bin(name: &str) -> PathBuf {
+    let mut path = std::env::current_exe().expect("current exe path");
+    path.pop(); // 去掉测试 bin 文件名
+    if path.ends_with("deps") {
+        path.pop(); // deps/ -> <profile>/
+    }
+    path.push("examples");
+    path.push(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    path
+}
+
 #[tokio::test]
 async fn stdio_mcp_tool_round_trip() {
     let openai = MockServer::start().await;
@@ -74,10 +89,7 @@ async fn stdio_mcp_tool_round_trip() {
     let updates: Arc<Mutex<Vec<SessionUpdate>>> = Arc::new(Mutex::new(Vec::new()));
     let updates_for_handler = Arc::clone(&updates);
     let mcp_server = McpServer::Stdio(
-        McpServerStdio::new(
-            "mcp-echo",
-            PathBuf::from(env!("CARGO_BIN_EXE_defect-mcp-test-server")),
-        )
+        McpServerStdio::new("mcp-echo", example_bin("defect-mcp-test-server"))
         .env(vec![EnvVariable::new("MCP_TEST_VALUE", "from-env")]),
     );
 
@@ -227,7 +239,7 @@ command = "{}"
 [mcp.servers.echo.env]
 MCP_TEST_VALUE = "from-config"
 "#,
-            env!("CARGO_BIN_EXE_defect-mcp-test-server")
+            example_bin("defect-mcp-test-server").display()
         ),
     )
     .expect("write user config");
@@ -468,7 +480,7 @@ async fn spawn_streamable_http_server() -> StreamableHttpServerHandle {
     let addr_file = tempfile::NamedTempFile::new().expect("addr file");
     let addr_path = addr_file.path().to_path_buf();
     let child =
-        tokio::process::Command::new(env!("CARGO_BIN_EXE_defect-mcp-streamable-http-test-server"))
+        tokio::process::Command::new(example_bin("defect-mcp-streamable-http-test-server"))
             .env("MCP_STREAMABLE_HTTP_BOUND_ADDR_FILE", addr_path.as_os_str())
             .env("MCP_TEST_VALUE", "from-env")
             .spawn()
