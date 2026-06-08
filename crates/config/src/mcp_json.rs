@@ -243,7 +243,8 @@ mod tests {
 
     #[test]
     fn infers_http_from_url() {
-        let raw = r#"{ "mcpServers": { "docs": { "url": "https://x/mcp", "headers": { "k": "v" } } } }"#;
+        let raw =
+            r#"{ "mcpServers": { "docs": { "url": "https://x/mcp", "headers": { "k": "v" } } } }"#;
         let out = parse_mcp_json(p(), raw).expect("parse");
         match out.get("docs").expect("docs") {
             McpServerConfig::Http(r) => {

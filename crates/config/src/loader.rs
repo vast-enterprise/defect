@@ -152,14 +152,16 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
     // after the TOML-derived McpConfig so TOML `[mcp]` wins on name collisions. It is a
     // project-level source, so it is honored whenever a repo root exists (including under
     // `--local`, which only skips the user/global layer).
-    let mcp_json_warnings = crate::mcp_json::merge_repo_mcp_json(repo_root.as_deref(), &mut effective.mcp)
-        .map_err(|message| ConfigError::Invalid {
-            path: repo_root
-                .as_ref()
-                .map(|root| root.join(crate::mcp_json::MCP_JSON_RELATIVE))
-                .unwrap_or_else(|| PathBuf::from(".mcp.json")),
-            message,
-        })?;
+    let mcp_json_warnings =
+        crate::mcp_json::merge_repo_mcp_json(repo_root.as_deref(), &mut effective.mcp).map_err(
+            |message| ConfigError::Invalid {
+                path: repo_root
+                    .as_ref()
+                    .map(|root| root.join(crate::mcp_json::MCP_JSON_RELATIVE))
+                    .unwrap_or_else(|| PathBuf::from(".mcp.json")),
+                message,
+            },
+        )?;
     warnings.extend(mcp_json_warnings);
 
     Ok(LoadedConfig {
@@ -759,10 +761,6 @@ fn strip_quotes(s: &str) -> &str {
     s
 }
 
-/// Resolve the user-level `config.toml` path. Shares the same priority logic as
-/// [`crate::profiles`]'s `resolve_user_agents_dir` and [`crate::skills`]; returns
-/// `None` when not found — if the user has no XDG or HOME set, the user-level
-/// configuration is simply absent and should not prevent the program from starting.
 /// Resolve the user-level (global) `config.toml` path using the same XDG/HOME priority
 /// as the loader: `$XDG_CONFIG_HOME/defect/config.toml`, else `$HOME/.config/...`.
 ///
@@ -772,6 +770,10 @@ pub fn user_config_path() -> Option<PathBuf> {
     resolve_user_config_path(&LoadConfigOptions::default())
 }
 
+/// Resolve the user-level `config.toml` path. Shares the same priority logic as
+/// `profiles`'s `resolve_user_agents_dir` and `skills`; returns `None` when not found —
+/// if the user has no XDG or HOME set, the user-level configuration is simply absent and
+/// should not prevent the program from starting.
 fn resolve_user_config_path(opts: &LoadConfigOptions) -> Option<PathBuf> {
     // `--local`: ignore global/user-level config — sandbox only recognizes the project
     // root `.defect/`.

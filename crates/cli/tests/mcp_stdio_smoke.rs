@@ -90,7 +90,7 @@ async fn stdio_mcp_tool_round_trip() {
     let updates_for_handler = Arc::clone(&updates);
     let mcp_server = McpServer::Stdio(
         McpServerStdio::new("mcp-echo", example_bin("defect-mcp-test-server"))
-        .env(vec![EnvVariable::new("MCP_TEST_VALUE", "from-env")]),
+            .env(vec![EnvVariable::new("MCP_TEST_VALUE", "from-env")]),
     );
 
     let stop_reason = agent_client_protocol::Client
@@ -479,12 +479,11 @@ async fn spawn_streamable_http_server() -> StreamableHttpServerHandle {
 
     let addr_file = tempfile::NamedTempFile::new().expect("addr file");
     let addr_path = addr_file.path().to_path_buf();
-    let child =
-        tokio::process::Command::new(example_bin("defect-mcp-streamable-http-test-server"))
-            .env("MCP_STREAMABLE_HTTP_BOUND_ADDR_FILE", addr_path.as_os_str())
-            .env("MCP_TEST_VALUE", "from-env")
-            .spawn()
-            .expect("streamable http MCP server should spawn");
+    let child = tokio::process::Command::new(example_bin("defect-mcp-streamable-http-test-server"))
+        .env("MCP_STREAMABLE_HTTP_BOUND_ADDR_FILE", addr_path.as_os_str())
+        .env("MCP_TEST_VALUE", "from-env")
+        .spawn()
+        .expect("streamable http MCP server should spawn");
 
     let mcp_base_url = wait_for_bound_addr(&addr_path).await;
     StreamableHttpServerHandle {

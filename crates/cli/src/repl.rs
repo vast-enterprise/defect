@@ -699,8 +699,12 @@ impl LineEditor {
             }
             AgentEvent::AssistantThought { content } => {
                 if let Some(text) = block_text(&content) {
-                    self.stream_text(out, &text.dimmed().italic().to_string(), StreamKind::Thought)
-                        .await?;
+                    self.stream_text(
+                        out,
+                        &text.dimmed().italic().to_string(),
+                        StreamKind::Thought,
+                    )
+                    .await?;
                 }
             }
             AgentEvent::ToolCallStarted { name, fields, .. } => {

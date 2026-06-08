@@ -721,8 +721,20 @@ fn repo_mcp_json_servers_define_equals_enable() {
     let loaded = load_config(test_options(&tmp)).expect("load config");
 
     // Define = enable: both servers present and enabled (sorted via BTreeMap iteration).
-    assert!(loaded.effective.mcp.enabled_servers.contains(&"fs".to_string()));
-    assert!(loaded.effective.mcp.enabled_servers.contains(&"docs".to_string()));
+    assert!(
+        loaded
+            .effective
+            .mcp
+            .enabled_servers
+            .contains(&"fs".to_string())
+    );
+    assert!(
+        loaded
+            .effective
+            .mcp
+            .enabled_servers
+            .contains(&"docs".to_string())
+    );
     assert!(matches!(
         loaded.effective.mcp.servers.get("fs"),
         Some(crate::types::McpServerConfig::Stdio(s))
@@ -787,7 +799,10 @@ fn malformed_mcp_json_is_a_hard_error() {
     match err {
         ConfigError::Invalid { path, message } => {
             assert!(path.ends_with(".mcp.json"), "path was {path:?}");
-            assert!(message.contains("invalid .mcp.json"), "message was {message}");
+            assert!(
+                message.contains("invalid .mcp.json"),
+                "message was {message}"
+            );
         }
         other => panic!("unexpected error: {other:?}"),
     }

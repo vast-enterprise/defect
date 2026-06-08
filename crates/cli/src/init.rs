@@ -197,11 +197,8 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
         .iter()
         .find(|c| c.id == selection.default_provider)
         .ok_or_else(|| anyhow::anyhow!("internal: default provider not among configured"))?;
-    let default_model = resolve_default_model(
-        default_entry,
-        args.default_model.as_deref(),
-        args.yes,
-    )?;
+    let default_model =
+        resolve_default_model(default_entry, args.default_model.as_deref(), args.yes)?;
 
     let plan = Plan {
         providers: configured,
@@ -321,10 +318,13 @@ fn select_interactive(
     }
 
     let default_provider = if let Some(id) = default_provider {
-        let spec =
-            provider_by_id(id).ok_or_else(|| anyhow::anyhow!("unknown --default-provider `{id}`"))?;
+        let spec = provider_by_id(id)
+            .ok_or_else(|| anyhow::anyhow!("unknown --default-provider `{id}`"))?;
         if !providers.contains(&spec.id) {
-            anyhow::bail!("--default-provider `{}` is not among the chosen providers", spec.id);
+            anyhow::bail!(
+                "--default-provider `{}` is not among the chosen providers",
+                spec.id
+            );
         }
         spec.id
     } else {
@@ -427,7 +427,9 @@ fn render_config(plan: &Plan) -> String {
     out.push_str(&format!("model = \"{}\"\n\n", plan.default_model));
 
     for entry in &plan.providers {
-        let display = provider_by_id(entry.id).map(|p| p.display).unwrap_or(entry.id);
+        let display = provider_by_id(entry.id)
+            .map(|p| p.display)
+            .unwrap_or(entry.id);
         let api_key_env = provider_by_id(entry.id)
             .map(|p| p.api_key_env)
             .unwrap_or("");
@@ -461,7 +463,10 @@ mod tests {
     #[test]
     fn renders_with_fetched_models() {
         let plan = Plan {
-            providers: vec![configured("deepseek", &["deepseek-v4-flash", "deepseek-v4-pro"])],
+            providers: vec![configured(
+                "deepseek",
+                &["deepseek-v4-flash", "deepseek-v4-pro"],
+            )],
             default_provider: "deepseek",
             default_model: "deepseek-v4-pro".to_string(),
         };
@@ -506,9 +511,11 @@ mod tests {
 
     #[test]
     fn select_rejects_unknown_provider() {
-        let err =
-            select_non_interactive(&[spec("anthropic")], Some("bogus")).expect_err("unknown");
-        assert!(err.to_string().contains("unknown --default-provider"), "{err}");
+        let err = select_non_interactive(&[spec("anthropic")], Some("bogus")).expect_err("unknown");
+        assert!(
+            err.to_string().contains("unknown --default-provider"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -521,8 +528,8 @@ mod tests {
     #[test]
     fn default_model_validates_against_live_list() {
         let entry = configured("deepseek", &["deepseek-v4-flash", "deepseek-v4-pro"]);
-        let err = resolve_default_model(&entry, Some("deepseek-chat"), true)
-            .expect_err("not offered");
+        let err =
+            resolve_default_model(&entry, Some("deepseek-chat"), true).expect_err("not offered");
         assert!(err.to_string().contains("not offered"), "{err}");
     }
 
