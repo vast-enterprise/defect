@@ -24,7 +24,6 @@
 
 | 域       | 功能点                                                         | 文档                                                                    | 优先级 | 完成情况 |
 | -------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- | ------ | -------- |
-| inbound  | ACP slash commands（`session/commands` 暴露 + 触发桥接）       | `docs/inbound/acp-slash-commands.md`                                    | P1     | 🕒 未开始 |
 | internal | Workspace Checkpoint / Undo（git 隐藏引用做 turn 级文件快照，可回滚、不污染用户分支） | `docs/internal/workspace-checkpoints.md` | P2 | 🕒 未开始（设计已写） |
 | internal | LSP 语义理解（诊断注入、跳转定义、查找引用；P1 可用 hook 跑 linter 过渡） | `docs/report/lsp-integration-survey.md`（调研报告，待转设计） | P2 | 🕒 未开始 |
 | internal | 用 `schemars` 从 args struct 生成 Tool 参数 schema（替代手写 `json!`） | `docs/proposals/tool-schema-via-schemars.md` | P2 | 🕒 未开始（提案） |
