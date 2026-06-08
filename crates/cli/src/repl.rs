@@ -560,6 +560,23 @@ struct LineEditor {
     /// Whether the cursor is at the start of a line during streaming output (used to
     /// decide whether to add a newline when a turn ends).
     at_line_start: bool,
+    /// The kind of the most recently streamed segment within the current turn. Used to
+    /// insert a separating newline when the kind changes (e.g. thought → assistant text),
+    /// so consecutive segments of different kinds do not run together on one line. `None`
+    /// before the first segment of a turn.
+    last_kind: Option<StreamKind>,
+}
+
+/// The kind of a streamed output segment. Distinct kinds get a separating newline at their
+/// boundary; consecutive chunks of the same kind (e.g. multiple thought chunks) do not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamKind {
+    /// Assistant reasoning / thinking (dimmed italic).
+    Thought,
+    /// Assistant message text.
+    Text,
+    /// Tool call lifecycle lines (`⚙ …`, `  ↳ …`).
+    Tool,
 }
 
 impl LineEditor {
@@ -570,6 +587,7 @@ impl LineEditor {
             tty: std::io::stdin().is_terminal(),
             streaming: false,
             at_line_start: true,
+            last_kind: None,
         }
     }
 
@@ -663,6 +681,7 @@ impl LineEditor {
                 write(out, if self.tty { "\r\n" } else { "\n" }).await?;
             }
             self.streaming = false;
+            self.last_kind = None;
             self.redraw(out).await?;
         }
         Ok(())
@@ -675,24 +694,32 @@ impl LineEditor {
         match event {
             AgentEvent::AssistantText { content } => {
                 if let Some(text) = block_text(&content) {
-                    self.stream_text(out, &text).await?;
+                    self.stream_text(out, &text, StreamKind::Text).await?;
                 }
             }
             AgentEvent::AssistantThought { content } => {
                 if let Some(text) = block_text(&content) {
-                    self.stream_text(out, &text.dimmed().italic().to_string())
+                    self.stream_text(out, &text.dimmed().italic().to_string(), StreamKind::Thought)
                         .await?;
                 }
             }
             AgentEvent::ToolCallStarted { name, fields, .. } => {
                 let title = fields.title.unwrap_or(name);
-                self.stream_text(out, &format!("\n{} {}\n", "⚙".yellow(), title.yellow()))
-                    .await?;
+                self.stream_text(
+                    out,
+                    &format!("{} {}\n", "⚙".yellow(), title.yellow()),
+                    StreamKind::Tool,
+                )
+                .await?;
             }
             AgentEvent::ToolCallFinished { fields, .. } => {
                 if let Some(status) = fields.status {
-                    self.stream_text(out, &format!("{} {status:?}\n", "  ↳".dimmed()))
-                        .await?;
+                    self.stream_text(
+                        out,
+                        &format!("{} {status:?}\n", "  ↳".dimmed()),
+                        StreamKind::Tool,
+                    )
+                    .await?;
                 }
             }
             AgentEvent::TurnEnded { .. } => {
@@ -703,16 +730,32 @@ impl LineEditor {
         Ok(())
     }
 
-    /// Stream a chunk of text: ensure streaming mode is active, write the text
-    /// (converting `\n` to `\r\n` in raw mode), and update the line-start state.
-    async fn stream_text(&mut self, out: &mut Stdout, text: &str) -> anyhow::Result<()> {
+    /// Stream a chunk of text of a given [`StreamKind`]: ensure streaming mode is active,
+    /// insert a separating newline if this segment's kind differs from the previous one
+    /// and the cursor is mid-line (so e.g. thinking and the assistant reply do not run
+    /// together), write the text (converting `\n` to `\r\n` in raw mode), and update the
+    /// line-start state.
+    async fn stream_text(
+        &mut self,
+        out: &mut Stdout,
+        text: &str,
+        kind: StreamKind,
+    ) -> anyhow::Result<()> {
         if text.is_empty() {
             return Ok(());
         }
         self.enter_streaming(out).await?;
+        // Boundary separation: when the kind changes (thought → text, text → tool, …) and
+        // we are not already at the start of a fresh line, break the line first. Same-kind
+        // chunks (the common streaming case) are concatenated without inserting breaks.
+        if self.last_kind.is_some_and(|prev| prev != kind) && !self.at_line_start {
+            write(out, if self.tty { "\r\n" } else { "\n" }).await?;
+            self.at_line_start = true;
+        }
         write(out, &nl(text, self.tty)).await?;
         out.flush().await?;
         self.at_line_start = text.ends_with('\n');
+        self.last_kind = Some(kind);
         Ok(())
     }
 
@@ -734,6 +777,7 @@ impl LineEditor {
             write(out, if self.tty { "\r\n" } else { "\n" }).await?;
         }
         self.streaming = false;
+        self.last_kind = None;
         if self.tty {
             write(out, &format!("\r\x1b[K{text}\r\n")).await?;
         } else {
