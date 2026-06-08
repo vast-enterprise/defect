@@ -704,6 +704,96 @@ enabled_servers = ["missing"]
 }
 
 #[test]
+fn repo_mcp_json_servers_define_equals_enable() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &repo.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "fs": { "command": "npx", "args": ["-y", "fs"], "env": { "ROOT": "/x" } },
+    "docs": { "url": "https://example.com/mcp", "headers": { "x-key": "v" } }
+  }
+}"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    // Define = enable: both servers present and enabled (sorted via BTreeMap iteration).
+    assert!(loaded.effective.mcp.enabled_servers.contains(&"fs".to_string()));
+    assert!(loaded.effective.mcp.enabled_servers.contains(&"docs".to_string()));
+    assert!(matches!(
+        loaded.effective.mcp.servers.get("fs"),
+        Some(crate::types::McpServerConfig::Stdio(s))
+            if s.command == "npx" && s.env.get("ROOT").map(String::as_str) == Some("/x")
+    ));
+    assert!(matches!(
+        loaded.effective.mcp.servers.get("docs"),
+        Some(crate::types::McpServerConfig::Http(s)) if s.url == "https://example.com/mcp"
+    ));
+}
+
+#[test]
+fn toml_mcp_wins_over_mcp_json_on_name_collision() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &repo.join(".defect/config.toml"),
+        r#"
+[mcp]
+enabled_servers = ["echo"]
+
+[mcp.servers.echo]
+transport = "stdio"
+command = "toml-echo"
+"#,
+    );
+    write(
+        &repo.join(".mcp.json"),
+        r#"{ "mcpServers": { "echo": { "command": "json-echo" } } }"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+
+    // TOML entry wins.
+    assert!(matches!(
+        loaded.effective.mcp.servers.get("echo"),
+        Some(crate::types::McpServerConfig::Stdio(s)) if s.command == "toml-echo"
+    ));
+    // Collision is surfaced as a warning, not a hard error.
+    assert!(
+        loaded
+            .warnings
+            .iter()
+            .any(|w| matches!(w, crate::types::ConfigWarning::McpJsonOverridden { server, .. } if server == "echo")),
+        "expected McpJsonOverridden warning; got {:?}",
+        loaded.warnings
+    );
+}
+
+#[test]
+fn malformed_mcp_json_is_a_hard_error() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &repo.join(".mcp.json"),
+        r#"{ "mcpServers": { "bad": { "nonsense": true } } }"#,
+    );
+
+    let err = load_config(test_options(&tmp)).expect_err("invalid .mcp.json");
+    match err {
+        ConfigError::Invalid { path, message } => {
+            assert!(path.ends_with(".mcp.json"), "path was {path:?}");
+            assert!(message.contains("invalid .mcp.json"), "message was {message}");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn custom_provider_name_accepted_but_unknown_field_rejected() {
     // flatten makes `[providers.<any-name>]` open, but the inner `ProviderSection`'s
     // `deny_unknown_fields` still validates field names.

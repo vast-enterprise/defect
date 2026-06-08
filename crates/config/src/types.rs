@@ -147,6 +147,10 @@ pub enum ConfigWarning {
         original: String,
         renamed: String,
     },
+    /// A `.mcp.json` server was shadowed by a same-named TOML `[mcp.servers.<name>]`
+    /// entry. The TOML entry (more explicit, layered source) wins; the `.mcp.json`
+    /// definition is ignored.
+    McpJsonOverridden { path: PathBuf, server: String },
 }
 
 #[non_exhaustive]

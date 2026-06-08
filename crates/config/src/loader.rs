@@ -141,12 +141,26 @@ pub fn load_config(opts: LoadConfigOptions) -> Result<LoadedConfig, ConfigError>
             message: err.to_string(),
         })?;
     let hooks = merge_layer_hooks(hook_layers);
-    let effective = build_effective_config(
+    let mut effective = build_effective_config(
         Path::new("<merged>"),
         parsed,
         base_prompt.unwrap_or_default(),
         hooks,
     )?;
+
+    // Repo-root `.mcp.json` (Claude Code/Cursor standard): "define = enable". Merged
+    // after the TOML-derived McpConfig so TOML `[mcp]` wins on name collisions. It is a
+    // project-level source, so it is honored whenever a repo root exists (including under
+    // `--local`, which only skips the user/global layer).
+    let mcp_json_warnings = crate::mcp_json::merge_repo_mcp_json(repo_root.as_deref(), &mut effective.mcp)
+        .map_err(|message| ConfigError::Invalid {
+            path: repo_root
+                .as_ref()
+                .map(|root| root.join(crate::mcp_json::MCP_JSON_RELATIVE))
+                .unwrap_or_else(|| PathBuf::from(".mcp.json")),
+            message,
+        })?;
+    warnings.extend(mcp_json_warnings);
 
     Ok(LoadedConfig {
         layers: ConfigLayerStack { layers },
@@ -749,6 +763,15 @@ fn strip_quotes(s: &str) -> &str {
 /// [`crate::profiles`]'s `resolve_user_agents_dir` and [`crate::skills`]; returns
 /// `None` when not found — if the user has no XDG or HOME set, the user-level
 /// configuration is simply absent and should not prevent the program from starting.
+/// Resolve the user-level (global) `config.toml` path using the same XDG/HOME priority
+/// as the loader: `$XDG_CONFIG_HOME/defect/config.toml`, else `$HOME/.config/...`.
+///
+/// Returns `None` when neither `XDG_CONFIG_HOME` nor `HOME` is set. Used by `defect init`
+/// to write the global config to the same location the loader reads from.
+pub fn user_config_path() -> Option<PathBuf> {
+    resolve_user_config_path(&LoadConfigOptions::default())
+}
+
 fn resolve_user_config_path(opts: &LoadConfigOptions) -> Option<PathBuf> {
     // `--local`: ignore global/user-level config — sandbox only recognizes the project
     // root `.defect/`.

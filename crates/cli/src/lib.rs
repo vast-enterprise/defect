@@ -29,6 +29,7 @@ pub mod args;
 pub mod assembly;
 pub mod hooks;
 pub mod http_stack;
+pub mod init;
 pub mod mcp_servers;
 pub mod observability;
 #[cfg(feature = "oneshot")]

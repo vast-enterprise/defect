@@ -3,7 +3,7 @@
 //! Aligned with `defect-config`'s `LoadConfigOptions::cli` — CLI flags take precedence.
 //! CLI arguments — see config and `CliOverrides`.
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use defect_config::{
     CliOverrides, ProviderKind as ConfigProviderKind, SandboxMode, parse_cli_override,
@@ -133,6 +133,47 @@ pub struct CliArgs {
     /// exceeded, the run exits with a non-zero (exhausted) code.
     #[arg(long, value_name = "N")]
     pub max_turns: Option<u32>,
+
+    /// Optional subcommand. When omitted, `defect` runs as an agent (ACP server by
+    /// default, or one of the `--repl` / `--message` / `--goal` modes). Subcommands are
+    /// for one-off management tasks that exit without starting an agent.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Management subcommands that run instead of the agent and then exit.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Scan the environment for provider API keys and write a global config.toml.
+    Init(InitArgs),
+}
+
+/// Arguments for `defect init`.
+#[derive(Debug, Default, clap::Args)]
+pub struct InitArgs {
+    /// Non-interactive: skip all prompts and write the config from detected env keys.
+    /// When multiple provider keys are present, `--default-provider` must also be given
+    /// (defect never guesses which provider should be the default).
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Overwrite an existing global config.toml. Without this, init refuses to clobber
+    /// an existing file.
+    #[arg(long)]
+    pub force: bool,
+
+    /// The provider to record as `[default] provider`. Required by `--yes` when more
+    /// than one provider key is detected; otherwise optional (defaults to the sole
+    /// detected provider, or is chosen interactively).
+    #[arg(long, value_name = "PROVIDER")]
+    pub default_provider: Option<String>,
+
+    /// The model to record as `[default] model` for the default provider. Must be one of
+    /// the models the provider's API actually returns (init validates against the live
+    /// list). When omitted: chosen interactively, or under `--yes` the first model the
+    /// provider lists.
+    #[arg(long, value_name = "MODEL")]
+    pub default_model: Option<String>,
 }
 
 impl CliArgs {

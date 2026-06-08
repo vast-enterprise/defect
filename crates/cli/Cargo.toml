@@ -53,6 +53,7 @@ default = [
     "yaml",
     "repl",
     "oneshot",
+    "init",
 ]
 
 # `--repl`：进程内最小交互 REPL（tokio stdin/stdout + owo-colors 着色），
@@ -64,6 +65,12 @@ repl = ["dep:owo-colors", "dep:crossterm"]
 # owo-colors / crossterm，故 `--no-default-features --features oneshot` 能编出
 # 不含 TUI 依赖的精简 CI 二进制。serde_json 已是无条件依赖，无需额外 dep。
 oneshot = []
+
+# `defect init`：扫描环境里的 provider api-key、交互式写全局 config.toml。
+# 拖入 inquire（Select/MultiSelect/Confirm，社区事实标准的交互 prompt 库）。
+# 裁剪后 `defect init` 的交互路径在运行期硬失败，但 `defect init --yes` 非交互
+# 路径不依赖本 feature（扫描+模板写盘都是无依赖逻辑），CI 仍可用。
+init = ["dep:inquire"]
 
 # 转发给 defect-llm 的同名 feature。
 provider-anthropic = ["defect-llm/provider-anthropic"]
@@ -110,6 +117,9 @@ serde_json.workspace = true
 owo-colors = { workspace = true, optional = true }
 crossterm = { workspace = true, optional = true }
 
+# 仅 `init` feature：`defect init` 的交互式 prompt（Select/MultiSelect/Confirm）。
+inquire = { version = "0.7", optional = true }
+
 # 仅在 `__test-servers` feature 下启用：拖入完整 rmcp server + axum 用于
 # 跑 stdio / streamable-http MCP server 测试桩。
 rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"], optional = true }
@@ -122,6 +132,8 @@ serde_json.workspace = true
 tokio-util.workspace = true
 wiremock.workspace = true
 tempfile.workspace = true
+# `defect init` 渲染的 config.toml 在测试里做 round-trip 解析校验。
+toml = "0.8"
 
 # `mcp_stdio_smoke` 通过 `CARGO_BIN_EXE_*` 拉起两个 test bin，
 # 没启用 `__test-servers` feature 时这俩 bin 不会被编译，integration

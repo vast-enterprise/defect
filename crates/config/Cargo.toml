@@ -20,6 +20,8 @@ defect-agent.workspace = true
 # skill `triggers.globs` 在解析期编译成 GlobSet（坏 glob 当场 fail-fast）。
 globset = "0.4"
 serde.workspace = true
+# `.mcp.json` 解析（Claude Code/Cursor 事实标准 schema）。
+serde_json.workspace = true
 serde_yaml = { workspace = true, optional = true }
 thiserror.workspace = true
 toml = "0.8"

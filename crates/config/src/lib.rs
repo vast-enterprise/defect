@@ -10,12 +10,13 @@ mod frontmatter;
 mod hooks;
 mod loader;
 mod mcp;
+mod mcp_json;
 mod overrides;
 mod profiles;
 mod skills;
 mod types;
 
-pub use loader::{find_repo_root, load_config, load_dotenv_compat};
+pub use loader::{find_repo_root, load_config, load_dotenv_compat, user_config_path};
 pub use overrides::parse_cli_override;
 pub use profiles::{ProfileSpec, discover_profiles};
 pub use skills::{SkillSpec, discover_skills};

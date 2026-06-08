@@ -13,7 +13,7 @@ use std::sync::Arc;
 use agent_client_protocol_schema::SessionId;
 use clap::Parser;
 use defect_agent::session::AgentCore;
-use defect_cli::args::{CliArgs, OutputFormat};
+use defect_cli::args::{CliArgs, Command, OutputFormat};
 use defect_cli::assembly::{CliAgentBuilder, ReplMode};
 use defect_config::{LoadConfigOptions, load_dotenv_compat};
 use defect_obs::init_tracing;
@@ -24,6 +24,19 @@ async fn main() -> anyhow::Result<ExitCode> {
     load_dotenv_compat(&cwd).map_err(|e| anyhow::anyhow!("dotenv load failed: {e}"))?;
 
     let cli = CliArgs::parse();
+
+    // Management subcommands run instead of the agent and exit. `init` writes config, so
+    // it must run before any config load / agent assembly (which would require a config
+    // that may not exist yet).
+    if let Some(command) = cli.command {
+        match command {
+            Command::Init(args) => {
+                defect_cli::init::run(args).await?;
+                return Ok(ExitCode::SUCCESS);
+            }
+        }
+    }
+
     let load_opts = LoadConfigOptions {
         cwd: cwd.clone(),
         cli: cli.to_overrides()?,
