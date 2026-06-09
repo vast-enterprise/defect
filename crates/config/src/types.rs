@@ -137,7 +137,8 @@ pub enum ConfigWarning {
         section: String,
         reason: String,
     },
-    /// Conflicting MCP tools are renamed to `mcp.<server>.<name>` during session startup.
+    /// Conflicting MCP tools are renamed to `mcp__<server>__<name>` during session
+    /// startup.
     ///
     /// See capabilities for MCP tool classification. All MCP tools are renamed
     /// (regardless of capability mode or tool enabled) to prevent MCP bypass name
@@ -924,11 +925,27 @@ pub(crate) struct BasePromptSection {
     pub(crate) text: Option<String>,
 }
 
+/// How `[turn] request_limit` is interpreted. The numeric `request_limit` supplies `N`;
+/// this key selects the strategy. Defaults to `Adaptive` when omitted, so a bare
+/// `request_limit = N` keeps its historical self-expanding behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestLimitMode {
+    /// Hard cap at `N` LLM calls; never expands.
+    Fixed,
+    /// Start at `N`; each executed tool raises the cap by one (the default).
+    Adaptive,
+    /// No cap at all; `N` is ignored.
+    Unbounded,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TurnSection {
     pub(crate) system_prompt: Option<String>,
     pub(crate) request_limit: Option<u32>,
+    /// Strategy for `request_limit`. `None` ⇒ `Adaptive` (back-compatible).
+    pub(crate) request_limit_mode: Option<RequestLimitMode>,
     pub(crate) compact_threshold_tokens: Option<u64>,
     pub(crate) compact_ratio: Option<f64>,
     /// Enables background full compaction (asynchronous summarization when the soft

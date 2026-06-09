@@ -1676,3 +1676,74 @@ compact_ratio = 0.8
     let loaded = load_config(test_options(&tmp)).expect("disabled tier skips check");
     assert!(!loaded.effective.turn.background_compact_enabled);
 }
+
+#[test]
+fn request_limit_bare_number_is_adaptive() {
+    use defect_agent::session::TurnRequestLimit;
+    let tmp = TempDir::new().expect("tmp");
+    fs::create_dir_all(tmp.path().join("repo/.git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        "[default]\nprovider = \"defect\"\nmodel = \"m\"\n\n[turn]\nrequest_limit = 50\n",
+    );
+    let loaded = load_config(test_options(&tmp)).expect("load");
+    assert!(matches!(
+        loaded.effective.turn.request_limit,
+        TurnRequestLimit::Adaptive {
+            initial: 50,
+            expand_on_progress: true
+        }
+    ));
+}
+
+#[test]
+fn request_limit_mode_fixed() {
+    use defect_agent::session::TurnRequestLimit;
+    let tmp = TempDir::new().expect("tmp");
+    fs::create_dir_all(tmp.path().join("repo/.git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        "[default]\nprovider = \"defect\"\nmodel = \"m\"\n\n[turn]\nrequest_limit = 40\nrequest_limit_mode = \"fixed\"\n",
+    );
+    let loaded = load_config(test_options(&tmp)).expect("load");
+    assert!(matches!(
+        loaded.effective.turn.request_limit,
+        TurnRequestLimit::Fixed(40)
+    ));
+}
+
+#[test]
+fn request_limit_mode_unbounded_ignores_number() {
+    use defect_agent::session::TurnRequestLimit;
+    let tmp = TempDir::new().expect("tmp");
+    fs::create_dir_all(tmp.path().join("repo/.git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        "[default]\nprovider = \"defect\"\nmodel = \"m\"\n\n[turn]\nrequest_limit_mode = \"unbounded\"\n",
+    );
+    let loaded = load_config(test_options(&tmp)).expect("load");
+    assert!(matches!(
+        loaded.effective.turn.request_limit,
+        TurnRequestLimit::Unbounded
+    ));
+}
+
+#[test]
+fn request_limit_mode_fixed_without_number_errors() {
+    let tmp = TempDir::new().expect("tmp");
+    fs::create_dir_all(tmp.path().join("repo/.git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        "[default]\nprovider = \"defect\"\nmodel = \"m\"\n\n[turn]\nrequest_limit_mode = \"fixed\"\n",
+    );
+    let err = load_config(test_options(&tmp)).expect_err("fixed needs N");
+    match err {
+        ConfigError::Invalid { message, .. } => {
+            assert!(
+                message.contains("requires `request_limit = N`"),
+                "{message}"
+            );
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}

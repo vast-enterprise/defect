@@ -411,7 +411,10 @@ impl<'a> TurnRunner<'a> {
                     role: Role::Assistant,
                     content: vec![MessageContent::Text { text }].into(),
                 });
-                if self.decide_turn_end(&mut state).await {
+                if self
+                    .decide_turn_end(&mut state, AcpStopReason::EndTurn, true)
+                    .await
+                {
                     continue;
                 }
                 return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
@@ -475,7 +478,10 @@ impl<'a> TurnRunner<'a> {
             match outcome.stop {
                 LlmStopReason::EndTurn | LlmStopReason::StopSequence => {
                     // Voluntary stop → before-turn-end decision point.
-                    if self.decide_turn_end(&mut state).await {
+                    if self
+                        .decide_turn_end(&mut state, AcpStopReason::EndTurn, true)
+                        .await
+                    {
                         continue;
                     }
                     return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
@@ -492,7 +498,10 @@ impl<'a> TurnRunner<'a> {
             if outcome.tool_uses.is_empty() {
                 // Voluntary stop (no tool requested) → same before-turn-end decision
                 // point.
-                if self.decide_turn_end(&mut state).await {
+                if self
+                    .decide_turn_end(&mut state, AcpStopReason::EndTurn, true)
+                    .await
+                {
                     continue;
                 }
                 return Ok(turn_outcome(&state, AcpStopReason::EndTurn));
@@ -570,6 +579,17 @@ impl<'a> TurnRunner<'a> {
             }
 
             if state.exceeded_request_cap() {
+                // Hitting the per-turn request cap is an involuntary stop. Still consult
+                // the before-turn-end hook: in goal mode the goal gate decides whether to
+                // keep working (resetting the request budget for the next round, bounded
+                // by `max_hook_continues`). Without a continuing hook, the turn stops with
+                // `MaxTurnRequests` as before.
+                if self
+                    .decide_turn_end(&mut state, AcpStopReason::MaxTurnRequests, false)
+                    .await
+                {
+                    continue;
+                }
                 return Ok(turn_outcome(&state, AcpStopReason::MaxTurnRequests));
             }
         }
@@ -919,6 +939,16 @@ impl TurnState {
         {
             *cap = cap.saturating_add(1);
         }
+    }
+
+    /// Reset the per-turn request budget back to its initial state. Called when a
+    /// `before turn-end` hook keeps the turn alive (e.g. goal mode continuing), so the
+    /// `request_limit` behaves as a *per-logical-turn* budget rather than a single budget
+    /// shared across the whole multi-turn run. The cap returns to its initial value
+    /// (re-reading the configured strategy), discarding any `expand_on_progress` growth.
+    fn reset_request_budget(&mut self, limit: TurnRequestLimit) {
+        self.request_count = 0;
+        self.cap = limit.initial_cap();
     }
 
     fn exceeded_request_cap(&self) -> bool {

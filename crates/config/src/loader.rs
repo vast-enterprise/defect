@@ -20,8 +20,8 @@ use crate::types::{
     HttpClientConfig, HttpProxyConfig, HttpProxySettings, LangfuseConfig, LoadConfigOptions,
     LoadedConfig, OtlpTracingConfig, PROJECT_CONFIG_RELATIVE, PROJECT_LOCAL_CONFIG_RELATIVE,
     PromptConfigFile, ProviderCapabilityOverrides, ProviderConfigFile, ProviderConfigs,
-    ProviderKind, ProviderSection, SandboxConfig, SandboxMode, SearchToolConfig, ToolsConfig,
-    TracingConfig, USER_CONFIG_RELATIVE,
+    ProviderKind, ProviderSection, RequestLimitMode, SandboxConfig, SandboxMode, SearchToolConfig,
+    ToolsConfig, TracingConfig, USER_CONFIG_RELATIVE,
 };
 use defect_agent::session::{BackgroundProgressConfig, WebSearchCapabilityConfig};
 
@@ -279,11 +279,12 @@ fn build_effective_config(
         ..TurnConfig::default()
     };
     turn.system_prompt = config.turn.system_prompt;
-    if let Some(request_limit) = config.turn.request_limit {
-        turn.request_limit = TurnRequestLimit::Adaptive {
-            initial: request_limit,
-            expand_on_progress: true,
-        };
+    if let Some(request_limit) = resolve_request_limit(
+        path,
+        config.turn.request_limit,
+        config.turn.request_limit_mode,
+    )? {
+        turn.request_limit = request_limit;
     }
     if let Some(compact_threshold_tokens) = config.turn.compact_threshold_tokens {
         turn.compact_threshold_tokens = Some(compact_threshold_tokens);
@@ -649,6 +650,45 @@ fn provider_config_file(cfg: ProviderSection) -> ProviderConfigFile {
         headers: cfg.headers.unwrap_or_default(),
         capabilities: provider_capability_overrides(cfg.capabilities.as_ref()),
         reasoning_effort: cfg.reasoning_effort,
+    }
+}
+
+/// Combine the numeric `request_limit` and the optional `request_limit_mode` into a
+/// [`TurnRequestLimit`].
+///
+/// - Neither set ⇒ `None` (keep the `TurnConfig` default).
+/// - Number only ⇒ `Adaptive { initial: N }` (back-compatible with the historical bare
+///   `request_limit = N` behavior).
+/// - `mode = "unbounded"` ⇒ `Unbounded` (the number, if any, is ignored).
+/// - `mode = "fixed" | "adaptive"` ⇒ requires a number (errors if absent — a fixed or
+///   adaptive cap without `N` is meaningless).
+fn resolve_request_limit(
+    path: &Path,
+    limit: Option<u32>,
+    mode: Option<RequestLimitMode>,
+) -> Result<Option<TurnRequestLimit>, ConfigError> {
+    let require_n = |mode_name: &str| -> Result<u32, ConfigError> {
+        limit.ok_or_else(|| ConfigError::Invalid {
+            path: path.to_path_buf(),
+            message: format!(
+                "[turn] request_limit_mode = \"{mode_name}\" requires `request_limit = N`"
+            ),
+        })
+    };
+    match (mode, limit) {
+        (None, None) => Ok(None),
+        (None, Some(initial)) => Ok(Some(TurnRequestLimit::Adaptive {
+            initial,
+            expand_on_progress: true,
+        })),
+        (Some(RequestLimitMode::Unbounded), _) => Ok(Some(TurnRequestLimit::Unbounded)),
+        (Some(RequestLimitMode::Fixed), _) => {
+            Ok(Some(TurnRequestLimit::Fixed(require_n("fixed")?)))
+        }
+        (Some(RequestLimitMode::Adaptive), _) => Ok(Some(TurnRequestLimit::Adaptive {
+            initial: require_n("adaptive")?,
+            expand_on_progress: true,
+        })),
     }
 }
 

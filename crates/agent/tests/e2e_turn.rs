@@ -1340,3 +1340,165 @@ async fn run_in_background_result_actively_reflows() {
         "driver should autonomously start a turn carrying the background result (active re-invoke)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// End-to-end: hitting the per-turn request cap still consults before_turn_end,
+// and a continuing hook (goal mode) resets the budget and keeps working.
+// ---------------------------------------------------------------------------
+
+/// Provider that emits one `noop` tool_use on every call, so the turn loop always reaches
+/// the request-cap check (after the tool batch) rather than the voluntary EndTurn path.
+struct AlwaysToolProvider {
+    calls: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl LlmProvider for AlwaysToolProvider {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo {
+            vendor: "always-tool".to_string(),
+            protocol: ProtocolId::AnthropicMessages,
+            display_name: "Always Tool".to_string(),
+        }
+    }
+    fn capabilities(&self) -> Capabilities {
+        unsupported_caps()
+    }
+    fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn model_info(&self, _: &str) -> Option<ModelInfo> {
+        None
+    }
+    fn complete(
+        &self,
+        _: CompletionRequest,
+        _: CancellationToken,
+    ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            let chunks: Vec<Result<ProviderChunk, ProviderError>> = vec![
+                Ok(ProviderChunk::MessageStart {
+                    id: format!("m-{n}"),
+                    model: "cap-001".to_string(),
+                }),
+                Ok(ProviderChunk::ToolUseStart {
+                    id: format!("tu-{n}"),
+                    name: "noop".to_string(),
+                }),
+                Ok(ProviderChunk::ToolUseArgsDelta {
+                    id: format!("tu-{n}"),
+                    fragment: "{}".to_string(),
+                }),
+                Ok(ProviderChunk::ToolUseEnd {
+                    id: format!("tu-{n}"),
+                }),
+                Ok(ProviderChunk::Stop {
+                    reason: LlmStopReason::ToolUse,
+                }),
+            ];
+            Ok(Box::pin(stream::iter(chunks)) as ProviderStream)
+        })
+    }
+}
+
+/// A tool that does nothing and immediately completes. Counts as "progress" (an executed
+/// tool), which under Adaptive would expand the cap — here we use Fixed to keep the cap
+/// flat and force the cap-hit path.
+struct NoopTool {
+    schema: ToolSchema,
+}
+impl Tool for NoopTool {
+    fn schema(&self) -> &ToolSchema {
+        &self.schema
+    }
+    fn safety_hint(&self, _args: &serde_json::Value) -> SafetyClass {
+        SafetyClass::ReadOnly
+    }
+    fn describe<'a>(
+        &'a self,
+        _args: &'a serde_json::Value,
+        _ctx: ToolContext<'a>,
+    ) -> BoxFuture<'a, ToolCallDescription> {
+        Box::pin(async {
+            ToolCallDescription {
+                fields: ToolCallUpdateFields::default(),
+            }
+        })
+    }
+    fn execute(&self, _args: serde_json::Value, _ctx: ToolContext<'_>) -> ToolStream {
+        Box::pin(stream::once(async {
+            ToolEvent::Completed(ToolCallUpdateFields::default())
+        }))
+    }
+}
+
+#[tokio::test]
+async fn request_cap_hit_consults_turn_end_hook_and_resets_budget() {
+    use defect_agent::session::TurnRequestLimit;
+
+    let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let provider = Arc::new(AlwaysToolProvider {
+        calls: calls.clone(),
+    }) as Arc<dyn LlmProvider>;
+    let tools: Arc<dyn ToolRegistry> = Arc::new(
+        StaticToolRegistry::builder()
+            .insert(Arc::new(NoopTool {
+                schema: ToolSchema {
+                    name: "noop".to_string(),
+                    description: "noop".to_string(),
+                    input_schema: json!({"type":"object"}),
+                },
+            }))
+            .build(),
+    );
+
+    // Goal-mode-like gate: continue on every before_turn_end (including the involuntary
+    // MaxTurnRequests stop). Bounded by max_hook_continues below.
+    let engine = Arc::new(ContinueNTimesEngine {
+        remaining: std::sync::Mutex::new(2),
+    }) as Arc<dyn defect_agent::hooks::HookEngine>;
+
+    // Fixed cap of 1 LLM call per logical turn: each round makes one call, runs the tool,
+    // hits the cap, and must consult the hook. The gate continues twice (budget reset each
+    // time) then stops → 3 LLM calls total.
+    let core = DefaultAgentCore::builder()
+        .provider(provider)
+        .process_tools(tools)
+        .hook_engine(engine)
+        .config(TurnConfig {
+            model: "cap-001".to_string(),
+            request_limit: TurnRequestLimit::Fixed(1),
+            max_hook_continues: 2,
+            ..TurnConfig::default()
+        })
+        .build();
+
+    let cwd = std::env::current_dir().expect("cwd");
+    let session = core
+        .create_session(
+            SessionId::new(new_session_id()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+            Arc::new(NoopShellBackend) as Arc<dyn ShellBackend>,
+            Frontend::Headless,
+        )
+        .await
+        .expect("create session");
+
+    let prompt = vec![ContentBlock::Text(TextContent::new("go"))];
+    let stop = session.run_turn(prompt).await.expect("turn");
+
+    // Without the fix: cap is hit on round 1, turn returns MaxTurnRequests immediately,
+    // only 1 LLM call. With the fix: the hook continues twice (budget reset each round),
+    // so 3 calls happen, then the hard cap forces the final stop with MaxTurnRequests.
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "cap-hit should consult the hook and reset the budget for 2 extra rounds"
+    );
+    assert!(
+        matches!(stop, StopReason::MaxTurnRequests),
+        "final stop after exhausting hook continues should be MaxTurnRequests, got {stop:?}"
+    );
+}

@@ -29,27 +29,36 @@ pub(super) enum PreToolHookFlow {
 impl TurnRunner<'_> {
     /// `before turn-end` decision point.
     ///
-    /// Called when the turn is **voluntarily stopping** (LLM said `EndTurn` / didn't
-    /// request a tool). Lets the hook decide: allow the stop, or keep the turn alive
-    /// (inject feedback, don't end, loop back to the top for another round).
+    /// Called when the turn is stopping. `stop_reason` / `voluntary` describe *why*:
+    /// - Voluntary (`EndTurn`, empty tool_use): the LLM chose to stop.
+    /// - Involuntary `MaxTurnRequests`: the per-turn request cap was hit. Goal mode still
+    ///   wants a say here — otherwise hitting the cap silently abandons an unfinished goal
+    ///   (bypassing the goal gate entirely). The hook decides whether to keep going.
     ///
-    /// Returns `true` = keep alive (caller `continue`s back to the loop top); `false` =
-    /// allow stop (end the turn normally).
+    /// Lets the hook allow the stop, or keep the turn alive (inject feedback, don't end,
+    /// loop back to the top). Returns `true` = keep alive (caller `continue`s); `false` =
+    /// allow stop.
     ///
     /// Keep-alive is bounded by the **hard limit** `max_stop_hook_continues` — once
-    /// reached, the stop is forced to prevent infinite loops. The keep-alive feedback is
-    /// injected into history as a **user message** (same pipeline as user prompts; see
-    /// the final alternation fallback below).
-    pub(super) async fn decide_turn_end(&self, state: &mut TurnState) -> bool {
+    /// reached, the stop is forced to prevent infinite loops. When a continue is granted,
+    /// the per-turn request budget is **reset** so `request_limit` acts as a per-logical-
+    /// turn budget rather than one shared across the whole multi-turn run. The keep-alive
+    /// feedback is injected into history as a **user message**.
+    pub(super) async fn decide_turn_end(
+        &self,
+        state: &mut TurnState,
+        stop_reason: AcpStopReason,
+        voluntary: bool,
+    ) -> bool {
         // Hard limit reached: stop asking the hook and force-stop.
         if !state.may_stop_hook_continue() {
             return false;
         }
 
         let mut step = crate::hooks::step::BeforeTurnEnd {
-            stop_reason: AcpStopReason::EndTurn,
+            stop_reason,
             continues_so_far: state.stop_hook_continues,
-            voluntary: true,
+            voluntary,
             feedback: Vec::new(),
         };
 
@@ -70,6 +79,8 @@ impl TurnRunner<'_> {
                 };
                 self.append_user_feedback(blocks);
                 state.note_stop_hook_continue();
+                // Reset the per-turn request budget: the continued turn gets a fresh cap.
+                state.reset_request_budget(self.config.request_limit);
                 true
             }
             // Proceed, Break, and Skip all mean "stop" at turn-end.
