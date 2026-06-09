@@ -23,15 +23,15 @@ Defect 使用 TOML 配置文件，按下面的优先级**从低到高**逐层合
 
 ### 未知 key 一律硬失败
 
-每一层都按 `ConfigToml` 做强类型解码，并且**所有 section 都启用 `deny_unknown_fields`**。任何拼错的 key 或不存在的字段会立即报错，并带上**出错的文件路径**——不会被静默忽略。这是刻意的：配置项要么生效，要么报错，没有"写了但没用"的灰色地带。
+任何拼错的 key 或不存在的字段都会立即报错，并带上**出错的文件路径**。配置项要么生效，要么报错，没有"写了但没用"的灰色地带——拼错的字段不会被静默忽略。
 
-> 例外：`[providers]` 顶层为了容纳自定义 provider 名（`[providers.<任意名字>]`）使用了 `flatten`，因此该层不会因"未知 provider 名"报错；但每个 provider section **内部**的字段仍然 `deny_unknown_fields`。
+> 例外：`[providers]` 顶层允许任意自定义 provider 名（`[providers.<任意名字>]`），所以不会因"未知 provider 名"报错；但每个 provider section **内部**的字段仍然严格校验。
 
 ### 凭证只走环境变量
 
 API key 等凭证**不写入 TOML**。配置里只用 `api_key_env` 指定**环境变量名**，运行期从该环境变量读取实际密钥。常用：`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`。
 
-> Defect 不对配置内容做"出站字段安全裁剪"。它不会因为某个字段出现在共享层就静默忽略它——要么按写的生效，要么（未知 key）硬失败。把不该提交的东西（如本地 `base_url`、代理）放进 `config.local.toml` 是你的责任，而不是工具替你裁剪。
+> 配置里写什么就生效什么，不区分"敏感字段"。把不该提交进仓库的东西（如本地 `base_url`、代理）放进 `config.local.toml`（默认已被 `.gitignore` 忽略），而不要写进随仓库共享的 `config.toml`。
 
 ---
 
@@ -116,7 +116,7 @@ default_model = "gpt-4o"
 | `protocol` | `"anthropic-messages"` / `"openai-chat"` | wire 协议。内置 provider 已知协议，自定义 provider 必须指明 |
 | `base_url` | string | 自定义 API base URL（默认走该 provider 官方地址） |
 | `default_model` | string | 该 provider 的默认 model（覆盖内建默认，被 `default.model` 覆盖） |
-| `models` | array | 模型候选列表，用于 ACP 模型选择器。两种写法见下 |
+| `models` | array | 模型候选列表，供运行时切换模型时选择。两种写法见下 |
 | `display_name` | string | UI 显示名 |
 | `api_key_env` | string | **API key 的环境变量名**（如 `"ANTHROPIC_API_KEY"`），不是 key 本身 |
 | `organization` | string | OpenAI organization id |
@@ -224,7 +224,7 @@ mode = "delegate"    # delegate | disabled（默认 disabled）
 mode = "delegate"
 ```
 
-per-provider 的 `None` 字段表示"跟随全局设置"。
+provider 级不写则跟随全局设置。
 
 ---
 
@@ -233,6 +233,7 @@ per-provider 的 `None` 字段表示"跟随全局设置"。
 ```toml
 [turn]
 request_limit = 50
+request_limit_mode = "adaptive"   # fixed | adaptive | unbounded
 compact_threshold_tokens = 150000
 compact_ratio = 0.85
 compact_soft_ratio = 0.7
@@ -243,7 +244,8 @@ subagent_max_depth = 4
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `system_prompt` | string | — | 会话级 system prompt 覆盖 |
-| `request_limit` | u32 | 自适应 | 自适应请求上限的初始值（随进展扩张） |
+| `request_limit` | u32 | 自适应 32 | 单轮 LLM 请求上限的初始值 |
+| `request_limit_mode` | `fixed` / `adaptive` / `unbounded` | `adaptive` | 见下；省略时裸 `request_limit = N` 即 `adaptive`，向后兼容 |
 | `compact_threshold_tokens` | u64 | — | 上下文压缩的绝对 token 阈值 |
 | `compact_ratio` | f64 | 0.85 | **硬**压缩水位（占 context_window 比例），同步阻塞压缩 |
 | `background_compact_enabled` | bool | — | 是否启用后台全量压缩（超软水位时异步摘要，不阻塞当前轮） |
@@ -256,6 +258,20 @@ subagent_max_depth = 4
 | `subagent_max_depth` | u32 | 4 | 子 agent 垂直递归深度；`0` = 禁止派发任何子 agent（顶层工具集不含 `spawn_agent`） |
 
 **三档压缩水位约束**（违反则启动报错）：每个 ratio 必须在 `(0, 1]`，且 `microcompact_ratio ≤ compact_soft_ratio < compact_ratio`。
+
+### `request_limit_mode` — 请求上限策略
+
+`request_limit`（数字 N）与 `request_limit_mode` 组合决定单轮 LLM 调用次数的上限：
+
+| mode | 含义 | N |
+|---|---|---|
+| `adaptive`（默认） | 起始 N，每成功执行一个工具就 +1，让确实在推进的轮次不被硬切断 | 必填 |
+| `fixed` | 硬上限 N，不扩张 | 必填 |
+| `unbounded` | 无上限 | 忽略 |
+
+只写 `request_limit = N`（不写 mode）即 `adaptive`。`fixed` / `adaptive` 必须给 N，否则启动报错。
+
+> goal 模式（`--goal`）下，单轮撞到 `request_limit` 不会让目标半途而废：会重开新一轮继续推进，由 `max_hook_continues` 控制总轮数上限。
 
 ---
 
@@ -360,7 +376,7 @@ secret_key = "sk-..."
 
 ### `[tracing.langfuse]`
 
-默认关闭。若 `enabled = true` 但缺 key，装配层会 warn 并禁用（不静默成功）。
+默认关闭。若 `enabled = true` 但缺 key，启动时会打印警告并禁用上报。
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
@@ -368,8 +384,8 @@ secret_key = "sk-..."
 | `host` | string | `https://cloud.langfuse.com` | Langfuse host |
 | `public_key` | string | — | public key |
 | `secret_key` | string | — | secret key |
-| `flush_interval_ms` | u64 | 栈默认 | 刷新间隔 |
-| `max_batch` | usize | 栈默认 | 单批最大事件数 |
+| `flush_interval_ms` | u64 | 内建默认 | 刷新间隔 |
+| `max_batch` | usize | 内建默认 | 单批最大事件数 |
 
 ---
 
@@ -411,13 +427,31 @@ headers = { Authorization = "Bearer ..." }
 | `url` | string | http/sse（必填） | 远程端点；stdio 下**不允许** |
 | `headers` | table<string,string> | http/sse | 自定义头；stdio 下不允许 |
 
-> 所有 MCP 工具在会话启动时会被重命名为 `mcp.<server>.<name>`，防止名字抢占绕过。
+> 所有 MCP 工具在会话里以 `mcp__<server>__<name>` 的名字出现（双下划线分隔），避免与内置工具撞名。server 名请只用字母、数字、`_`、`-`：模型 API 对工具名的字符集有要求（`^[a-zA-Z0-9_-]{1,128}$`），server 名或上游工具名里的点号、空格等会被上游拒绝。
+
+### `.mcp.json`（生态标准格式）
+
+除了 TOML `[mcp]`，defect 还读 **repo 根**的 `.mcp.json`（Claude Code / Cursor 的事实标准 schema）。仅在项目根查找（同 `.defect/` 的 git 根探测）。
+
+```json
+{
+  "mcpServers": {
+    "fs":   { "command": "npx", "args": ["-y", "@x/fs"], "env": { "ROOT": "/work" } },
+    "docs": { "url": "https://example.com/mcp", "headers": { "x-key": "..." } }
+  }
+}
+```
+
+- **transport 自动推断**：有 `command` 即 stdio，有 `url` 即远程（默认 http，加 `"type": "sse"` 则 sse）。无需像 TOML `[mcp]` 那样显式写 `transport`——直接粘贴生态里的 `.mcp.json` 即可。
+- **定义即启用**：写进 `.mcp.json` 的 server 直接生效，不需要再列白名单。
+- **与 TOML 同名时 TOML 优先**：若某 server 在 `.mcp.json` 和 `[mcp.servers.<name>]` 都有定义，用 TOML 那份，并打印一条提示。
+- 格式错误（未知字段、缺 `command`/`url`）会带文件路径报错。
 
 ---
 
 ## 12. `[http]` — HTTP 客户端栈
 
-所有字段省略即用栈层默认（`None` = "用默认"）。
+所有字段省略即用内建默认值。
 
 ```toml
 [http]
@@ -505,7 +539,7 @@ handler = { type = "command", shell = "bash", command = "cargo fmt --check" }
 
 | 字段 | 说明 |
 |---|---|
-| `name` | 在 `crate::hooks::builtin::registry()` 中的名字 |
+| `name` | 内置处理器名（如 skill-manifest / skill-triggers） |
 
 **`type = "command"`** — 外部命令。两种互斥形态：
 
@@ -549,13 +583,22 @@ agents/reviewer/
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `description` | string | **必填**，供 `spawn_agent` 选择 |
-| `model` | string | 子 agent model 覆盖；省略则继承父会话当前 model |
+| `model` | string | 子 agent model 覆盖；省略则继承父会话当前 model。也可写成 `[default] model`（与顶层 config 同键）——两者等价，但**不可同时设**，否则硬失败 |
 | `prompt.file` | string | prompt 文件路径（相对 profile 目录，沙箱化防 `../` 逃逸）；默认 `system.md` |
-| `tools.allow` | array<string> | 工具白名单；默认 `["read_file", "search"]` |
-| `sampling.max_tokens` / `.temperature` / `.top_p` / `.top_k` | — | 采样参数覆盖 |
-| `[hooks.*]` | — | 该 profile 的 hook（单一闭合真相源，不支持 `disable`、不跨层合并） |
+| `prompt.text` | string | 内联 prompt 文本（与顶层 `[prompt] text` 一致）；与 `prompt.file` **互斥**，同设则硬失败。仅目录式可用 |
+| `inherit_project_prompt` | bool | 默认 `false`。设为 `true` 时，子 agent 的系统提示会带上项目 `AGENTS.md`（build/测试/架构等项目约定），方便它了解所在项目；但不会带上主 agent 的身份提示。需要项目上下文的子 agent（如 code-reviewer）才开 |
+| `tools.allow` | array<string> | 工具白名单（支持 **glob**，见下）；默认 `["read_file", "search"]` |
+| `sampling.max_tokens` / `.temperature` / `.top_p` / `.top_k` | — | 采样参数；省略则沿用父会话的设置（含 `reasoning_effort`） |
+| `request_limit` / `request_limit_mode` | u32 / enum | 该子 agent 单轮的请求上限，键与语义同顶层 `[turn]`。省略时为固定 32 次（不随父会话变化，避免子 agent 失控） |
+| `[hooks.*]` | — | 该 profile 自己的 hook（不支持 `disable`，见下） |
 
-**单文件式** `agents/<name>.md`：用 frontmatter（`+++` ⇒ TOML，`---` ⇒ YAML，需 `yaml` feature）承载上述字段 + 正文作为 system prompt。
+**`tools.allow` 支持 glob**：每一项都是 glob（和 hook `tool_glob`、skill 触发同一套），写全名就是精确匹配。可以用 `mcp__ange__*` 一次放行某个 MCP server 的全部工具，或用 `read_*`。包括 MCP 工具在内的所有工具名都能匹配。若某个模式一个工具都没匹配到（比如 server 前缀拼错），会报错而不是静默放空。
+
+> **子 agent 默认沿用主 agent 的配置**：上表之外的单轮行为（上下文压缩、重试、并发等）都继承父会话的 `[turn]` 设置。少数行为是固定的、不随父变化：子 agent 不会向用户弹权限确认（写操作直接拒绝）、不参与 `--goal` 循环、不能起后台任务、不能新增 MCP server（但能用父会话已连的）。
+
+> profile 的 `[hooks]` 只声明这个子 agent 自己要跑的 hook，不支持 `disable`（`disable` 是用来删除*其他配置层*的 hook 的，而 profile 没有其他层）。
+
+**单文件式** `agents/<name>.md`：frontmatter（`+++` 为 TOML，`---` 为 YAML，需开启 `yaml` feature）写上表字段，正文即 system prompt。单文件式不支持 `[prompt]` 表（prompt 就是正文）。
 
 ---
 
@@ -590,6 +633,24 @@ skills/my-skill/
 ---
 
 ## 16. 最小起步配置
+
+### `defect init` — 自动生成全局配置
+
+`defect init` 扫描环境里的 provider api-key（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`），用检测到的 key **实际调用该 provider 的 list-models API** 拉取真实模型列表，写入全局 `~/.config/defect/config.toml`。模型 id **绝不硬编码**——list-models 失败即硬失败，不回退猜测。
+
+```bash
+defect init                 # 交互式（inquire：多选 provider → 选默认 → 确认）
+defect init --yes           # 非交互（CI）：检测到单个 key 时直接写
+defect init --yes --default-provider deepseek   # 多个 key 时必须显式指定默认 provider
+defect init --default-model deepseek-v4-pro     # 默认模型（须在 live 列表内，否则报错）
+defect init --force         # 覆盖已存在的全局配置
+```
+
+- 多个 key 且 `--yes` 时**必须**给 `--default-provider`——defect 不替用户从"哪个 key 恰好存在"猜默认 provider。
+- 交互 prompt 需 `init` 编译 feature（默认开）；`--yes` 非交互路径不依赖该 feature。
+- Bedrock 不在 init 范围内（走 AWS 凭证链、无单一 key、list-models 不打 API）。
+
+### 手写最小配置
 
 放在 `~/.config/defect/config.toml` 或 `<repo-root>/.defect/config.local.toml`：
 
