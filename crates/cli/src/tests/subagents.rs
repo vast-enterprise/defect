@@ -21,7 +21,8 @@ use defect_config::{
 use tempfile::TempDir;
 
 use crate::hooks::HookEngineCtx;
-use crate::tools::{build_process_tools_with_subagents, filter_tools_by_allowlist, project_skills};
+use crate::tools::{build_process_tools_with_subagents, project_skills};
+use defect_agent::session::filter_registry_by_allowlist;
 
 /// Most subagent tests don't involve skills — pass an empty index.
 fn no_skills() -> BTreeMap<String, SkillEntry> {
@@ -203,9 +204,11 @@ fn top_level_profile_filters_tools_by_allowlist() {
     let profiles = discover(&opts);
     let spec = &profiles["reader"];
 
-    // Top-level --profile: base trimmed to an allowlist subset.
+    // Top-level --profile: base trimmed to an allowlist subset. (Now enforced at session
+    // creation via the agent-side filter; same fail-loud semantics.)
     let base = crate::tools::build_process_tools(&config);
-    let filtered = filter_tools_by_allowlist(&base, &spec.tool_allow).expect("filter");
+    let filtered =
+        filter_registry_by_allowlist(&base, &spec.tool_allow, "spawn_agent").expect("filter");
     let names: Vec<String> = filtered.schemas().into_iter().map(|s| s.name).collect();
     assert_eq!(names.len(), 2);
     assert!(names.contains(&"read_file".to_string()));
@@ -217,7 +220,7 @@ fn top_level_profile_filters_tools_by_allowlist() {
 #[test]
 fn top_level_profile_unknown_tool_fails_loud() {
     let base = crate::tools::build_process_tools(&setup().1);
-    match filter_tools_by_allowlist(&base, &["nonexistent_tool".to_string()]) {
+    match filter_registry_by_allowlist(&base, &["nonexistent_tool".to_string()], "spawn_agent") {
         Err(name) => assert_eq!(name, "nonexistent_tool"),
         Ok(_) => panic!("expected unknown-tool error"),
     }

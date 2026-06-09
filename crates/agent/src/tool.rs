@@ -39,6 +39,7 @@ mod spawn_agent;
 pub use background_tasks::{CancelBackgroundTaskTool, InspectBackgroundTaskTool};
 pub use goal_done::{GOAL_DONE_TOOL_NAME, GoalDoneTool};
 pub use skill::{SkillEntry, SkillTool, SkillTriggers};
+pub(crate) use spawn_agent::SPAWN_AGENT_TOOL_NAME;
 pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
 
 /// Tool's "public face": describes the parameter shape without any execution capability.
@@ -235,6 +236,14 @@ pub struct ToolContext<'a> {
     /// injection means no dispatch; the top-level turn must explicitly use
     /// [`Self::with_subagent_depth`]).
     pub subagent_depth: u32,
+    /// The current session's **fully assembled** tool pool — the `CompositeRegistry` that
+    /// already merged built-in tools with the per-session MCP tools. `spawn_agent` uses
+    /// this (rather than a static, MCP-free tool set captured at construction) to build a
+    /// child agent's tool subset, so a subagent profile may allow `mcp__*` tools. `None`
+    /// in legacy / test paths, where `spawn_agent` falls back to its captured static pool.
+    /// Injected by the [`TurnRunner`](crate::session::TurnRunner) when constructing the
+    /// context.
+    pub session_tools: Option<Arc<dyn crate::session::ToolRegistry>>,
 }
 
 /// A handle for bridging sub-turn events (spawned internally by a tool) back into the
@@ -300,7 +309,18 @@ impl<'a> ToolContext<'a> {
             policy: None,
             goal: None,
             subagent_depth: 0,
+            session_tools: None,
         }
+    }
+
+    /// Inject the current session's fully assembled tool pool (built-in + MCP composite).
+    /// `spawn_agent` uses it to build a child agent's tool subset so subagent profiles can
+    /// allow `mcp__*` tools. If not called, `session_tools` is `None` and `spawn_agent`
+    /// falls back to the static pool captured at construction.
+    #[must_use]
+    pub fn with_session_tools(mut self, tools: Arc<dyn crate::session::ToolRegistry>) -> Self {
+        self.session_tools = Some(tools);
+        self
     }
 
     /// Inject the provider vendor selected for the current turn, forming a selection pair

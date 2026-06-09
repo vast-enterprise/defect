@@ -111,5 +111,35 @@ impl ToolRegistry for CompositeRegistry {
     }
 }
 
+/// Restricts a `base` registry to the subset named in `allow`, producing a new static
+/// registry. Used to enforce a profile's tool allowlist **after** the full session tool
+/// pool (built-in + MCP) is assembled — applying it earlier (against a static, MCP-free
+/// pool) would reject `mcp__*` tools that have not yet been connected.
+///
+/// `spawn_agent` is special-cased by the callers (it is injected/excluded based on the
+/// recursion depth, not the allowlist), so any `spawn_agent` entry in `allow` is ignored
+/// here and the caller decides whether to re-add it.
+///
+/// # Errors
+/// Returns `Err(name)` for the first allowlisted name that is absent from `base`
+/// (fail-loud: a profile that allows a non-existent tool is a configuration error).
+pub fn filter_registry_by_allowlist(
+    base: &Arc<dyn ToolRegistry>,
+    allow: &[String],
+    skip: &str,
+) -> Result<Arc<dyn ToolRegistry>, String> {
+    let mut builder = StaticToolRegistry::builder();
+    for name in allow {
+        if name == skip {
+            continue;
+        }
+        match base.get(name) {
+            Some(tool) => builder = builder.insert(tool),
+            None => return Err(name.clone()),
+        }
+    }
+    Ok(Arc::new(builder.build()))
+}
+
 #[cfg(test)]
 mod tests;

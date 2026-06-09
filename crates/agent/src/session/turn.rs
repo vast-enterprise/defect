@@ -232,6 +232,12 @@ impl Default for PromptConfig {
 pub struct TurnRunner<'a> {
     pub history: &'a dyn History,
     pub tools: &'a dyn ToolRegistry,
+    /// The same session tool pool as [`Self::tools`], but as an owned `Arc` so it can be
+    /// injected into [`crate::tool::ToolContext`] (which needs `'static`/owned). Carries
+    /// the fully assembled composite (built-in + MCP) so `spawn_agent` can build a child
+    /// agent's tool subset that includes `mcp__*` tools. `None` in legacy/test runners
+    /// that only set the borrow.
+    pub session_tools: Option<Arc<dyn ToolRegistry>>,
     pub provider: &'a dyn LlmProvider,
     /// The active policy for this turn's snapshot. Owned as an `Arc` rather than
     /// borrowed: it flows with [`crate::tool::ToolContext`] into `spawn_agent`, where

@@ -266,6 +266,9 @@ impl TurnRunner<'_> {
                     // session's current permission mode).
                     let policy = self.policy.clone();
                     let subagent_depth = self.config.subagent_max_depth;
+                    // The session's assembled tool pool (built-in + MCP) for spawn_agent to
+                    // build child agent tool subsets including `mcp__*`.
+                    let session_tools = self.session_tools.clone();
                     let name = tool.schema().name.clone();
                     let span = tracing::info_span!(
                         "tool_call",
@@ -303,6 +306,7 @@ impl TurnRunner<'_> {
                                 goal,
                                 policy,
                                 subagent_depth,
+                                session_tools,
                             )
                             .await
                         }
@@ -584,6 +588,7 @@ async fn drive_tool_stream(
     goal: Option<Arc<crate::session::GoalState>>,
     policy: Arc<dyn crate::policy::SandboxPolicy>,
     subagent_depth: u32,
+    session_tools: Option<Arc<dyn crate::session::ToolRegistry>>,
 ) -> ToolResult {
     let mut ctx = ToolContext::new(
         &cwd,
@@ -599,6 +604,9 @@ async fn drive_tool_stream(
     // whether child agents can continue recursing (0 ⇒ the child toolset contains no
     // `spawn_agent`).
     .with_subagent_depth(subagent_depth);
+    if let Some(session_tools) = session_tools {
+        ctx = ctx.with_session_tools(session_tools);
+    }
     if let Some(bg) = background {
         ctx = ctx.with_background(bg);
     }

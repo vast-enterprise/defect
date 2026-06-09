@@ -277,7 +277,14 @@ impl Tool for SpawnAgentTool {
         // captured at construction time only when none was injected (e.g. in tests or
         // when omitted).
         let policy = ctx.policy.clone().unwrap_or_else(|| self.policy.clone());
-        let process_tools = self.process_tools.clone();
+        // Prefer the session's fully assembled tool pool (built-in + connected MCP) so the
+        // child agent's allowlist can reference `mcp__*` tools. Fall back to the static
+        // pool captured at construction only when the turn runner did not inject one
+        // (legacy / test paths).
+        let process_tools = ctx
+            .session_tools
+            .clone()
+            .unwrap_or_else(|| self.process_tools.clone());
         let base_prompt = self.base_prompt.clone();
 
         let cwd = ctx.cwd.to_path_buf();
@@ -600,7 +607,7 @@ async fn run_subagent_core(
             }
         }
     }
-    let sub_tools = builder.build();
+    let sub_tools: Arc<dyn ToolRegistry> = Arc::new(builder.build());
 
     // System prompt: inherited `base_prompt` + profile's own `system.md`. Does not use
     // `resolve_system_prompt` (to avoid crawling workspace `AGENTS.md` / provider·model
@@ -702,7 +709,10 @@ async fn run_subagent_core(
 
     let runner = TurnRunner {
         history: history.as_ref(),
-        tools: &sub_tools,
+        tools: &*sub_tools,
+        // Owned clone so a nested spawn_agent (if the child's depth allows) sees the same
+        // subset; keeps the MCP-aware injection consistent at every recursion level.
+        session_tools: Some(sub_tools.clone()),
         provider: provider.as_ref(),
         policy: sub_policy,
         events: events.clone(),

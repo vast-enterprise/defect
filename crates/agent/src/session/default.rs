@@ -73,6 +73,12 @@ pub struct DefaultAgentCore {
     /// no longer "holds a single provider".
     registry: Arc<ProviderRegistry>,
     process_tools: Arc<dyn ToolRegistry>,
+    /// Optional tool allowlist for the top-level `--profile` mode. When `Some`, each
+    /// session's tool pool (built-in **plus** connected MCP tools) is restricted to this
+    /// set after assembly. Applied at session-creation time — not at CLI assembly — so
+    /// that `mcp__*` tools (connected per-session and absent until then) can be allowed.
+    /// `None` ⇒ no restriction (the default and non-profile path).
+    tool_allow: Option<Vec<String>>,
     /// Default policy — used as the session's active policy **only when no mode catalog
     /// is present (`modes` is `None`)**. When a catalog is present, it is overridden by
     /// the catalog's current mode.
@@ -125,6 +131,7 @@ pub struct DefaultAgentCoreBuilder {
     /// explicitly injected, as the entry provides its own.
     single_capabilities: SessionCapabilitiesConfig,
     process_tools: Option<Arc<dyn ToolRegistry>>,
+    tool_allow: Option<Vec<String>>,
     policy: Option<Arc<dyn SandboxPolicy>>,
     modes: Option<ModeCatalog>,
     loader: Option<Arc<dyn SessionLoader>>,
@@ -168,6 +175,16 @@ impl DefaultAgentCoreBuilder {
     /// [`ProviderEntry`](crate::llm::ProviderEntry) instead; this field is ignored.
     pub fn capabilities(mut self, capabilities: SessionCapabilitiesConfig) -> Self {
         self.single_capabilities = capabilities;
+        self
+    }
+
+    /// Restrict every session's tool pool to this allowlist (top-level `--profile`). The
+    /// filter is applied at session-creation time, after built-in and MCP tools are both
+    /// in the pool, so `mcp__*` names resolve. Names absent from the assembled pool are a
+    /// hard error at session creation (fail-loud). `spawn_agent` is handled by the depth
+    /// gate and ignored here.
+    pub fn tool_allow(mut self, allow: Vec<String>) -> Self {
+        self.tool_allow = Some(allow);
         self
     }
 
@@ -325,6 +342,7 @@ impl DefaultAgentCoreBuilder {
             process_tools: self
                 .process_tools
                 .unwrap_or_else(|| Arc::new(StaticToolRegistry::empty()) as Arc<dyn ToolRegistry>),
+            tool_allow: self.tool_allow,
             policy: self
                 .policy
                 .unwrap_or_else(|| Arc::new(AskWritesPolicy::new()) as Arc<dyn SandboxPolicy>),
@@ -381,6 +399,10 @@ impl AgentCore for DefaultAgentCore {
                 session_tools,
                 self.process_tools.clone(),
             ));
+            // Top-level `--profile` allowlist: applied here (not at CLI assembly) so the
+            // pool already contains connected MCP tools, letting `mcp__*` names resolve.
+            // `spawn_agent` is governed by the depth gate, so it is skipped by the filter.
+            let composite = self.apply_tool_allow(composite)?;
 
             // After the session-enter hook, absorb any injected `additional_context` as
             // candidate system-prompt suffixes.
@@ -506,10 +528,10 @@ impl AgentCore for DefaultAgentCore {
                 id: loaded.info.id.clone(),
                 cwd: loaded.info.cwd.clone(),
                 history: Arc::new(VecHistory::from_messages(loaded.history)) as Arc<dyn History>,
-                tools: Arc::new(CompositeRegistry::new(
+                tools: self.apply_tool_allow(Arc::new(CompositeRegistry::new(
                     session_tools,
                     self.process_tools.clone(),
-                )),
+                )))?,
                 registry: self.registry.clone(),
                 provider_state: RwLock::new(initial),
                 policy,
@@ -560,6 +582,29 @@ impl AgentCore for DefaultAgentCore {
 }
 
 impl DefaultAgentCore {
+    /// Apply the top-level `--profile` tool allowlist (if configured) to a session's fully
+    /// assembled tool pool. No-op when `tool_allow` is `None`. `spawn_agent` is skipped
+    /// (governed by the depth gate, not the allowlist). An allowlisted name absent from
+    /// the pool is a hard error (fail-loud).
+    fn apply_tool_allow(
+        &self,
+        pool: Arc<dyn ToolRegistry>,
+    ) -> Result<Arc<dyn ToolRegistry>, AgentError> {
+        let Some(allow) = &self.tool_allow else {
+            return Ok(pool);
+        };
+        crate::session::filter_registry_by_allowlist(
+            &pool,
+            allow,
+            crate::tool::SPAWN_AGENT_TOOL_NAME,
+        )
+        .map_err(|name| {
+            AgentError::Other(BoxError::new(io::Error::other(format!(
+                "profile allows unknown tool `{name}` (not in built-in or MCP tool pool)"
+            ))))
+        })
+    }
+
     /// Look up the entry in the registry for the current [`TurnConfig::model`] and
     /// resolve it into `(provider, hosted_capabilities)`. Shared by `create_session` /
     /// `load_session`.
@@ -835,6 +880,9 @@ impl DefaultSession {
             let runner = TurnRunner {
                 history: self.history.as_ref(),
                 tools: self.tools.as_ref(),
+                // Owned clone of the composite (built-in + MCP) for injection into
+                // ToolContext → spawn_agent, so subagent profiles can allow `mcp__*`.
+                session_tools: Some(self.tools.clone()),
                 provider: provider.as_ref(),
                 policy,
                 events: self.events.clone(),

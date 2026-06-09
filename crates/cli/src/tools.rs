@@ -53,30 +53,10 @@ pub fn build_process_tools(config: &LoadedConfig) -> Arc<dyn ToolRegistry> {
     Arc::new(builder.build())
 }
 
-/// Filters the base tool set to a subset according to an allowlist, for use with the
-/// top-level `--profile` (which runs the entire session as a single profile). Unknown
-/// tool names are a hard error (fail loud). `spawn_agent` is excluded even if present in
-/// the allowlist — a top-level profile is a leaf agent and does not spawn child agents.
-///
-/// # Errors
-/// Returns `Err(name)` if the profile's `allow` contains a name not present in the base
-/// tool set.
-pub fn filter_tools_by_allowlist(
-    base: &Arc<dyn ToolRegistry>,
-    allow: &[String],
-) -> Result<Arc<dyn ToolRegistry>, String> {
-    let mut builder = StaticToolRegistry::builder();
-    for name in allow {
-        if name == "spawn_agent" {
-            continue;
-        }
-        match base.get(name) {
-            Some(tool) => builder = builder.insert(tool),
-            None => return Err(name.clone()),
-        }
-    }
-    Ok(Arc::new(builder.build()))
-}
+// NOTE: the top-level `--profile` tool allowlist is no longer filtered here at assembly
+// time. It is enforced per-session by `DefaultAgentCore::apply_tool_allow` (which reuses
+// `defect_agent::session::filter_registry_by_allowlist`) AFTER MCP tools join the pool, so
+// profiles may allow `mcp__*` tools. See assembly.rs `build_default_process_tools`.
 
 /// Projects [`ProfileSpec`] from `defect-config` into the agent-side [`SubagentProfile`],
 /// and compiles each profile's declared `[hooks]` into a hook engine injection.

@@ -32,10 +32,7 @@ use crate::observability;
 use crate::paths::{default_sessions_root, local_sessions_root};
 use crate::policy::{build_mode_catalog, build_policy};
 use crate::providers::{build_provider_entries, build_registry};
-use crate::tools::{
-    build_process_tools, build_process_tools_with_subagents, filter_tools_by_allowlist,
-    project_skills,
-};
+use crate::tools::{build_process_tools, build_process_tools_with_subagents, project_skills};
 
 const SKILL_MANIFEST_HOOK_NAME: &str = "skill-manifest";
 const SKILL_TRIGGERS_HOOK_NAME: &str = "skill-triggers";
@@ -454,6 +451,15 @@ impl CliAgentBuilder {
         if let Some(factory) = self.build_session_tool_factory() {
             core = core.session_tool_factory(factory);
         }
+        // Top-level `--profile`: hand the profile's tool allowlist to the core so it is
+        // enforced per-session, after MCP tools join the pool (see
+        // `DefaultAgentCore::apply_tool_allow`). Enforcing it here at assembly — against
+        // an MCP-free static pool — is what previously rejected `mcp__*` tools.
+        if let Some(profile_name) = self.profile.as_deref()
+            && let Some(spec) = profiles.get(profile_name)
+        {
+            core = core.tool_allow(spec.tool_allow.clone());
+        }
         if let Some(http_client) = http_client {
             core = core.http(http_client);
         }
@@ -563,13 +569,17 @@ impl CliAgentBuilder {
             return Ok(build_process_tools(&self.config));
         };
 
-        let spec = profiles
+        // Validate the profile exists, but do NOT filter here. The allowlist is enforced
+        // at session-creation time (see `DefaultAgentCore::tool_allow` /
+        // `apply_tool_allow`), after MCP tools have been connected into the session pool —
+        // filtering against this MCP-free static `base` would reject any `mcp__*` the
+        // profile allows. We return the full built-in base; the per-session filter narrows
+        // it. A top-level profile is a leaf agent, so `base` (built-ins only, no
+        // `spawn_agent` overlay) is the correct starting pool.
+        let _spec = profiles
             .get(profile_name)
             .ok_or_else(|| unknown_profile_error(profile_name, profiles))?;
-        let base = build_process_tools(&self.config);
-        filter_tools_by_allowlist(&base, &spec.tool_allow).map_err(|name| {
-            anyhow::anyhow!("profile `{profile_name}` allows unknown tool `{name}`")
-        })
+        Ok(build_process_tools(&self.config))
     }
 
     fn build_hook_engine(
