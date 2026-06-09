@@ -111,31 +111,89 @@ impl ToolRegistry for CompositeRegistry {
     }
 }
 
-/// Restricts a `base` registry to the subset named in `allow`, producing a new static
-/// registry. Used to enforce a profile's tool allowlist **after** the full session tool
-/// pool (built-in + MCP) is assembled — applying it earlier (against a static, MCP-free
-/// pool) would reject `mcp__*` tools that have not yet been connected.
+/// The result of matching a profile tool allowlist against a tool pool.
+#[derive(Debug)]
+pub struct AllowlistMatch {
+    /// Names of **real** pool tools matched, deduped and in pool order. Never contains
+    /// `spawn_agent` (that is reported separately via [`Self::spawn_agent`]).
+    pub tools: Vec<String>,
+    /// Whether the virtual `spawn_agent` member matched any pattern. `spawn_agent` is
+    /// never returned as a real pool tool because its actual availability is governed by
+    /// the recursion **depth gate** (a child must get a fresh, depth-decremented instance,
+    /// not the parent's). The caller decides whether to inject it based on this flag.
+    pub spawn_agent: bool,
+}
+
+/// Match a profile's `allow` list against the names in `base` **plus** the virtual
+/// `spawn_agent` member. Each entry in `allow` is a glob pattern (via [`globset`], the same
+/// engine as hook `tool_glob` / skill triggers); a bare tool name is the degenerate case
+/// of a glob with no wildcards, so exact allowlists keep working unchanged.
 ///
-/// `spawn_agent` is special-cased by the callers (it is injected/excluded based on the
-/// recursion depth, not the allowlist), so any `spawn_agent` entry in `allow` is ignored
-/// here and the caller decides whether to re-add it.
+/// Applied **after** the full session tool pool (built-in + MCP) is assembled — matching
+/// earlier against a static, MCP-free pool would drop `mcp__*` tools not yet connected.
 ///
 /// # Errors
-/// Returns `Err(name)` for the first allowlisted name that is absent from `base`
-/// (fail-loud: a profile that allows a non-existent tool is a configuration error).
+/// - An invalid glob pattern (returns the pattern text).
+/// - A pattern that matches **nothing** — no real pool tool and not `spawn_agent`
+///   (fail-loud: a profile that allows a tool/pattern matching nothing is a configuration
+///   error, e.g. a misspelled server prefix). Returns the offending pattern text.
+pub fn match_tool_allowlist(
+    base: &Arc<dyn ToolRegistry>,
+    allow: &[String],
+) -> Result<AllowlistMatch, String> {
+    let schemas = base.schemas();
+    // Real candidates exclude `spawn_agent`; it is only a virtual member here.
+    let pool_names: Vec<&str> = schemas
+        .iter()
+        .map(|s| s.name.as_str())
+        .filter(|n| *n != crate::tool::SPAWN_AGENT_TOOL_NAME)
+        .collect();
+
+    let mut tools: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut spawn_agent = false;
+
+    for pattern in allow {
+        let matcher = globset::Glob::new(pattern)
+            .map_err(|e| format!("invalid tool pattern `{pattern}`: {e}"))?
+            .compile_matcher();
+        let mut hit = false;
+        for name in &pool_names {
+            if matcher.is_match(name) {
+                hit = true;
+                if seen.insert((*name).to_string()) {
+                    tools.push((*name).to_string());
+                }
+            }
+        }
+        if matcher.is_match(crate::tool::SPAWN_AGENT_TOOL_NAME) {
+            hit = true;
+            spawn_agent = true;
+        }
+        if !hit {
+            return Err(pattern.clone());
+        }
+    }
+
+    Ok(AllowlistMatch { tools, spawn_agent })
+}
+
+/// Restricts a `base` registry to the subset allowed by `allow` (glob patterns; see
+/// [`match_tool_allowlist`]), producing a new static registry. Used by the top-level
+/// `--profile` path, which is a leaf agent: a matched `spawn_agent` is intentionally
+/// **dropped** (a top-level profile does not dispatch sub-agents).
+///
+/// # Errors
+/// Propagates [`match_tool_allowlist`] errors (invalid glob / pattern matching nothing).
 pub fn filter_registry_by_allowlist(
     base: &Arc<dyn ToolRegistry>,
     allow: &[String],
-    skip: &str,
 ) -> Result<Arc<dyn ToolRegistry>, String> {
+    let matched = match_tool_allowlist(base, allow)?;
     let mut builder = StaticToolRegistry::builder();
-    for name in allow {
-        if name == skip {
-            continue;
-        }
-        match base.get(name) {
-            Some(tool) => builder = builder.insert(tool),
-            None => return Err(name.clone()),
+    for name in &matched.tools {
+        if let Some(tool) = base.get(name) {
+            builder = builder.insert(tool);
         }
     }
     Ok(Arc::new(builder.build()))

@@ -89,3 +89,82 @@ fn composite_session_overrides_process() {
     assert!(comp.get("mcp__linear").is_some());
     assert!(comp.get("nope").is_none());
 }
+
+fn pool(names: &[&str]) -> Arc<dyn ToolRegistry> {
+    let mut b = StaticToolRegistry::builder();
+    for n in names {
+        b = b.insert(Arc::new(StubTool::new(n)));
+    }
+    Arc::new(b.build())
+}
+
+#[test]
+fn allowlist_exact_names_still_work() {
+    let p = pool(&["read_file", "search", "bash"]);
+    let m = match_tool_allowlist(&p, &["read_file".into(), "search".into()]).expect("match");
+    assert_eq!(m.tools, vec!["read_file", "search"]);
+    assert!(!m.spawn_agent);
+}
+
+#[test]
+fn allowlist_glob_matches_mcp_server_prefix() {
+    let p = pool(&[
+        "read_file",
+        "mcp__ange__validate",
+        "mcp__ange__format",
+        "mcp__other__x",
+    ]);
+    let m = match_tool_allowlist(&p, &["mcp__ange__*".into()]).expect("match");
+    // Pool order preserved; only the ange server's tools.
+    assert_eq!(m.tools, vec!["mcp__ange__validate", "mcp__ange__format"]);
+}
+
+#[test]
+fn allowlist_star_matches_everything_and_spawn_agent() {
+    let p = pool(&["read_file", "mcp__ange__validate"]);
+    let m = match_tool_allowlist(&p, &["*".into()]).expect("match");
+    assert_eq!(m.tools, vec!["read_file", "mcp__ange__validate"]);
+    // `*` matches the virtual spawn_agent member too.
+    assert!(m.spawn_agent);
+}
+
+#[test]
+fn allowlist_pattern_matching_nothing_is_error() {
+    let p = pool(&["read_file", "mcp__ange__validate"]);
+    let err = match_tool_allowlist(&p, &["mcp__nope__*".into()]).expect_err("should error");
+    assert_eq!(err, "mcp__nope__*");
+}
+
+#[test]
+fn allowlist_invalid_glob_is_error() {
+    let p = pool(&["read_file"]);
+    let err = match_tool_allowlist(&p, &["[bad".into()]).expect_err("should error");
+    assert!(err.contains("invalid tool pattern"), "{err}");
+}
+
+#[test]
+fn allowlist_explicit_spawn_agent_sets_flag_not_tool() {
+    let p = pool(&["read_file"]);
+    let m = match_tool_allowlist(&p, &["read_file".into(), "spawn_agent".into()]).expect("match");
+    assert_eq!(m.tools, vec!["read_file"]); // spawn_agent never a real pool tool
+    assert!(m.spawn_agent);
+}
+
+#[test]
+fn allowlist_dedups_overlapping_patterns() {
+    let p = pool(&["mcp__ange__validate", "mcp__ange__format"]);
+    let m = match_tool_allowlist(&p, &["mcp__ange__*".into(), "mcp__ange__validate".into()])
+        .expect("match");
+    assert_eq!(m.tools, vec!["mcp__ange__validate", "mcp__ange__format"]);
+}
+
+#[test]
+fn filter_registry_builds_subset() {
+    let p = pool(&["read_file", "search", "bash"]);
+    let filtered =
+        filter_registry_by_allowlist(&p, &["read_file".into(), "search".into()]).expect("filter");
+    let names: Vec<String> = filtered.schemas().into_iter().map(|s| s.name).collect();
+    assert_eq!(names.len(), 2);
+    assert!(names.contains(&"read_file".to_string()));
+    assert!(!names.contains(&"bash".to_string()));
+}

@@ -567,45 +567,38 @@ async fn run_subagent_core(
     // is >= 0.
     let child_depth = subagent_depth - 1;
 
-    // Gate A: subset the parent tool set by the allowlist. `spawn_agent` is no longer
-    // unconditionally excluded — instead, a **depth gate** decides: only when
-    // `child_depth > 0` (the child agent can dispatch at least one more level) and the
-    // profile allowlist explicitly permits it, the child agent receives a **freshly
-    // constructed** `spawn_agent` tool (which captures the same base `process_tools` as
-    // the subset source, enabling grandchildren to continue recursion). When depth is
-    // exhausted (`child_depth == 0`), `spawn_agent` is ignored even if listed in the
-    // allowlist — a structural closure (same effect as the old hardcoded behavior, but
-    // configurable). Unknown tool names hard-fail (fail loud, not silently ignored).
+    // Gate A: subset the parent tool set by the allowlist. Entries are glob patterns (the
+    // same engine as the top-level profile / hook matchers); a bare name is the degenerate
+    // case. `spawn_agent` is a virtual matchable member — when a pattern matches it AND a
+    // **depth gate** allows (`child_depth > 0`), the child receives a **freshly
+    // constructed** `spawn_agent` (capturing the same `process_tools` so grandchildren can
+    // recurse). When depth is exhausted, a matched `spawn_agent` is ignored — a structural
+    // closure. A pattern matching nothing hard-fails (fail loud).
+    let matched = crate::session::match_tool_allowlist(&process_tools, &profile.tool_allow)
+        .map_err(|pattern| {
+            ToolError::InvalidArgs(BoxError::new(io_err(format!(
+                "profile `{}` allows tool pattern `{pattern}` matching nothing in the tool pool",
+                parsed.profile
+            ))))
+        })?;
     let mut builder = StaticToolRegistry::builder();
-    for name in &profile.tool_allow {
-        if name == SPAWN_AGENT_TOOL_NAME {
-            if child_depth > 0 {
-                let child_spawn = SpawnAgentTool::new(
-                    profiles.clone(),
-                    registry.clone(),
-                    // Pass the parent policy obtained at this layer to the child
-                    // `SpawnAgentTool`, which captures it as a fallback at construction
-                    // time; at runtime, the active policy injected via `ctx` still takes
-                    // precedence. The child turn is further wrapped in `NonInteractive`.
-                    policy.clone(),
-                    process_tools.clone(),
-                    base_prompt.clone(),
-                );
-                builder = builder.insert(Arc::new(child_spawn));
-            }
-            // child_depth == 0: depth exhausted, skip — structurally prevents further
-            // recursion.
-            continue;
+    for name in &matched.tools {
+        if let Some(tool) = process_tools.get(name) {
+            builder = builder.insert(tool);
         }
-        match process_tools.get(name) {
-            Some(tool) => builder = builder.insert(tool),
-            None => {
-                return Err(ToolError::InvalidArgs(BoxError::new(io_err(format!(
-                    "profile `{}` allows unknown tool `{name}`",
-                    parsed.profile
-                )))));
-            }
-        }
+    }
+    if matched.spawn_agent && child_depth > 0 {
+        let child_spawn = SpawnAgentTool::new(
+            profiles.clone(),
+            registry.clone(),
+            // Parent policy captured as the child's construction-time fallback; the active
+            // policy injected via `ctx` still takes precedence at runtime, and the child
+            // turn is further wrapped in `NonInteractive`.
+            policy.clone(),
+            process_tools.clone(),
+            base_prompt.clone(),
+        );
+        builder = builder.insert(Arc::new(child_spawn));
     }
     let sub_tools: Arc<dyn ToolRegistry> = Arc::new(builder.build());
 

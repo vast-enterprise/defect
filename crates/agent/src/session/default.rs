@@ -583,9 +583,10 @@ impl AgentCore for DefaultAgentCore {
 
 impl DefaultAgentCore {
     /// Apply the top-level `--profile` tool allowlist (if configured) to a session's fully
-    /// assembled tool pool. No-op when `tool_allow` is `None`. `spawn_agent` is skipped
-    /// (governed by the depth gate, not the allowlist). An allowlisted name absent from
-    /// the pool is a hard error (fail-loud).
+    /// assembled tool pool. No-op when `tool_allow` is `None`. Entries are glob patterns
+    /// (see [`crate::session::match_tool_allowlist`]); a top-level profile is a leaf agent,
+    /// so a matched `spawn_agent` is dropped. A pattern matching nothing is a hard error
+    /// (fail-loud).
     fn apply_tool_allow(
         &self,
         pool: Arc<dyn ToolRegistry>,
@@ -593,14 +594,9 @@ impl DefaultAgentCore {
         let Some(allow) = &self.tool_allow else {
             return Ok(pool);
         };
-        crate::session::filter_registry_by_allowlist(
-            &pool,
-            allow,
-            crate::tool::SPAWN_AGENT_TOOL_NAME,
-        )
-        .map_err(|name| {
+        crate::session::filter_registry_by_allowlist(&pool, allow).map_err(|pattern| {
             AgentError::Other(BoxError::new(io::Error::other(format!(
-                "profile allows unknown tool `{name}` (not in built-in or MCP tool pool)"
+                "profile allows tool pattern `{pattern}` matching nothing in the built-in or MCP tool pool"
             ))))
         })
     }

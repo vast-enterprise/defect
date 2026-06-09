@@ -60,7 +60,8 @@ pub use history::VecHistory;
 pub use permissions::PermissionGate;
 pub use prompt::resolve_system_prompt;
 pub use tool_registry::{
-    CompositeRegistry, StaticToolRegistry, StaticToolRegistryBuilder, filter_registry_by_allowlist,
+    AllowlistMatch, CompositeRegistry, StaticToolRegistry, StaticToolRegistryBuilder,
+    filter_registry_by_allowlist, match_tool_allowlist,
 };
 /// Re-exported for reuse within the crate: the `spawn_agent` sub-agent tool needs a
 /// `RequestAuditTracker` instance when constructing a nested [`TurnRunner`]. This type is
