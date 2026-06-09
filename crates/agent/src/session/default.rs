@@ -885,6 +885,9 @@ impl DefaultSession {
                 permissions: self.permissions.as_ref(),
                 cancel,
                 config: &config,
+                // Owned clone for injection into ToolContext → spawn_agent, so a child
+                // agent inherits the parent's turn settings instead of bare defaults.
+                config_arc: Some(Arc::new(config.clone())),
                 system_prompt: system_prompt.map(Arc::from),
                 cwd: &self.cwd,
                 fs: self.fs.clone(),

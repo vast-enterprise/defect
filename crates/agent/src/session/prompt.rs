@@ -101,6 +101,29 @@ pub fn resolve_system_prompt(
     Ok(render_sections(&sections))
 }
 
+/// Load **only** the project instruction layer (`AGENTS.md`, collected up the directory
+/// tree) as a single rendered string, or `None` if there is none.
+///
+/// This is the "project world knowledge" slice of [`resolve_system_prompt`] — deliberately
+/// excluding the base prompt, environment block, provider/model overlays, and session
+/// overlay (all of which are the *parent agent's* identity/runtime, not shareable project
+/// context). A subagent profile may opt in to this layer (`inherit_project_prompt = true`)
+/// so it gets build/test/architecture conventions without inheriting the parent's identity.
+///
+/// # Errors
+/// Propagates IO errors from reading `AGENTS.md` files (NotFound is not an error).
+pub fn load_project_prompt(cwd: &Path) -> Result<Option<String>, io::Error> {
+    let mut sections = Vec::new();
+    for (path, body) in load_prompt_file(cwd, DEFAULT_PROMPT_FILE)? {
+        let title = match path {
+            Some(path) => format!("Project Instructions ({path})"),
+            None => "Project Instructions".to_owned(),
+        };
+        sections.push(Section::new(title, body));
+    }
+    Ok(render_sections(&sections))
+}
+
 fn load_base_prompt(base_prompt: &BasePromptConfig) -> Result<Vec<String>, io::Error> {
     let mut sections = Vec::new();
 

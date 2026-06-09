@@ -316,6 +316,8 @@ fn schema_has_profile_enum_and_catalog() {
         system_prompt: "you are reviewer".to_string(),
         tool_allow: vec!["read_file".to_string()],
         sampling: None,
+        request_limit: None,
+        inherit_project_prompt: false,
         hooks: None,
     };
     let tool = SpawnAgentTool::new(
@@ -347,6 +349,8 @@ fn returns_subagent_final_text() {
         system_prompt: "sys".to_string(),
         tool_allow: vec![],
         sampling: None,
+        request_limit: None,
+        inherit_project_prompt: false,
         hooks: None,
     };
     let tool = SpawnAgentTool::new(
@@ -379,6 +383,8 @@ fn subagent_events_bridged_to_parent() {
         system_prompt: "sys".to_string(),
         tool_allow: vec![],
         sampling: None,
+        request_limit: None,
+        inherit_project_prompt: false,
         hooks: None,
     };
     let tool = SpawnAgentTool::new(
@@ -444,6 +450,8 @@ fn unknown_profile_fails() {
         system_prompt: "sys".to_string(),
         tool_allow: vec![],
         sampling: None,
+        request_limit: None,
+        inherit_project_prompt: false,
         hooks: None,
     };
     let tool = SpawnAgentTool::new(
@@ -469,6 +477,8 @@ fn unknown_allowed_tool_fails_loud() {
         system_prompt: "sys".to_string(),
         tool_allow: vec!["does_not_exist".to_string()],
         sampling: None,
+        request_limit: None,
+        inherit_project_prompt: false,
         hooks: None,
     };
     let tool = SpawnAgentTool::new(
@@ -502,6 +512,8 @@ fn deadlock_guard_mutating_tool_is_denied_and_turn_completes() {
         system_prompt: "sys".to_string(),
         tool_allow: vec!["write_file".to_string()],
         sampling: None,
+        request_limit: None,
+        inherit_project_prompt: false,
         hooks: None,
     };
     let tool = SpawnAgentTool::new(
@@ -563,6 +575,8 @@ fn profile_hook_engine_runs_in_subagent_turn() {
         system_prompt: "sys".to_string(),
         tool_allow: vec![],
         sampling: None,
+        request_limit: None,
+        inherit_project_prompt: false,
         hooks: Some(Arc::new(ShortCircuitHooks {
             text: "from hook".into(),
         })),

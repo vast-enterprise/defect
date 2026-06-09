@@ -88,6 +88,12 @@ pub struct SubagentProfile {
     pub tool_allow: Vec<String>,
     /// Optional sampling overrides.
     pub sampling: Option<SamplingParams>,
+    /// When `true`, prefix the child's system prompt with the project `AGENTS.md` layer
+    /// (project world-knowledge), without inheriting the parent's identity. Default false.
+    pub inherit_project_prompt: bool,
+    /// Optional per-turn LLM-call cap for this subagent. `None` ⇒ a fixed anti-runaway
+    /// default (`Fixed(32)`); a profile may raise it or make it adaptive/unbounded.
+    pub request_limit: Option<TurnRequestLimit>,
     /// The hook engine for this profile — hooks that run when a sub-agent executes a
     /// turn.
     ///
@@ -110,6 +116,7 @@ impl std::fmt::Debug for SubagentProfile {
             .field("system_prompt", &self.system_prompt)
             .field("tool_allow", &self.tool_allow)
             .field("sampling", &self.sampling)
+            .field("request_limit", &self.request_limit)
             .field("hooks", &self.hooks.as_ref().map(|_| "<engine>"))
             .finish()
     }
@@ -293,6 +300,10 @@ impl Tool for SpawnAgentTool {
         let http = ctx.http.clone();
         let parent_model = ctx.current_model.to_string();
         let parent_provider = ctx.current_provider.to_string();
+        // Parent turn config: the child inherits compaction/retry/concurrency/sampling/
+        // request-limit defaults from it (profile may override). `None` ⇒ fall back to
+        // `TurnConfig::default()` (legacy/test paths).
+        let parent_config = ctx.parent_turn_config.clone();
         let background = ctx.background.clone();
         // Subagent event bridge: nest child-turn events back into the parent trace
         // (observability).
@@ -358,6 +369,7 @@ impl Tool for SpawnAgentTool {
                     http,
                     parent_model,
                     parent_provider,
+                    parent_config,
                     subagent_depth,
                     // The background path also uses the bridge — the same
                     // `AgentEvent::Subagent` mechanism as the foreground. The
@@ -431,6 +443,7 @@ impl Tool for SpawnAgentTool {
                 http,
                 parent_model,
                 parent_provider,
+                parent_config,
                 subagent_depth,
                 // Synchronous path: the parent `spawn_agent` tool span remains open for
                 // the entire duration (blocking until the child turn completes), allowing
@@ -479,6 +492,9 @@ struct SubagentDeps {
     /// (legacy/test path), in which case the fallback picks the first entry by bare model
     /// id.
     parent_provider: String,
+    /// The parent turn's config. The child inherits compaction/retry/concurrency/sampling/
+    /// request-limit defaults from it (a profile may still override). `None` ⇒ defaults.
+    parent_config: Option<Arc<TurnConfig>>,
     /// Remaining dispatch depth for this (initiator) turn. Child turns run at
     /// `subagent_depth - 1`; the child toolset includes `spawn_agent` only when that
     /// decremented value is `> 0` (see `run_subagent_core`).
@@ -528,6 +544,7 @@ async fn run_subagent_core(
         http,
         parent_model,
         parent_provider,
+        parent_config,
         subagent_depth,
         bridge,
         task_handle,
@@ -602,14 +619,21 @@ async fn run_subagent_core(
     }
     let sub_tools: Arc<dyn ToolRegistry> = Arc::new(builder.build());
 
-    // System prompt: inherited `base_prompt` + profile's own `system.md`. Does not use
-    // `resolve_system_prompt` (to avoid crawling workspace `AGENTS.md` / provider·model
-    // overlay).
+    // System prompt: inherited `base_prompt` + (optionally) the project `AGENTS.md` layer
+    // + profile's own `system.md`. Does NOT use `resolve_system_prompt` (no provider/model
+    // overlays, no parent identity). The project layer is opt-in (`inherit_project_prompt`)
+    // — shared world-knowledge, not the parent's identity.
     let mut sections = Vec::new();
     if let Some(bp) = base_prompt.as_deref()
         && !bp.is_empty()
     {
         sections.push(bp.to_string());
+    }
+    if profile.inherit_project_prompt
+        && let Some(project) = crate::session::load_project_prompt(&cwd)
+            .map_err(|e| ToolError::Execution(BoxError::new(e)))?
+    {
+        sections.push(project);
     }
     if !profile.system_prompt.is_empty() {
         sections.push(profile.system_prompt.clone());
@@ -687,18 +711,37 @@ async fn run_subagent_core(
     let session_id = SessionId::new(format!("subagent-{}", parsed.profile));
     let audit = RequestAuditTracker::new();
 
-    let config = TurnConfig {
-        model: model.clone(),
-        sampling: profile.sampling.clone().unwrap_or_default(),
-        // Limit subagent to a fixed number of steps to prevent runaway nested loops.
-        request_limit: TurnRequestLimit::Fixed(32),
-        // Depth decreases by one per level: the child turn's tool driver uses this to
-        // decide whether grandchildren can be dispatched. When `child_depth == 0`, the
-        // child turn's tool set already lacks `spawn_agent` (gate A above is not
-        // installed), so redundantly setting it to 0 here is self-consistent.
-        subagent_max_depth: child_depth,
-        ..TurnConfig::default()
-    };
+    // Inherit the parent turn's settings as the baseline (compaction thresholds,
+    // retry/concurrency limits, sampling, …) so a subagent behaves like the configured
+    // agent rather than silently reverting to hardcoded defaults. A profile / call still
+    // overrides specific dimensions below. `None` (legacy/test) ⇒ `TurnConfig::default()`.
+    let mut config = parent_config.as_deref().cloned().unwrap_or_default();
+    config.model = model.clone();
+    // Provider label reflects the child's resolved provider, not the inherited parent's,
+    // so nested ctx propagation and tracing show the correct vendor.
+    config.provider = provider.info().vendor.clone();
+    // Sampling: a profile's `[sampling]` fully replaces the inherited value; otherwise the
+    // parent's sampling (incl. `reasoning_effort`) carries through.
+    if let Some(sampling) = profile.sampling.clone() {
+        config.sampling = sampling;
+    }
+    // Request limit: a profile may set its own; otherwise keep a fixed anti-runaway cap.
+    // It is intentionally NOT inherited from the parent — a subagent is a bounded
+    // delegation, not a session-length budget, so an adaptive/unbounded parent limit must
+    // not silently make subagents unbounded.
+    config.request_limit = profile.request_limit.unwrap_or(TurnRequestLimit::Fixed(32));
+    // Depth decreases by one per level: the child turn's tool driver uses this to decide
+    // whether grandchildren can be dispatched. When `child_depth == 0`, the child turn's
+    // tool set already lacks `spawn_agent` (gate A above is not installed).
+    config.subagent_max_depth = child_depth;
+    // The child resolves its own system prompt below; do not inherit the parent's resolved
+    // prompt fields (identity isolation).
+    config.system_prompt = None;
+    config.base_prompt = Default::default();
+    config.prompt = Default::default();
+    // allowed_models is a top-level model-switch allowlist; subagents pick a fixed model,
+    // so clear any inherited list.
+    config.allowed_models = None;
 
     let runner = TurnRunner {
         history: history.as_ref(),
@@ -712,6 +755,9 @@ async fn run_subagent_core(
         permissions: &permissions,
         cancel: cancel.clone(),
         config: &config,
+        // Owned clone so a nested spawn_agent inherits this child's (already parent-derived)
+        // turn settings, keeping inheritance consistent at every recursion level.
+        config_arc: Some(Arc::new(config.clone())),
         system_prompt,
         cwd: &cwd,
         fs,

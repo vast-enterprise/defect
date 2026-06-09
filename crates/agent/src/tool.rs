@@ -244,6 +244,13 @@ pub struct ToolContext<'a> {
     /// Injected by the [`TurnRunner`](crate::session::TurnRunner) when constructing the
     /// context.
     pub session_tools: Option<Arc<dyn crate::session::ToolRegistry>>,
+    /// The current turn's [`TurnConfig`](crate::session::TurnConfig). `spawn_agent` uses it
+    /// so a child agent **inherits** the parent's turn settings (compaction thresholds,
+    /// retry/concurrency limits, sampling incl. `reasoning_effort`, request-limit default)
+    /// instead of silently falling back to `TurnConfig::default()`. A profile may still
+    /// override individual fields. `None` in legacy / test paths, where `spawn_agent` uses
+    /// defaults. Injected by the [`TurnRunner`](crate::session::TurnRunner).
+    pub parent_turn_config: Option<Arc<crate::session::TurnConfig>>,
 }
 
 /// A handle for bridging sub-turn events (spawned internally by a tool) back into the
@@ -310,7 +317,17 @@ impl<'a> ToolContext<'a> {
             goal: None,
             subagent_depth: 0,
             session_tools: None,
+            parent_turn_config: None,
         }
+    }
+
+    /// Inject the current turn's [`TurnConfig`](crate::session::TurnConfig) so `spawn_agent`
+    /// can build a child config that inherits the parent's turn settings. If not called,
+    /// `spawn_agent` falls back to `TurnConfig::default()` for non-explicit fields.
+    #[must_use]
+    pub fn with_parent_turn_config(mut self, config: Arc<crate::session::TurnConfig>) -> Self {
+        self.parent_turn_config = Some(config);
+        self
     }
 
     /// Inject the current session's fully assembled tool pool (built-in + MCP composite).

@@ -58,7 +58,7 @@ pub use events::EventEmitter;
 pub use goal::GoalState;
 pub use history::VecHistory;
 pub use permissions::PermissionGate;
-pub use prompt::resolve_system_prompt;
+pub use prompt::{load_project_prompt, resolve_system_prompt};
 pub use tool_registry::{
     AllowlistMatch, CompositeRegistry, StaticToolRegistry, StaticToolRegistryBuilder,
     filter_registry_by_allowlist, match_tool_allowlist,

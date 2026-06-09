@@ -662,7 +662,7 @@ fn provider_config_file(cfg: ProviderSection) -> ProviderConfigFile {
 /// - `mode = "unbounded"` ⇒ `Unbounded` (the number, if any, is ignored).
 /// - `mode = "fixed" | "adaptive"` ⇒ requires a number (errors if absent — a fixed or
 ///   adaptive cap without `N` is meaningless).
-fn resolve_request_limit(
+pub(crate) fn resolve_request_limit(
     path: &Path,
     limit: Option<u32>,
     mode: Option<RequestLimitMode>,

@@ -466,3 +466,142 @@ fn yaml_frontmatter_without_feature_errors() {
         other => panic!("expected Invalid, got {other:?}"),
     }
 }
+
+#[test]
+fn folder_profile_inline_prompt_text() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    // No system.md — prompt comes from inline `[prompt] text`.
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "inline",
+        "description = \"d\"\n[prompt]\ntext = \"inline prompt body\"\n",
+        None,
+    );
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    assert_eq!(profiles["inline"].system_prompt_text, "inline prompt body");
+}
+
+#[test]
+fn folder_profile_prompt_text_and_file_conflict() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "bad",
+        "description = \"d\"\n[prompt]\ntext = \"x\"\nfile = \"system.md\"\n",
+        Some("file body"),
+    );
+    let err = discover_profiles(&opts_with(&tmp, &repo_root)).expect_err("conflict");
+    match err {
+        ConfigError::Invalid { message, .. } => {
+            assert!(message.contains("not both"), "got: {message}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn profile_default_model_table_accepted() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "m",
+        "description = \"d\"\n[default]\nmodel = \"claude-x\"\n",
+        Some("sys"),
+    );
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    assert_eq!(profiles["m"].model.as_deref(), Some("claude-x"));
+}
+
+#[test]
+fn profile_root_and_default_model_conflict() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "m",
+        "description = \"d\"\nmodel = \"a\"\n[default]\nmodel = \"b\"\n",
+        Some("sys"),
+    );
+    let err = discover_profiles(&opts_with(&tmp, &repo_root)).expect_err("conflict");
+    assert!(matches!(err, ConfigError::Invalid { .. }));
+}
+
+#[test]
+fn profile_request_limit_fixed() {
+    use defect_agent::session::TurnRequestLimit;
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "r",
+        "description = \"d\"\nrequest_limit = 50\nrequest_limit_mode = \"fixed\"\n",
+        Some("sys"),
+    );
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    assert!(matches!(
+        profiles["r"].request_limit,
+        Some(TurnRequestLimit::Fixed(50))
+    ));
+}
+
+#[test]
+fn profile_hooks_disable_is_explanatory_error() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "p",
+        "description = \"d\"\n[[hooks.disable]]\nevent = \"before_tool_apply\"\n",
+        Some("sys"),
+    );
+    let err = discover_profiles(&opts_with(&tmp, &repo_root)).expect_err("disable unsupported");
+    match err {
+        ConfigError::Invalid { message, .. } => {
+            assert!(
+                message.contains("not supported in a profile"),
+                "should explain disable is unsupported, got: {message}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn profile_inherit_project_prompt_flag() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "p",
+        "description = \"d\"\ninherit_project_prompt = true\n",
+        Some("sys"),
+    );
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    assert!(profiles["p"].inherit_project_prompt);
+    // Default is false when omitted.
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "q",
+        "description = \"d\"\n",
+        Some("sys"),
+    );
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    assert!(!profiles["q"].inherit_project_prompt);
+}
+
+#[test]
+fn profile_request_limit_omitted_is_none() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo_root = repo(&tmp);
+    write_profile(
+        &repo_root.join(".defect/agents"),
+        "r",
+        "description = \"d\"\n",
+        Some("sys"),
+    );
+    let profiles = discover_profiles(&opts_with(&tmp, &repo_root)).expect("discover");
+    assert!(profiles["r"].request_limit.is_none());
+}

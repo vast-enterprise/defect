@@ -44,12 +44,13 @@ use std::path::{Path, PathBuf};
 use defect_agent::error::BoxError;
 use defect_agent::fs::resolve_workspace_path;
 use defect_agent::llm::SamplingParams;
+use defect_agent::session::TurnRequestLimit;
 use serde::Deserialize;
 
 use crate::frontmatter::{parse_frontmatter, split_frontmatter};
-use crate::hooks::{HookEntryRaw, profile_hooks_from_raw};
-use crate::loader::find_repo_root;
-use crate::types::{ConfigError, ConfigSource, HooksConfig, LoadConfigOptions};
+use crate::hooks::profile_hooks_from_raw;
+use crate::loader::{find_repo_root, resolve_request_limit};
+use crate::types::{ConfigError, ConfigSource, HooksConfig, LoadConfigOptions, RequestLimitMode};
 
 /// Profile-level agent directory (relative to repo root). Mirrors [`crate::types`]'s
 /// `PROJECT_CONFIG_RELATIVE` (`.defect/config.toml`).
@@ -93,6 +94,15 @@ pub struct ProfileSpec {
     pub tool_allow: Vec<String>,
     /// Optional sampling parameter overrides.
     pub sampling: Option<SamplingParams>,
+    /// When `true`, the subagent's system prompt is prefixed with the project instruction
+    /// layer (`AGENTS.md`), so it inherits project world-knowledge (build/test/arch
+    /// conventions) without inheriting the parent's identity. Default `false` (isolation +
+    /// token economy). Configured via `inherit_project_prompt`.
+    pub inherit_project_prompt: bool,
+    /// Optional per-turn LLM-call cap. Omitted ⇒ the subagent uses a fixed anti-runaway
+    /// default. Configured via `request_limit` (+ `request_limit_mode`), the same keys and
+    /// semantics as the top-level `[turn]` config.
+    pub request_limit: Option<TurnRequestLimit>,
     /// The `[hooks]` declared by this profile — hooks attached when a sub-agent runs a
     /// turn.
     ///
@@ -115,24 +125,53 @@ struct ProfileConfigToml {
     description: String,
     #[serde(default)]
     model: Option<String>,
+    /// `[default]` table — accepts `model` like the top-level config. Equivalent to the
+    /// root-level `model`; setting both is a hard error.
+    #[serde(default)]
+    default: Option<ProfileDefaultToml>,
     #[serde(default)]
     prompt: Option<ProfilePromptToml>,
     #[serde(default)]
     tools: Option<ProfileToolsToml>,
     #[serde(default)]
     sampling: Option<ProfileSamplingToml>,
+    /// When `true`, prefix the subagent's system prompt with the project `AGENTS.md` layer.
+    #[serde(default)]
+    inherit_project_prompt: bool,
+    /// Per-turn LLM-call cap (same keys/semantics as top-level `[turn] request_limit`).
+    #[serde(default)]
+    request_limit: Option<u32>,
+    /// Strategy for `request_limit` (`fixed` / `adaptive` / `unbounded`); `None` ⇒
+    /// `adaptive` when a number is given, matching the top-level default.
+    #[serde(default)]
+    request_limit_mode: Option<RequestLimitMode>,
     /// The `[hooks]` table: event name → array of hook entries for that event. Its shape
     /// is identical to the top-level `[hooks]` (reuses [`HookEntryRaw`]). A profile is a
     /// single closed truth source and does not support cross-layer `disable` — a
     /// `disable` key causes a hard fail as if the event name were unknown.
     #[serde(default)]
-    hooks: BTreeMap<String, Vec<HookEntryRaw>>,
+    hooks: BTreeMap<String, toml::Value>,
 }
 
+/// Profile system-prompt source. Mirrors the top-level `[prompt]` shape: either an inline
+/// `text` or a `file` path (folder profiles only). At most one may be set.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProfilePromptToml {
-    file: String,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+/// Optional `[default]` table, accepted so a profile can be written with the same
+/// `[default] model` key the top-level config uses (in addition to the root-level `model`
+/// shorthand). At most one of the two model sources may be set.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileDefaultToml {
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -302,14 +341,31 @@ fn spec_from_cfg(
     // carries the `source` of the profile's layer. Misspelled event names or invalid
     // handler shapes hard-fail here, with errors pointing to the config file path.
     let hooks = profile_hooks_from_raw(cfg.hooks, source, config_path)?;
+    let request_limit =
+        resolve_request_limit(config_path, cfg.request_limit, cfg.request_limit_mode)?;
+    // Model may be given at the root (`model = "…"`) or under `[default] model` (matching
+    // the top-level config). Accept either, but not both.
+    let default_model = cfg.default.and_then(|d| d.model);
+    let model = match (cfg.model, default_model) {
+        (Some(_), Some(_)) => {
+            return Err(ConfigError::Invalid {
+                path: config_path.to_path_buf(),
+                message: "set the model either as root `model` or as `[default] model`, not both"
+                    .into(),
+            });
+        }
+        (root, default) => root.or(default),
+    };
     Ok(ProfileSpec {
         name: String::new(), // Filled in by `scan_agents_dir`
         dir: dir.to_path_buf(),
         description: cfg.description,
-        model: cfg.model,
+        model,
         system_prompt_text,
         tool_allow,
         sampling: cfg.sampling.map(ProfileSamplingToml::into_params),
+        inherit_project_prompt: cfg.inherit_project_prompt,
+        request_limit,
         hooks,
     })
 }
@@ -331,22 +387,36 @@ fn parse_profile_folder(
         message: err.to_string(),
     })?;
 
-    let prompt_file = cfg
-        .prompt
-        .as_ref()
-        .map(|p| p.file.clone())
-        .unwrap_or_else(|| DEFAULT_PROMPT_FILE.to_string());
-    let prompt_path = resolve_workspace_path(dir, Path::new(&prompt_file)).map_err(|err| {
-        ConfigError::Invalid {
-            path: config_path.to_path_buf(),
-            message: format!("invalid `prompt.file` `{prompt_file}`: {err}"),
+    // System prompt source: inline `[prompt] text`, or `[prompt] file` (default
+    // `system.md`). At most one may be set; `text` wins when present, `file` is read from
+    // disk otherwise.
+    let (inline_text, prompt_file) = match cfg.prompt.as_ref() {
+        Some(p) => {
+            if p.text.is_some() && p.file.is_some() {
+                return Err(ConfigError::Invalid {
+                    path: config_path.to_path_buf(),
+                    message: "set `[prompt] text` or `[prompt] file`, not both".into(),
+                });
+            }
+            (p.text.clone(), p.file.clone())
         }
-    })?;
-    let system_prompt_text =
+        None => (None, None),
+    };
+    let system_prompt_text = if let Some(text) = inline_text {
+        text
+    } else {
+        let prompt_file = prompt_file.unwrap_or_else(|| DEFAULT_PROMPT_FILE.to_string());
+        let prompt_path = resolve_workspace_path(dir, Path::new(&prompt_file)).map_err(|err| {
+            ConfigError::Invalid {
+                path: config_path.to_path_buf(),
+                message: format!("invalid `prompt.file` `{prompt_file}`: {err}"),
+            }
+        })?;
         std::fs::read_to_string(&prompt_path).map_err(|err| ConfigError::Io {
             path: prompt_path.clone(),
             source: BoxError::new(err),
-        })?;
+        })?
+    };
 
     spec_from_cfg(dir, cfg, system_prompt_text, source, config_path)
 }

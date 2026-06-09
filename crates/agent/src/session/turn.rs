@@ -249,6 +249,10 @@ pub struct TurnRunner<'a> {
     pub permissions: &'a PermissionGate,
     pub cancel: CancellationToken,
     pub config: &'a TurnConfig,
+    /// The same turn config as [`Self::config`], as an owned `Arc` for injection into
+    /// [`crate::tool::ToolContext`] so `spawn_agent` can let a child agent inherit the
+    /// parent's turn settings. `None` in legacy/test runners that only set the borrow.
+    pub config_arc: Option<Arc<TurnConfig>>,
     /// The system prompt resolved for this turn. `Arc<str>`: each `build_request` call
     /// `clone`s it into `CompletionRequest.system`; the `Arc` reduces this to a reference
     /// count increment.

@@ -101,6 +101,8 @@ fn project_profiles(
                     system_prompt: spec.system_prompt_text.clone(),
                     tool_allow: spec.tool_allow.clone(),
                     sampling: spec.sampling.clone(),
+                    inherit_project_prompt: spec.inherit_project_prompt,
+                    request_limit: spec.request_limit,
                     hooks,
                 },
             ))

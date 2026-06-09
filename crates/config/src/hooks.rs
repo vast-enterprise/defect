@@ -144,18 +144,41 @@ pub(crate) fn parse_layer_hooks(
 /// against `ALL_EVENT_NAMES`; a misspelled name is a hard failure (not silently dropped).
 /// `path` is used only for error reporting.
 pub(crate) fn profile_hooks_from_raw(
-    raw: BTreeMap<String, Vec<HookEntryRaw>>,
+    raw: BTreeMap<String, toml::Value>,
     source: ConfigSource,
     path: &std::path::Path,
 ) -> Result<HooksConfig, ConfigError> {
     let mut entries = HooksConfig::default();
-    for (key, list) in raw {
+    for (key, value) in raw {
+        // `disable` is a cross-layer directive in the top-level config (it removes hooks
+        // declared by *other* layers). A profile is a single, self-contained source — there
+        // is no other layer to disable — so `disable` has no meaning here. Give a targeted
+        // explanation rather than the generic "unknown event name" / "unknown field" serde
+        // error, which would wrongly suggest `disable` was a misspelled event.
+        if key == "disable" {
+            return Err(ConfigError::Invalid {
+                path: path.to_path_buf(),
+                message: "[[hooks.disable]] is not supported in a profile: a profile is a \
+                          single self-contained hook source with no other layer to disable. \
+                          Declare only the hooks this profile should run."
+                    .into(),
+            });
+        }
         if !is_known_event(&key) {
             return Err(ConfigError::Invalid {
                 path: path.to_path_buf(),
                 message: format!("[[hooks.{key}]] is not a known hook event name"),
             });
         }
+        // Deserialize this event's entries only after the key is validated, so the
+        // `disable` / unknown-event diagnostics above win over serde's field errors.
+        let list: Vec<HookEntryRaw> =
+            value
+                .try_into()
+                .map_err(|err: toml::de::Error| ConfigError::Invalid {
+                    path: path.to_path_buf(),
+                    message: format!("invalid [[hooks.{key}]]: {err}"),
+                })?;
         for r in list {
             entries.push(
                 key.clone(),

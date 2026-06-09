@@ -269,6 +269,8 @@ impl TurnRunner<'_> {
                     // The session's assembled tool pool (built-in + MCP) for spawn_agent to
                     // build child agent tool subsets including `mcp__*`.
                     let session_tools = self.session_tools.clone();
+                    // The parent turn config, so spawn_agent's child inherits turn settings.
+                    let parent_config = self.config_arc.clone();
                     let name = tool.schema().name.clone();
                     let span = tracing::info_span!(
                         "tool_call",
@@ -307,6 +309,7 @@ impl TurnRunner<'_> {
                                 policy,
                                 subagent_depth,
                                 session_tools,
+                                parent_config,
                             )
                             .await
                         }
@@ -589,6 +592,7 @@ async fn drive_tool_stream(
     policy: Arc<dyn crate::policy::SandboxPolicy>,
     subagent_depth: u32,
     session_tools: Option<Arc<dyn crate::session::ToolRegistry>>,
+    parent_config: Option<Arc<crate::session::TurnConfig>>,
 ) -> ToolResult {
     let mut ctx = ToolContext::new(
         &cwd,
@@ -606,6 +610,9 @@ async fn drive_tool_stream(
     .with_subagent_depth(subagent_depth);
     if let Some(session_tools) = session_tools {
         ctx = ctx.with_session_tools(session_tools);
+    }
+    if let Some(parent_config) = parent_config {
+        ctx = ctx.with_parent_turn_config(parent_config);
     }
     if let Some(bg) = background {
         ctx = ctx.with_background(bg);
