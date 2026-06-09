@@ -76,10 +76,10 @@ const CACHE_SMOKE_PROMPT: &str = concat!(
 async fn main() {
     init_tracing();
 
-    let api_key = match env_string("DEEPSEEK_API_KEY").or_else(|| env_string("OPENAI_API_KEY")) {
+    let api_key = match env_string("DEEPSEEK_API_KEY") {
         Some(k) => k,
         None => {
-            eprintln!("DEEPSEEK_API_KEY (or OPENAI_API_KEY) is required for deepseek_smoke");
+            eprintln!("DEEPSEEK_API_KEY is required for deepseek_smoke");
             std::process::exit(EXIT_FAIL);
         }
     };

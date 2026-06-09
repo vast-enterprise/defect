@@ -67,9 +67,12 @@ impl DeepSeekConfig {
         {
             return Some(v);
         }
-        env::var(API_KEY_ENV)
-            .ok()
-            .or_else(|| env::var("OPENAI_API_KEY").ok())
+        // Only DeepSeek's own key. Do NOT fall back to OPENAI_API_KEY: even though
+        // DeepSeek speaks the OpenAI wire protocol, silently sending an OpenAI key to
+        // `api.deepseek.com` is a surprising cross-provider credential leak — a user with
+        // only OPENAI_API_KEY set who selects DeepSeek should get a clear "missing key"
+        // error, not have their OpenAI key shipped to a different vendor.
+        env::var(API_KEY_ENV).ok()
     }
 
     fn resolve_base_url(&self) -> String {
