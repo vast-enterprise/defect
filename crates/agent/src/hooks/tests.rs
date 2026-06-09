@@ -16,7 +16,7 @@ fn glob_basic() {
     assert!(!tool_name_matches("a*c", "abd"));
     assert!(tool_name_matches("???", "abc"));
     assert!(!tool_name_matches("???", "abcd"));
-    assert!(tool_name_matches("mcp.*", "mcp.fs.read"));
+    assert!(tool_name_matches("mcp__*", "mcp__fs__read"));
     // Invalid patterns do not panic; they are treated as non-matching.
     assert!(!tool_name_matches("[bad", "anything"));
 }

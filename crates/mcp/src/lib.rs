@@ -239,11 +239,16 @@ struct McpToolAdapter {
 /// registration in the local `ToolRegistry`.
 ///
 /// See capabilities for MCP tool classification. All MCP tools are registered as
-/// `mcp.<server>.<name>` to avoid name collisions with built-in tools. This is a pure
-/// string concatenation; unit tests are in the `tests` module.
+/// `mcp__<server>__<name>` to avoid name collisions with built-in tools. The `__`
+/// separator (matching the Claude Code / ecosystem convention) keeps the qualified name
+/// within the Anthropic/Bedrock tool-name charset `^[a-zA-Z0-9_-]{1,128}$` — a `.`
+/// separator was previously rejected by Bedrock. This is a pure string concatenation;
+/// unit tests are in the `tests` module. Note: this does NOT sanitize `server` /
+/// `upstream_name` themselves — a server or tool name containing characters outside the
+/// charset will still be rejected upstream.
 #[must_use]
 pub fn registered_mcp_tool_name(server: &str, upstream_name: &str) -> String {
-    format!("mcp.{server}.{upstream_name}")
+    format!("mcp__{server}__{upstream_name}")
 }
 
 impl McpToolAdapter {

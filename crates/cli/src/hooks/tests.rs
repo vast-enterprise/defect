@@ -241,11 +241,11 @@ fn prompt_handler_unknown_model_fails() {
 fn matcher_translation_preserves_fields() {
     let cm = ConfigHookMatcher {
         tool: Some("bash".into()),
-        tool_glob: Some("mcp.*".into()),
+        tool_glob: Some("mcp__*".into()),
         safety: vec![SafetyClass::Destructive, SafetyClass::Network],
     };
     let am = translate_matcher(&cm);
     assert_eq!(am.tool.as_deref(), Some("bash"));
-    assert_eq!(am.tool_glob.as_deref(), Some("mcp.*"));
+    assert_eq!(am.tool_glob.as_deref(), Some("mcp__*"));
     assert_eq!(am.safety.len(), 2);
 }

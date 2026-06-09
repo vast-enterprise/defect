@@ -91,9 +91,9 @@ impl HookMatcher {
 
 /// Tool name glob matching, using [`globset`] (same as skill triggers / search).
 ///
-/// Tool names are dot-separated (e.g. `mcp.fs.read`), not file paths — `globset` treats
-/// `*` as "does not cross `/`" by default, but tool names contain no `/`, so `mcp.*`
-/// matches the whole string correctly. Patterns are compiled on each match (tool name
+/// MCP tool names are `__`-separated (e.g. `mcp__fs__read`), not file paths — `globset`
+/// treats `*` as "does not cross `/`" by default, but tool names contain no `/`, so
+/// `mcp__*` matches the whole string correctly. Patterns are compiled on each match (tool name
 /// matches are infrequent and patterns are short, so compilation overhead is negligible).
 /// Invalid patterns do not panic: a warn is logged and the match is treated as no-match
 /// (matcher mismatch = the hook is not triggered, safe side).

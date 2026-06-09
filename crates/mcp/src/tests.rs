@@ -72,20 +72,21 @@ fn completed_event_ignores_non_text_content() {
 
 #[test]
 fn registered_name_prefixes_server_and_tool() {
-    // The format is always `mcp.<server>.<tool>` — it covers both the search/fetch name
+    // The format is always `mcp__<server>__<tool>` — it covers both the search/fetch name
     // collision and ordinary MCP tools, with no conditional branches: all MCP tools are
-    // unconditionally namespaced.
+    // unconditionally namespaced. The `__` separator keeps the name within the
+    // Anthropic/Bedrock tool-name charset (a `.` was rejected).
     assert_eq!(
         registered_mcp_tool_name("docs", "search"),
-        "mcp.docs.search"
+        "mcp__docs__search"
     );
     assert_eq!(
         registered_mcp_tool_name("notion", "fetch"),
-        "mcp.notion.fetch"
+        "mcp__notion__fetch"
     );
     assert_eq!(
         registered_mcp_tool_name("private", "create_page"),
-        "mcp.private.create_page"
+        "mcp__private__create_page"
     );
 }
 
