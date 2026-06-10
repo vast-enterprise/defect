@@ -416,6 +416,25 @@ pub trait History: Send + Sync {
     /// true token count of the new prefix is unknown).
     fn splice_prefix(&self, drop_count: usize, summary: Message) -> usize;
 
+    /// Number of messages currently held. Used to record a rollback boundary before a turn
+    /// appends its prompt, so [`Self::truncate`] can undo it if the turn fails permanently.
+    fn len(&self) -> usize;
+
+    /// Returns whether the history holds no messages.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Truncates the message list to at most `len` messages, dropping any tail beyond it.
+    /// A no-op when `len >= current length`.
+    ///
+    /// Used to roll back a permanently-failed turn: the user prompt (and any hook feedback)
+    /// appended at the start of the turn must not linger in history once the turn errors
+    /// out, otherwise it would be replayed on reload and re-sent to the model on the next
+    /// request. Like [`Self::replace`], resets the token estimation baseline since the
+    /// dropped messages may have contributed to the delta estimate.
+    fn truncate(&self, len: usize);
+
     /// Records the actual input token count from the last LLM call
     /// (`input + cache_read + cache_creation`). Serves as the precise baseline for
     /// [`Self::token_estimate`]; subsequent [`Self::append`] messages are accumulated

@@ -17,8 +17,8 @@ use std::task::{Context, Poll};
 use defect_agent::error::BoxError;
 use defect_agent::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderError,
-    ProviderErrorKind, Role, StopReason, ThinkingConfig, ToolChoice, ToolResultBody,
-    ToolResultContent, Usage,
+    ProviderErrorKind, ReasoningEffort, Role, StopReason, ThinkingConfig, ToolChoice,
+    ToolResultBody, ToolResultContent, Usage,
 };
 use defect_agent::tool::ToolSchema;
 use futures::{Stream, StreamExt};
@@ -45,29 +45,52 @@ const MAX_CACHE_BREAKPOINTS: usize = 4;
 /// Encodes a [`CompletionRequest`] into the wire request body.
 ///
 /// Forces `stream = true`: the protocol layer only uses the SSE path.
+///
+/// ## Cache breakpoint placement
+///
+/// Anthropic prompt cache is a **prefix** cache: a `cache_control` marker caches the entire
+/// prefix from the start (canonical order `tools → system → messages`) up to and including
+/// that block, and at most [`MAX_CACHE_BREAKPOINTS`] markers are allowed. To maximize the
+/// cached prefix we place markers **end-biased**, not front-to-back:
+///
+/// - **1 static-prefix marker**: on the `system` block if present (which caches
+///   `tools + system`, since `system` follows `tools` in the canonical order), otherwise on
+///   the last tool. This static prefix survives across every turn.
+/// - **up to 3 rolling markers**: on the last content block of the last few messages
+///   (deepest first), forming a ladder so the long conversation prefix is cached and a
+///   single new turn still hits the prior prefix.
 pub fn encode_request(req: &CompletionRequest) -> wire::CreateMessageParams {
     let max_tokens = req.sampling.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-    let mut prompt_cache = PromptCache::new();
+    let has_system = req.system.is_some();
+    // Reserve one breakpoint for the static prefix (system, or the last tool when there is
+    // no system); the rest roll over the most recent messages.
+    let message_breakpoints = MAX_CACHE_BREAKPOINTS.saturating_sub(1);
+
     let system = req.system.as_deref().map(|text| {
         wire::SystemPrompt::SystemPromptVariant1(vec![wire::TextBlockParam {
             text: text.to_owned(),
             r#type: wire::TextBlockParamType::Text,
-            cache_control: prompt_cache.next_breakpoint(),
+            // The single static-prefix breakpoint: caches `tools + system`.
+            cache_control: Some(ephemeral()),
             citations: None,
         }])
     });
-    let messages = req
-        .messages
-        .iter()
-        .map(|message| encode_message(message, &mut prompt_cache))
-        .collect();
+
+    let mut messages: Vec<wire::MessageParam> =
+        req.messages.iter().map(encode_message).collect();
+    mark_message_breakpoints(&mut messages, message_breakpoints);
+
     let tools = if req.tools.is_empty() {
         None
     } else {
+        let last = req.tools.len() - 1;
         Some(
             req.tools
                 .iter()
-                .map(|tool| encode_tool(tool, &mut prompt_cache))
+                .enumerate()
+                // When there is no system prompt, the static-prefix breakpoint goes on the
+                // last tool instead (caching the whole tool array).
+                .map(|(i, tool)| encode_tool(tool, !has_system && i == last))
                 .collect(),
         )
     };
@@ -90,7 +113,11 @@ pub fn encode_request(req: &CompletionRequest) -> wire::CreateMessageParams {
         stream: Some(true),
         system,
         temperature: req.sampling.temperature,
-        thinking: encode_thinking(req.sampling.thinking),
+        thinking: encode_thinking(
+            req.sampling.thinking,
+            req.sampling.reasoning_effort,
+            max_tokens,
+        ),
         tool_choice: encode_tool_choice(&req.tool_choice),
         tools,
         top_k: req.sampling.top_k.map(i64::from),
@@ -98,31 +125,25 @@ pub fn encode_request(req: &CompletionRequest) -> wire::CreateMessageParams {
     }
 }
 
-fn encode_message(m: &Message, prompt_cache: &mut PromptCache) -> wire::MessageParam {
+fn encode_message(m: &Message) -> wire::MessageParam {
     wire::MessageParam {
         role: match m.role {
             Role::User => wire::MessageParamRole::User,
             Role::Assistant => wire::MessageParamRole::Assistant,
         },
         content: wire::MessageParamContent::MessageParamContentVariant1(
-            m.content
-                .iter()
-                .filter_map(|content| encode_content(content, prompt_cache))
-                .collect(),
+            m.content.iter().filter_map(encode_content).collect(),
         ),
     }
 }
 
-fn encode_content(
-    c: &MessageContent,
-    prompt_cache: &mut PromptCache,
-) -> Option<wire::ContentBlockParam> {
+fn encode_content(c: &MessageContent) -> Option<wire::ContentBlockParam> {
     match c {
         MessageContent::Text { text } => Some(wire::ContentBlockParam::TextBlockParam(
             wire::TextBlockParam {
                 text: text.clone(),
                 r#type: wire::TextBlockParamType::Text,
-                cache_control: prompt_cache.next_breakpoint(),
+                cache_control: None,
                 citations: None,
             },
         )),
@@ -147,7 +168,7 @@ fn encode_content(
                 input: json_value_to_object(args),
                 name: name.clone(),
                 r#type: wire::ToolUseBlockParamType::ToolUse,
-                cache_control: prompt_cache.next_breakpoint(),
+                cache_control: None,
                 caller: None,
             }),
         ),
@@ -155,17 +176,12 @@ fn encode_content(
             tool_use_id,
             output,
             is_error,
-        } => Some(encode_tool_result(
-            tool_use_id,
-            output,
-            *is_error,
-            prompt_cache,
-        )),
+        } => Some(encode_tool_result(tool_use_id, output, *is_error)),
         MessageContent::Image { mime, data } => Some(wire::ContentBlockParam::ImageBlockParam(
             wire::ImageBlockParam {
                 source: encode_image_source(mime, data),
                 r#type: wire::ImageBlockParamType::Image,
-                cache_control: prompt_cache.next_breakpoint(),
+                cache_control: None,
             },
         )),
         // The inner enum is `non_exhaustive`; when a new variant is added, the fallback
@@ -175,7 +191,7 @@ fn encode_content(
             wire::TextBlockParam {
                 text: String::new(),
                 r#type: wire::TextBlockParamType::Text,
-                cache_control: prompt_cache.next_breakpoint(),
+                cache_control: None,
                 citations: None,
             },
         )),
@@ -186,7 +202,6 @@ fn encode_tool_result(
     tool_use_id: &str,
     output: &ToolResultBody,
     is_error: bool,
-    prompt_cache: &mut PromptCache,
 ) -> wire::ContentBlockParam {
     // Anthropic's `tool_result` block natively supports text and image sub-blocks; map
     // each block accordingly.
@@ -212,7 +227,7 @@ fn encode_tool_result(
     wire::ContentBlockParam::ToolResultBlockParam(wire::ToolResultBlockParam {
         tool_use_id: tool_use_id.to_owned(),
         r#type: wire::ToolResultBlockParamType::ToolResult,
-        cache_control: prompt_cache.next_breakpoint(),
+        cache_control: None,
         content: Some(
             wire::ToolResultBlockParamContent102::ToolResultBlockParamContent102Variant1(content),
         ),
@@ -258,18 +273,62 @@ fn image_media_type(mime: &str) -> wire::Base64ImageSourceMediaType {
     }
 }
 
-fn encode_thinking(t: ThinkingConfig) -> Option<wire::ThinkingConfigParam> {
-    match t {
-        ThinkingConfig::Disabled => None,
-        ThinkingConfig::Enabled { budget_tokens } => Some(
-            wire::ThinkingConfigParam::ThinkingConfigEnabled(wire::ThinkingConfigEnabled {
-                budget_tokens: i64::from(budget_tokens.unwrap_or(1024)),
-                r#type: wire::ThinkingConfigEnabledType::Enabled,
-                display: None,
-            }),
-        ),
-        _ => None,
+/// Anthropic's minimum extended-thinking budget. Budgets below this are rejected by the
+/// API, so any "enable thinking" intent is floored to it.
+const MIN_THINKING_BUDGET: u32 = 1024;
+
+/// Maps the OpenAI-style `reasoning_effort` levels onto Anthropic thinking budgets.
+/// Anthropic has no `reasoning_effort` wire field; extended thinking is controlled purely
+/// by `budget_tokens`. `None` disables thinking; the other levels scale the budget.
+fn effort_to_budget(effort: ReasoningEffort) -> Option<u32> {
+    match effort {
+        ReasoningEffort::None => None,
+        ReasoningEffort::Minimal => Some(MIN_THINKING_BUDGET),
+        ReasoningEffort::Low => Some(4_096),
+        ReasoningEffort::Medium => Some(8_192),
+        ReasoningEffort::High => Some(16_384),
+        ReasoningEffort::Xhigh => Some(32_768),
     }
+}
+
+/// Resolves the wire `thinking` field. Precedence mirrors the OpenAI path: a per-session
+/// `reasoning_effort` override (ACP thought-level) wins and is mapped to a thinking budget;
+/// otherwise fall back to the explicit [`ThinkingConfig`].
+///
+/// Anthropic requires `budget_tokens < max_tokens`; the budget is clamped to stay strictly
+/// below `max_tokens` (and never under [`MIN_THINKING_BUDGET`]) so a large effort level on a
+/// small `max_tokens` request doesn't trigger a 400.
+fn encode_thinking(
+    t: ThinkingConfig,
+    effort: Option<ReasoningEffort>,
+    max_tokens: u32,
+) -> Option<wire::ThinkingConfigParam> {
+    let budget = match effort {
+        Some(effort) => effort_to_budget(effort)?,
+        None => match t {
+            ThinkingConfig::Enabled { budget_tokens } => {
+                budget_tokens.unwrap_or(MIN_THINKING_BUDGET)
+            }
+            _ => return None,
+        },
+    };
+
+    // Keep the budget strictly below max_tokens, but never below the API minimum. When
+    // max_tokens is too small to fit even the minimum budget, thinking is dropped rather
+    // than sending an invalid request.
+    let ceiling = max_tokens.saturating_sub(1);
+    if ceiling < MIN_THINKING_BUDGET {
+        return None;
+    }
+    let budget = budget.clamp(MIN_THINKING_BUDGET, ceiling);
+
+    Some(wire::ThinkingConfigParam::ThinkingConfigEnabled(
+        wire::ThinkingConfigEnabled {
+            budget_tokens: i64::from(budget),
+            r#type: wire::ThinkingConfigEnabledType::Enabled,
+            display: None,
+        },
+    ))
 }
 
 fn encode_tool_choice(c: &ToolChoice) -> Option<wire::ToolChoice> {
@@ -296,7 +355,7 @@ fn encode_tool_choice(c: &ToolChoice) -> Option<wire::ToolChoice> {
     }
 }
 
-fn encode_tool(t: &ToolSchema, prompt_cache: &mut PromptCache) -> wire::ToolUnion {
+fn encode_tool(t: &ToolSchema, breakpoint: bool) -> wire::ToolUnion {
     let (properties, required) = split_input_schema(&t.input_schema);
     wire::ToolUnion::Tool(wire::Tool {
         input_schema: wire::ToolInputSchema {
@@ -306,7 +365,7 @@ fn encode_tool(t: &ToolSchema, prompt_cache: &mut PromptCache) -> wire::ToolUnio
         },
         name: t.name.clone(),
         allowed_callers: None,
-        cache_control: prompt_cache.next_breakpoint(),
+        cache_control: breakpoint.then(ephemeral),
         defer_loading: None,
         description: if t.description.is_empty() {
             None
@@ -320,27 +379,55 @@ fn encode_tool(t: &ToolSchema, prompt_cache: &mut PromptCache) -> wire::ToolUnio
     })
 }
 
-struct PromptCache {
-    remaining_breakpoints: usize,
+/// A fresh ephemeral `cache_control` marker (the only cache mode we emit).
+fn ephemeral() -> wire::CacheControlEphemeral {
+    wire::CacheControlEphemeral {
+        r#type: wire::CacheControlEphemeralType::Ephemeral,
+        ttl: None,
+    }
 }
 
-impl PromptCache {
-    fn new() -> Self {
-        Self {
-            remaining_breakpoints: MAX_CACHE_BREAKPOINTS,
+/// Places up to `budget` rolling cache breakpoints on the **most recent** messages, one per
+/// message, deepest first. The marker is attached to the last cacheable content block of
+/// each chosen message so the cached prefix extends as far down the conversation as
+/// possible; combined with the static-prefix marker (system / last tool) this forms an
+/// end-biased ladder — see [`encode_request`].
+///
+/// A message contributes no marker if it has no content block that carries a
+/// `cache_control` field (e.g. a lone thinking block), in which case the next-older message
+/// is used, so the budget is never silently wasted.
+fn mark_message_breakpoints(messages: &mut [wire::MessageParam], budget: usize) {
+    let mut remaining = budget;
+    for message in messages.iter_mut().rev() {
+        if remaining == 0 {
+            break;
+        }
+        if set_last_block_breakpoint(message) {
+            remaining -= 1;
         }
     }
+}
 
-    fn next_breakpoint(&mut self) -> Option<wire::CacheControlEphemeral> {
-        if self.remaining_breakpoints == 0 {
-            return None;
-        }
-        self.remaining_breakpoints -= 1;
-        Some(wire::CacheControlEphemeral {
-            r#type: wire::CacheControlEphemeralType::Ephemeral,
-            ttl: None,
-        })
+/// Sets an ephemeral breakpoint on the last content block of `message` that supports
+/// `cache_control`. Returns whether a breakpoint was placed.
+fn set_last_block_breakpoint(message: &mut wire::MessageParam) -> bool {
+    let wire::MessageParamContent::MessageParamContentVariant1(blocks) = &mut message.content
+    else {
+        return false;
+    };
+    for block in blocks.iter_mut().rev() {
+        let slot = match block {
+            wire::ContentBlockParam::TextBlockParam(b) => &mut b.cache_control,
+            wire::ContentBlockParam::ToolUseBlockParam(b) => &mut b.cache_control,
+            wire::ContentBlockParam::ToolResultBlockParam(b) => &mut b.cache_control,
+            wire::ContentBlockParam::ImageBlockParam(b) => &mut b.cache_control,
+            // Thinking blocks have no cache_control field on the wire; skip.
+            _ => continue,
+        };
+        *slot = Some(ephemeral());
+        return true;
     }
+    false
 }
 
 /// Splits the top-level JSON Schema into `properties` / `required` — `ToolInputSchema`.

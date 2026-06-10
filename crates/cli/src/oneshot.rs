@@ -25,8 +25,12 @@
 //!
 //! ## Exit codes (CI's lifeline for judging success/failure)
 //!
-//! Priority high to low: `TurnError` > `Refusal` > `MaxTokens`/`MaxTurnRequests`
-//! > `Cancelled` > unattended denial (`denied`) > `EndTurn`(0). See `ExitOutcome`.
+//! Priority high to low: `TurnError`(1) > `Refusal`(3) > `MaxTokens`(2) >
+//! `MaxTurnRequests`(7) > `Cancelled`(5) > unattended denial (`denied`, 4) >
+//! goal unreached (6) > `EndTurn`(0). `MaxTokens` (a single response truncated
+//! by the output limit) and `MaxTurnRequests` (the per-turn call budget
+//! exhausted) are distinct conditions and carry distinct codes. See
+//! `ExitOutcome`.
 //!
 //! ## Non-interactive permissions
 //!
@@ -151,7 +155,10 @@ enum ExitOutcome {
     Success,
     Denied,
     Cancelled,
+    /// A single LLM response was truncated by the output `max_tokens` limit.
     MaxTokens,
+    /// The per-turn LLM-call budget (`request_limit`) was exhausted.
+    MaxRequests,
     Refusal,
     Error,
     /// goal mode: turn ended normally but the goal is unreached (turns exhausted
@@ -164,7 +171,8 @@ impl ExitOutcome {
         match result {
             Err(_) => Self::Error,
             Ok(StopReason::Refusal) => Self::Refusal,
-            Ok(StopReason::MaxTokens) | Ok(StopReason::MaxTurnRequests) => Self::MaxTokens,
+            Ok(StopReason::MaxTokens) => Self::MaxTokens,
+            Ok(StopReason::MaxTurnRequests) => Self::MaxRequests,
             Ok(StopReason::Cancelled) => Self::Cancelled,
             // EndTurn (and any future success-class terminal states): denied >
             // goal unreached > success.
@@ -184,6 +192,7 @@ impl ExitOutcome {
             Self::Denied => 4,
             Self::Cancelled => 5,
             Self::GoalUnreached => 6,
+            Self::MaxRequests => 7,
         }
     }
 

@@ -149,6 +149,63 @@ fn splice_prefix_overlong_drop_count_trips_invariant_in_debug() {
 }
 
 #[test]
+fn len_and_is_empty_track_messages() {
+    let h = VecHistory::new();
+    assert_eq!(h.len(), 0);
+    assert!(h.is_empty());
+    h.append(user("one"));
+    h.append(user("two"));
+    assert_eq!(h.len(), 2);
+    assert!(!h.is_empty());
+}
+
+#[test]
+fn truncate_rolls_back_to_boundary() {
+    // Mirrors the turn rollback: record the length before a turn, append the turn's
+    // messages, then truncate back on failure.
+    let h = VecHistory::new();
+    h.append(user("committed one"));
+    h.append(assistant("reply one"));
+    let boundary = h.len();
+
+    // A failed turn appends a prompt (and would append more).
+    h.append(user("failed prompt"));
+    assert_eq!(h.len(), 3);
+
+    h.truncate(boundary);
+    let snap = h.snapshot();
+    assert_eq!(snap.len(), 2);
+    assert!(matches!(
+        &snap[1].content[0],
+        MessageContent::Text { text } if text == "reply one"
+    ));
+}
+
+#[test]
+fn truncate_noop_when_len_ge_current() {
+    let h = VecHistory::new();
+    h.append(user("a"));
+    h.append(user("b"));
+    h.truncate(2); // equal → no-op
+    h.truncate(99); // greater → no-op
+    assert_eq!(h.len(), 2);
+}
+
+#[test]
+fn truncate_clears_baseline() {
+    let h = VecHistory::new();
+    h.append(user("seed"));
+    h.record_input_tokens(5_000);
+    assert_eq!(h.token_estimate(), Some(5_000));
+
+    // Append then roll back: baseline is cleared, falling back to char heuristic over the
+    // remaining message ("seed" = 4 chars → 1 token).
+    h.append(user(&"x".repeat(40)));
+    h.truncate(1);
+    assert_eq!(h.token_estimate(), Some(1));
+}
+
+#[test]
 fn splice_prefix_clears_baseline() {
     let h = VecHistory::new();
     h.append(user("seed one"));

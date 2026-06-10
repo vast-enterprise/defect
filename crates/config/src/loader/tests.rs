@@ -188,6 +188,45 @@ models = [
     );
 }
 
+/// A `[[models]]` table may declare `context_window` / `max_output_tokens` — the metadata
+/// the Bedrock SDK cannot discover. Absent fields stay `None`.
+#[test]
+fn provider_models_accept_context_window_metadata() {
+    let tmp = TempDir::new().expect("tmp");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        r#"
+[default]
+provider = "anthropic"
+
+[providers.anthropic]
+default_model = "claude-opus-4-1"
+models = [
+    { id = "claude-opus-4-1", context_window = 200000, max_output_tokens = 32000 },
+    { id = "claude-haiku", name = "Haiku" },
+]
+"#,
+    );
+
+    let loaded = load_config(test_options(&tmp)).expect("load config");
+    let models = loaded
+        .effective
+        .providers
+        .anthropic
+        .models
+        .as_ref()
+        .expect("anthropic models present");
+
+    assert_eq!(models[0].id(), "claude-opus-4-1");
+    assert_eq!(models[0].context_window(), Some(200_000));
+    assert_eq!(models[0].max_output_tokens(), Some(32_000));
+    // Table form without limits leaves them unset.
+    assert_eq!(models[1].context_window(), None);
+    assert_eq!(models[1].max_output_tokens(), None);
+}
+
 #[test]
 fn multiple_configured_providers_contribute_allowed_models() {
     let tmp = TempDir::new().expect("tmp");
@@ -1726,6 +1765,36 @@ fn request_limit_mode_unbounded_ignores_number() {
         loaded.effective.turn.request_limit,
         TurnRequestLimit::Unbounded
     ));
+}
+
+#[test]
+fn turn_sampling_overrides_main_agent_params() {
+    let tmp = TempDir::new().expect("tmp");
+    fs::create_dir_all(tmp.path().join("repo/.git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        "[default]\nprovider = \"defect\"\nmodel = \"m\"\n\n[turn.sampling]\nmax_tokens = 32000\ntemperature = 0.5\n",
+    );
+    let loaded = load_config(test_options(&tmp)).expect("load");
+    assert_eq!(loaded.effective.turn.sampling.max_tokens, Some(32000));
+    assert_eq!(loaded.effective.turn.sampling.temperature, Some(0.5));
+    // Unset fields stay at the provider-fallback default.
+    assert_eq!(loaded.effective.turn.sampling.top_p, None);
+    assert_eq!(loaded.effective.turn.sampling.top_k, None);
+}
+
+#[test]
+fn turn_sampling_absent_leaves_max_tokens_unset() {
+    let tmp = TempDir::new().expect("tmp");
+    fs::create_dir_all(tmp.path().join("repo/.git")).expect("git");
+    write(
+        &tmp.path().join("xdg/defect/config.toml"),
+        "[default]\nprovider = \"defect\"\nmodel = \"m\"\n",
+    );
+    let loaded = load_config(test_options(&tmp)).expect("load");
+    // Without [turn.sampling], max_tokens must remain None so the protocol-layer fallback
+    // applies — never silently pinned to a value here.
+    assert_eq!(loaded.effective.turn.sampling.max_tokens, None);
 }
 
 #[test]

@@ -840,3 +840,177 @@ fn latest_session_id_for_cwd_missing_root_is_none() {
         .expect("missing root is not an error");
     assert!(result.is_none());
 }
+
+fn user_msg(text: &str) -> SessionRecord {
+    SessionRecord::Message {
+        message: Message {
+            role: Role::User,
+            content: vec![MessageContent::Text {
+                text: text.to_string(),
+            }]
+            .into(),
+        },
+    }
+}
+
+fn init_store(dir: &std::path::Path, id: &str) -> SessionStore {
+    let session_id = SessionId::new(id);
+    let store = SessionStore::for_session(dir, &session_id);
+    store
+        .init(&SessionMeta::new(
+            session_id,
+            PathBuf::from("/tmp/project"),
+            Vec::new(),
+        ))
+        .expect("init store");
+    store
+}
+
+#[test]
+fn replay_turn_aborted_rolls_back_failed_turn() {
+    let dir = tempdir().expect("tempdir");
+    let store = init_store(dir.path(), "sess-abort");
+
+    // One committed turn, then a failed turn whose prompt is aborted.
+    let records = [
+        SessionRecord::TurnStarted,
+        user_msg("first"),
+        SessionRecord::Message {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![MessageContent::Text {
+                    text: "reply".to_string(),
+                }]
+                .into(),
+            },
+        },
+        SessionRecord::TurnEnded {
+            reason: StopReason::EndTurn,
+            usage: Usage::default(),
+        },
+        SessionRecord::TurnStarted,
+        user_msg("failed prompt"),
+        SessionRecord::TurnAborted,
+    ];
+    for (seq, record) in records.into_iter().enumerate() {
+        store
+            .append_record(&StoredRecord::new(seq as u64, record))
+            .expect("append");
+    }
+
+    let replay = store.replay_state().expect("replay");
+    // Only the committed turn's messages survive; the aborted prompt is gone.
+    assert_eq!(replay.history.len(), 2);
+    assert_eq!(
+        replay.history[0],
+        Message {
+            role: Role::User,
+            content: vec![MessageContent::Text {
+                text: "first".to_string(),
+            }]
+            .into(),
+        }
+    );
+    assert!(replay.last_turn_ended);
+}
+
+#[test]
+fn replay_drops_uncommitted_tail_without_terminator() {
+    let dir = tempdir().expect("tempdir");
+    let store = init_store(dir.path(), "sess-crash");
+
+    // A committed turn, then a turn interrupted by a crash: no TurnEnded / TurnAborted.
+    let records = [
+        SessionRecord::TurnStarted,
+        user_msg("committed"),
+        SessionRecord::TurnEnded {
+            reason: StopReason::EndTurn,
+            usage: Usage::default(),
+        },
+        SessionRecord::TurnStarted,
+        user_msg("orphan from crash"),
+    ];
+    for (seq, record) in records.into_iter().enumerate() {
+        store
+            .append_record(&StoredRecord::new(seq as u64, record))
+            .expect("append");
+    }
+
+    let replay = store.replay_state().expect("replay");
+    // The crash-net drops the uncommitted tail.
+    assert_eq!(replay.history.len(), 1);
+    assert_eq!(
+        replay.history[0],
+        Message {
+            role: Role::User,
+            content: vec![MessageContent::Text {
+                text: "committed".to_string(),
+            }]
+            .into(),
+        }
+    );
+}
+
+#[test]
+fn replay_multiple_consecutive_aborts() {
+    let dir = tempdir().expect("tempdir");
+    let store = init_store(dir.path(), "sess-multi-abort");
+
+    // No turn ever succeeds: three failed attempts in a row. History must end empty.
+    let records = [
+        SessionRecord::TurnStarted,
+        user_msg("try 1"),
+        SessionRecord::TurnAborted,
+        SessionRecord::TurnStarted,
+        user_msg("try 2"),
+        SessionRecord::TurnAborted,
+        SessionRecord::TurnStarted,
+        user_msg("try 3"),
+        SessionRecord::TurnAborted,
+    ];
+    for (seq, record) in records.into_iter().enumerate() {
+        store
+            .append_record(&StoredRecord::new(seq as u64, record))
+            .expect("append");
+    }
+
+    let replay = store.replay_state().expect("replay");
+    assert!(replay.history.is_empty());
+}
+
+#[test]
+fn projector_turn_aborted_discards_partial_output() {
+    let mut projector = RecordProjector::default();
+    let mut tool_started = ToolCallUpdateFields::default();
+    tool_started.raw_input = Some(json!({ "x": 1 }));
+
+    // A turn that streamed a prompt + partial assistant text + a started tool call, then
+    // failed. The abort must emit exactly one TurnAborted and no partial Message records.
+    let events = [
+        AgentEvent::UserPromptCommitted {
+            content: vec![ContentBlock::Text(TextContent::new("hi"))],
+        },
+        AgentEvent::TurnStarted,
+        AgentEvent::AssistantText {
+            content: ContentBlock::Text(TextContent::new("partial...")),
+        },
+        AgentEvent::ToolCallStarted {
+            id: "call-1".into(),
+            name: "echo".to_string(),
+            fields: tool_started,
+        },
+        AgentEvent::TurnAborted,
+    ];
+
+    let records = events
+        .into_iter()
+        .flat_map(|event| projector.project(event))
+        .collect::<Vec<_>>();
+
+    // Records: Message(user) + TurnStarted + TurnAborted. The partial assistant/tool state
+    // is dropped, never flushed as a Message.
+    assert!(matches!(records[0], SessionRecord::Message { .. }));
+    assert_eq!(records[1], SessionRecord::TurnStarted);
+    assert_eq!(records[2], SessionRecord::TurnAborted);
+    assert_eq!(records.len(), 3);
+}

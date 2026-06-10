@@ -46,7 +46,7 @@ fn chunk(data: &str) -> PayloadPart {
 #[test]
 fn bedrock_body_adds_version_and_removes_direct_anthropic_fields() {
     let body = anthropic_messages::encode_request(&minimal_request());
-    let value = bedrock_request_body(body);
+    let value = bedrock_request_body(body, &[]);
     let obj = value.as_object().expect("bedrock body object");
 
     assert_eq!(
@@ -61,9 +61,38 @@ fn bedrock_body_adds_version_and_removes_direct_anthropic_fields() {
 }
 
 #[test]
+fn bedrock_body_omits_anthropic_beta_when_empty() {
+    let body = anthropic_messages::encode_request(&minimal_request());
+    let value = bedrock_request_body(body, &[]);
+    let obj = value.as_object().expect("bedrock body object");
+    assert!(!obj.contains_key(BODY_ANTHROPIC_BETA_FIELD));
+}
+
+#[test]
+fn bedrock_body_injects_anthropic_beta_flags() {
+    let body = anthropic_messages::encode_request(&minimal_request());
+    let flags = vec![
+        "no-data-retention-v1".to_string(),
+        "context-1m-2025-08-07".to_string(),
+    ];
+    let value = bedrock_request_body(body, &flags);
+    let obj = value.as_object().expect("bedrock body object");
+
+    let beta = obj
+        .get(BODY_ANTHROPIC_BETA_FIELD)
+        .and_then(serde_json::Value::as_array)
+        .expect("anthropic_beta array");
+    let got = beta
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(got, ["no-data-retention-v1", "context-1m-2025-08-07"]);
+}
+
+#[test]
 fn model_list_comes_from_config_and_includes_default_model() {
     let models = model_infos_from_config(
-        vec!["anthropic.claude-opus-4-1".to_string()],
+        vec![BedrockModel::new("anthropic.claude-opus-4-1")],
         Some(TEST_MODEL.to_string()),
     );
 
@@ -72,6 +101,24 @@ fn model_list_comes_from_config_and_includes_default_model() {
         .map(|model| model.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(ids, [TEST_MODEL, "anthropic.claude-opus-4-1"]);
+}
+
+#[test]
+fn model_metadata_flows_into_model_info() {
+    let models = model_infos_from_config(
+        vec![BedrockModel {
+            id: "anthropic.claude-opus-4-1".to_string(),
+            context_window: Some(200_000),
+            max_output_tokens: Some(32_000),
+        }],
+        None,
+    );
+    let m = models
+        .iter()
+        .find(|m| m.id == "anthropic.claude-opus-4-1")
+        .expect("model present");
+    assert_eq!(m.context_window, Some(200_000));
+    assert_eq!(m.max_output_tokens, Some(32_000));
 }
 
 #[tokio::test]

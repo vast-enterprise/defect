@@ -19,8 +19,9 @@
 //! the same decoding core, so coverage is equivalent.
 
 use defect_agent::llm::{
-    CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderErrorKind, Role,
-    SamplingParams, StopReason, ThinkingConfig, ToolChoice, ToolResultBody, ToolResultContent,
+    CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderErrorKind,
+    ReasoningEffort, Role, SamplingParams, StopReason, ThinkingConfig, ToolChoice, ToolResultBody,
+    ToolResultContent,
 };
 use defect_agent::tool::ToolSchema;
 use futures::StreamExt;
@@ -183,6 +184,109 @@ fn encode_request_carries_sampling() {
         w.thinking,
         Some(wire::ThinkingConfigParam::ThinkingConfigEnabled(ref t)) if t.budget_tokens == 2000
     ));
+}
+
+fn thinking_budget(w: &wire::CreateMessageParams) -> Option<i64> {
+    match &w.thinking {
+        Some(wire::ThinkingConfigParam::ThinkingConfigEnabled(t)) => Some(t.budget_tokens),
+        _ => None,
+    }
+}
+
+fn req_with(
+    effort: Option<ReasoningEffort>,
+    thinking: ThinkingConfig,
+    max_tokens: u32,
+) -> CompletionRequest {
+    CompletionRequest {
+        model: "claude-opus-4-7".into(),
+        system: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![MessageContent::Text { text: "x".into() }].into(),
+        }],
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams {
+            max_tokens: Some(max_tokens),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: vec![],
+            thinking,
+            reasoning_effort: effort,
+        },
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+    }
+}
+
+#[test]
+fn effort_maps_to_thinking_budget() {
+    let w = encode_request(&req_with(
+        Some(ReasoningEffort::High),
+        ThinkingConfig::Disabled,
+        64_000,
+    ));
+    assert_eq!(thinking_budget(&w), Some(16_384));
+}
+
+#[test]
+fn effort_none_disables_thinking() {
+    let w = encode_request(&req_with(
+        Some(ReasoningEffort::None),
+        ThinkingConfig::Enabled {
+            budget_tokens: Some(8_000),
+        },
+        64_000,
+    ));
+    // effort override wins over the explicit thinking config and disables thinking.
+    assert!(w.thinking.is_none());
+}
+
+#[test]
+fn effort_takes_precedence_over_thinking_config() {
+    let w = encode_request(&req_with(
+        Some(ReasoningEffort::Low),
+        ThinkingConfig::Enabled {
+            budget_tokens: Some(30_000),
+        },
+        64_000,
+    ));
+    assert_eq!(thinking_budget(&w), Some(4_096));
+}
+
+#[test]
+fn effort_budget_clamped_below_max_tokens() {
+    // xhigh wants 32_768 but max_tokens is only 5_000 → clamp to max_tokens - 1.
+    let w = encode_request(&req_with(
+        Some(ReasoningEffort::Xhigh),
+        ThinkingConfig::Disabled,
+        5_000,
+    ));
+    assert_eq!(thinking_budget(&w), Some(4_999));
+}
+
+#[test]
+fn thinking_dropped_when_max_tokens_too_small_for_minimum_budget() {
+    // max_tokens - 1 = 500 < MIN_THINKING_BUDGET (1024) → thinking dropped entirely.
+    let w = encode_request(&req_with(
+        Some(ReasoningEffort::High),
+        ThinkingConfig::Disabled,
+        501,
+    ));
+    assert!(w.thinking.is_none());
+}
+
+#[test]
+fn thinking_config_used_when_no_effort() {
+    let w = encode_request(&req_with(
+        None,
+        ThinkingConfig::Enabled {
+            budget_tokens: Some(2_000),
+        },
+        64_000,
+    ));
+    assert_eq!(thinking_budget(&w), Some(2_000));
 }
 
 #[test]
@@ -662,6 +766,110 @@ async fn decode_stream_protocol_violation_when_no_stop() {
     assert!(last.is_err());
     let kind = &last.as_ref().err().unwrap().kind;
     assert!(matches!(kind, ProviderErrorKind::ProtocolViolation { .. }));
+}
+
+// ---------- cache breakpoint placement ----------
+
+/// True if the (last) content block of `messages[idx]` carries a cache breakpoint.
+fn message_has_breakpoint(w: &wire::CreateMessageParams, idx: usize) -> bool {
+    let wire::MessageParamContent::MessageParamContentVariant1(blocks) = &w.messages[idx].content
+    else {
+        return false;
+    };
+    blocks.iter().any(|b| match b {
+        wire::ContentBlockParam::TextBlockParam(b) => b.cache_control.is_some(),
+        wire::ContentBlockParam::ToolUseBlockParam(b) => b.cache_control.is_some(),
+        wire::ContentBlockParam::ToolResultBlockParam(b) => b.cache_control.is_some(),
+        wire::ContentBlockParam::ImageBlockParam(b) => b.cache_control.is_some(),
+        _ => false,
+    })
+}
+
+fn system_has_breakpoint(w: &wire::CreateMessageParams) -> bool {
+    matches!(
+        &w.system,
+        Some(wire::SystemPrompt::SystemPromptVariant1(blocks))
+            if blocks.iter().any(|b| b.cache_control.is_some())
+    )
+}
+
+fn text_msg(role: Role, text: &str) -> Message {
+    Message {
+        role,
+        content: vec![MessageContent::Text { text: text.into() }].into(),
+    }
+}
+
+/// The static-prefix breakpoint goes on `system`, and the rolling breakpoints land on the
+/// **most recent** messages (end-biased ladder), never on the oldest ones.
+#[test]
+fn cache_breakpoints_are_end_biased() {
+    let messages: Vec<Message> = (0..6)
+        .map(|i| {
+            let role = if i % 2 == 0 { Role::User } else { Role::Assistant };
+            text_msg(role, &format!("m{i}"))
+        })
+        .collect();
+    let req = CompletionRequest {
+        model: "claude-opus-4-7".into(),
+        system: Some("sys".into()),
+        messages,
+        tools: vec![],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+    };
+    let w = encode_request(&req);
+
+    // 1 static (system) + 3 rolling = 4 total, never exceeding MAX_CACHE_BREAKPOINTS.
+    assert!(system_has_breakpoint(&w), "system must carry the static breakpoint");
+    // The three most recent messages (indices 3,4,5) get the rolling breakpoints.
+    assert!(message_has_breakpoint(&w, 5));
+    assert!(message_has_breakpoint(&w, 4));
+    assert!(message_has_breakpoint(&w, 3));
+    // Older messages must NOT — otherwise the budget was wasted on a short prefix.
+    assert!(!message_has_breakpoint(&w, 2));
+    assert!(!message_has_breakpoint(&w, 1));
+    assert!(!message_has_breakpoint(&w, 0));
+}
+
+/// Without a system prompt, the static-prefix breakpoint falls on the last tool, and the
+/// rolling budget grows to 3 messages.
+#[test]
+fn cache_breakpoint_falls_back_to_last_tool_without_system() {
+    let req = CompletionRequest {
+        model: "claude-opus-4-7".into(),
+        system: None,
+        messages: vec![text_msg(Role::User, "hi")],
+        tools: vec![
+            ToolSchema {
+                name: "a".into(),
+                description: "first".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+            },
+            ToolSchema {
+                name: "b".into(),
+                description: "second".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+            },
+        ],
+        tool_choice: ToolChoice::Auto,
+        sampling: SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+    };
+    let w = encode_request(&req);
+
+    assert!(!system_has_breakpoint(&w));
+    let tools = w.tools.as_ref().expect("tools");
+    let breakpoint_on = |i: usize| {
+        let wire::ToolUnion::Tool(t) = &tools[i] else {
+            panic!("expected Tool");
+        };
+        t.cache_control.is_some()
+    };
+    // Only the LAST tool carries the static-prefix breakpoint (it caches tools[0..=last]).
+    assert!(!breakpoint_on(0));
+    assert!(breakpoint_on(1));
 }
 
 #[tokio::test]

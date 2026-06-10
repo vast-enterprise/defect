@@ -350,40 +350,53 @@ fn entry_models(
 ) -> Vec<ModelInfo> {
     let mut models: Vec<ModelInfo> = Vec::new();
     if let Some(provider) = provider {
-        // `default_model` is just an ID (a bare string) with no display name.
+        // `default_model` is just an ID (a bare string) with no display name or limits.
         if let Some(default_model) = &provider.default_model {
-            push_unique_model(&mut models, default_model, None);
+            push_unique_model(&mut models, default_model, None, None, None);
         }
         if let Some(entries) = &provider.models {
             for entry in entries {
-                push_unique_model(&mut models, entry.id(), entry.name());
+                push_unique_model(
+                    &mut models,
+                    entry.id(),
+                    entry.name(),
+                    entry.context_window(),
+                    entry.max_output_tokens(),
+                );
             }
         }
     }
     if models.is_empty()
         && let Some(fallback_model) = fallback_model
     {
-        push_unique_model(&mut models, fallback_model, None);
+        push_unique_model(&mut models, fallback_model, None, None, None);
     }
     models
 }
 
 /// Append a [`ModelInfo`] deduplicated by `id`. If an entry with the same `id` already
-/// exists and the new one has a display name while the existing one does not, update the
-/// existing entry with the new name (so that a `name` from `[[models]]` overrides a bare
-/// id from `default_model`); otherwise leave it unchanged.
-fn push_unique_model(models: &mut Vec<ModelInfo>, id: &str, name: Option<&str>) {
+/// exists, fill in any field the existing entry is missing (so a `[[models]]` table form
+/// can enrich a bare id contributed by `default_model`); otherwise leave it unchanged.
+fn push_unique_model(
+    models: &mut Vec<ModelInfo>,
+    id: &str,
+    name: Option<&str>,
+    context_window: Option<u64>,
+    max_output_tokens: Option<u64>,
+) {
     if let Some(existing) = models.iter_mut().find(|m| m.id == id) {
         if existing.display_name.is_none() {
             existing.display_name = name.map(str::to_string);
         }
+        existing.context_window = existing.context_window.or(context_window);
+        existing.max_output_tokens = existing.max_output_tokens.or(max_output_tokens);
         return;
     }
     models.push(ModelInfo {
         id: id.to_string(),
         display_name: name.map(str::to_string),
-        context_window: None,
-        max_output_tokens: None,
+        context_window,
+        max_output_tokens,
         deprecated: false,
         capabilities_overrides: ModelCapabilityOverrides::default(),
     });
@@ -417,16 +430,23 @@ async fn build_bedrock_provider(
         ),
         base_url: provider.base_url,
         default_model: provider.default_model,
-        // For the Bedrock provider's model list, only the id is needed; display names are
-        // fetched separately in the `entry_models` pipeline.
+        // Display names are fetched separately in the `entry_models` pipeline, but the
+        // limits (`context_window` / `max_output_tokens`) must be carried into the provider
+        // here — the Bedrock SDK cannot discover them, and compaction reads them back via
+        // `provider.model_info()`.
         models: provider
             .models
             .unwrap_or_default()
             .into_iter()
-            .map(|m| m.id().to_string())
+            .map(|m| defect_llm::provider::bedrock::BedrockModel {
+                id: m.id().to_string(),
+                context_window: m.context_window(),
+                max_output_tokens: m.max_output_tokens(),
+            })
             .collect(),
         aws_profile: aws.profile,
         aws_region: aws.region,
+        anthropic_beta: aws.anthropic_beta,
     })
     .await
     .map_err(|e| anyhow::anyhow!("{vendor} provider init failed: {e}"))?;

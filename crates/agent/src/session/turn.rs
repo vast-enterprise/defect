@@ -328,6 +328,12 @@ impl<'a> TurnRunner<'a> {
             }
         };
 
+        // Rollback boundary: history length before this turn appends anything. If the turn
+        // fails permanently, everything appended from here on (the user prompt, hook
+        // feedback, partial assistant/tool messages) is truncated away, so a failed turn
+        // leaves no orphan in history to be replayed on reload or re-sent next request.
+        let rollback_len = self.history.len();
+
         self.events
             .emit(AgentEvent::UserPromptCommitted {
                 content: prompt.clone(),
@@ -379,13 +385,25 @@ impl<'a> TurnRunner<'a> {
 
         let result = self.run_inner().await;
 
-        if let Ok(outcome) = &result {
-            self.events
-                .emit(AgentEvent::TurnEnded {
-                    reason: outcome.reason,
-                    usage: outcome.usage,
-                })
-                .await;
+        match &result {
+            Ok(outcome) => {
+                self.events
+                    .emit(AgentEvent::TurnEnded {
+                        reason: outcome.reason,
+                        usage: outcome.usage,
+                    })
+                    .await;
+            }
+            Err(_) => {
+                // Permanent failure (e.g. provider error after retries). Roll history back
+                // to the pre-turn boundary so the orphan user prompt does not linger; the
+                // bridge layer decides the wire response. `TurnAborted` tells storage to
+                // drop the same tail it already journaled (the `UserPromptCommitted` /
+                // `TurnStarted` records emitted before the failure), keeping the in-memory
+                // and persisted histories consistent.
+                self.history.truncate(rollback_len);
+                self.events.emit(AgentEvent::TurnAborted).await;
+            }
         }
         // The `Err` path does not emit `TurnEnded`; the bridge layer decides the wire
         // response based on the future outcome.
@@ -558,7 +576,7 @@ impl<'a> TurnRunner<'a> {
             // never fit, so appending it as-is would only blow up the next request. Replace
             // it with an actionable error before it enters history. See
             // `reject_oversized_results`.
-            let rejected = reject_oversized_results(&mut results, self.context_window());
+            let rejected = reject_oversized_results(&mut results, self.effective_context_window());
             if rejected > 0 {
                 tracing::warn!(
                     rejected,
@@ -840,16 +858,39 @@ impl<'a> TurnRunner<'a> {
 
     /// Parse the three-tier compaction thresholds (in tokens) for this turn. Any tier set
     /// to `None` means that tier is not triggered.
-    /// The model's context window in tokens, if the provider exposes it. `None` ⇒ unknown
-    /// (no ceiling can be enforced for compaction or oversized-result rejection).
+    /// The model's context window in tokens, exactly as the provider reports it. `None` ⇒
+    /// the provider does not expose it (notably Bedrock, whose SDK returns no model
+    /// metadata). For decisions that need a ceiling, prefer [`Self::effective_context_window`].
     fn context_window(&self) -> Option<u64> {
         self.provider
             .model_info(&self.config.model)
             .and_then(|m| m.context_window)
     }
 
+    /// The context window to actually drive compaction / oversized-result rejection with.
+    ///
+    /// Falls back to [`FALLBACK_CONTEXT_WINDOW`] when the provider exposes no window and the
+    /// user has not configured an explicit absolute ceiling
+    /// ([`TurnConfig::compact_threshold_tokens`]) — otherwise an unknown window means no
+    /// compaction at all and the context grows until the provider hard-rejects the request.
+    /// The fallback is deliberately conservative (compacting early is safe; overshooting is
+    /// not). A one-line warning is emitted once per model so the user knows to declare the
+    /// real `context_window` in config.
+    fn effective_context_window(&self) -> Option<u64> {
+        if let Some(window) = self.context_window() {
+            return Some(window);
+        }
+        // An explicit absolute hard threshold is the user's deliberate ceiling; respect it
+        // and do not fabricate a window (micro/soft simply stay off, as before).
+        if self.config.compact_threshold_tokens.is_some() {
+            return None;
+        }
+        warn_missing_context_window(&self.config.model);
+        Some(FALLBACK_CONTEXT_WINDOW)
+    }
+
     fn compact_thresholds(&self) -> CompactThresholds {
-        let window = self.context_window();
+        let window = self.effective_context_window();
 
         // For `hard`, an absolute threshold takes precedence; otherwise, use `ratio *
         // window`.
@@ -902,6 +943,38 @@ impl CompactThresholds {
 fn ratio_threshold(context_window: u64, ratio: f64) -> Option<u64> {
     let threshold = (context_window as f64 * ratio).floor() as u64;
     (threshold > 0).then_some(threshold)
+}
+
+/// Conservative context window assumed when the provider exposes none and the user has not
+/// configured an explicit ceiling. Sized to the smallest window common across current
+/// models so compaction errs toward triggering early rather than overflowing — see
+/// [`TurnRunner::effective_context_window`]. Users should declare the real value via the
+/// model's `context_window` (e.g. `[providers.<name>] models = [{ id = "...",
+/// context_window = 200000 }]`) or `[turn].compact_threshold_tokens`.
+const FALLBACK_CONTEXT_WINDOW: u64 = 128_000;
+
+/// Emits a one-time (per model id) warning that the context window is unknown and the
+/// fallback is in effect. The hot turn loop calls `effective_context_window` every
+/// iteration, so the dedupe set prevents log spam.
+fn warn_missing_context_window(model: &str) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut warned = WARNED
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .expect("warn-once mutex poisoned");
+    if warned.insert(model.to_string()) {
+        tracing::warn!(
+            model,
+            fallback = FALLBACK_CONTEXT_WINDOW,
+            "model exposes no context_window; assuming a conservative fallback for compaction. \
+             Declare the real value via the model's `context_window` in config or set \
+             `[turn].compact_threshold_tokens` to silence this."
+        );
+    }
 }
 
 /// Default upper limit for forced continuations in the `before turn-end` hook. Can be

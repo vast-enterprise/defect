@@ -651,18 +651,27 @@ pub enum ProviderProtocol {
 ///
 /// `name` is mapped to [`defect_agent::llm::ModelInfo::display_name`]; the ACP uses it as
 /// the label for model selector options. When `None`, the wire layer falls back to the
-/// id. The array-of-table shape reserves extension slots for future fields (e.g.,
-/// `context_window`, `deprecated`).
+/// id.
+///
+/// `context_window` / `max_output_tokens` let the user declare model metadata that the
+/// provider cannot discover at runtime — most importantly for **Bedrock**, whose SDK does
+/// not return model limits, so without this the compaction watermarks have no window to key
+/// off and the context can grow unbounded. Both are optional; when absent the provider's
+/// own value (if any) or the compaction fallback applies.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum ModelEntry {
     /// A plain ID (legacy format).
     Id(String),
-    /// A detailed entry with a display name.
+    /// A detailed entry with a display name and optional limits.
     Detailed {
         id: String,
         #[serde(default)]
         name: Option<String>,
+        #[serde(default)]
+        context_window: Option<u64>,
+        #[serde(default)]
+        max_output_tokens: Option<u64>,
     },
 }
 
@@ -682,6 +691,26 @@ impl ModelEntry {
         match self {
             Self::Id(_) => None,
             Self::Detailed { name, .. } => name.as_deref(),
+        }
+    }
+
+    /// Optional context-window size (tokens), only from the table form.
+    #[must_use]
+    pub fn context_window(&self) -> Option<u64> {
+        match self {
+            Self::Id(_) => None,
+            Self::Detailed { context_window, .. } => *context_window,
+        }
+    }
+
+    /// Optional max output tokens, only from the table form.
+    #[must_use]
+    pub fn max_output_tokens(&self) -> Option<u64> {
+        match self {
+            Self::Id(_) => None,
+            Self::Detailed {
+                max_output_tokens, ..
+            } => *max_output_tokens,
         }
     }
 }
@@ -708,6 +737,13 @@ pub struct ProviderConfigFile {
 pub struct ProviderAwsConfigFile {
     pub profile: Option<String>,
     pub region: Option<String>,
+    /// `anthropic_beta` flags injected into the Bedrock request body (Anthropic Messages
+    /// `anthropic_beta` array). Default (absent) sends nothing. Some newer models (e.g. Opus
+    /// 4.8) reject the default data retention mode and require `["no-data-retention-v1"]`;
+    /// set it explicitly. The flag is shared by every model under this provider, and Bedrock
+    /// 400s a model that does not support a given flag — so only enable it on a
+    /// provider whose models all accept the flag.
+    pub anthropic_beta: Option<Vec<String>>,
 }
 
 /// Values for the `reasoning_effort` parameter in the OpenAI-compatible protocol.
@@ -943,6 +979,13 @@ pub(crate) enum RequestLimitMode {
 #[serde(deny_unknown_fields)]
 pub(crate) struct TurnSection {
     pub(crate) system_prompt: Option<String>,
+    /// `[turn.sampling]` — per-call generation parameters for the **main agent**
+    /// (`max_tokens` / `temperature` / `top_p` / `top_k`). Mirrors the subagent profile's
+    /// `[sampling]` section. Omitted fields fall back to the provider default; in
+    /// particular, a missing `max_tokens` lets the Anthropic protocol layer apply its own
+    /// fallback. `reasoning_effort` is *not* here — it is a provider-level concern wired in
+    /// `cli/providers.rs` and switchable per-session via ACP.
+    pub(crate) sampling: Option<SamplingSection>,
     pub(crate) request_limit: Option<u32>,
     /// Strategy for `request_limit`. `None` ⇒ `Adaptive` (back-compatible).
     pub(crate) request_limit_mode: Option<RequestLimitMode>,
@@ -968,6 +1011,20 @@ pub(crate) struct TurnSection {
     /// (4). `0` ⇒ disallow dispatching any subagent (the top-level tool set does not
     /// contain `spawn_agent`).
     pub(crate) subagent_max_depth: Option<u32>,
+}
+
+/// `[turn.sampling]` — main-agent generation parameters. Each field is independently
+/// optional and overrides the corresponding [`SamplingParams`](defect_agent::llm::SamplingParams)
+/// default only when present. Mirrors the subagent profile's `[sampling]` section.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SamplingSection {
+    /// Maximum tokens the model may generate in a single response. Omitted ⇒ the protocol
+    /// layer's own fallback applies (e.g. Anthropic's `DEFAULT_MAX_TOKENS`).
+    pub(crate) max_tokens: Option<u32>,
+    pub(crate) temperature: Option<f32>,
+    pub(crate) top_p: Option<f32>,
+    pub(crate) top_k: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

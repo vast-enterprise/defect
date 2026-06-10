@@ -4,7 +4,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use defect_agent::error::BoxError;
-use defect_agent::llm::SamplingParams;
 use defect_agent::session::{BasePromptConfig, PromptConfig, TurnConfig, TurnRequestLimit};
 use toml::Value as TomlValue;
 
@@ -317,9 +316,22 @@ fn build_effective_config(
         turn.subagent_max_depth = subagent_max_depth;
     }
     validate_compact_ratios(path, &turn)?;
-    if turn.sampling == SamplingParams::default() {
-        // Keep the default sampling explicitly in the effective config so that adding
-        // fields later is easier.
+    if let Some(sampling) = config.turn.sampling {
+        // Merge each present field onto the default; absent fields keep the provider
+        // fallback (notably `max_tokens = None` → protocol-layer default). `thinking` /
+        // `stop_sequences` / `reasoning_effort` are not configured here.
+        if let Some(max_tokens) = sampling.max_tokens {
+            turn.sampling.max_tokens = Some(max_tokens);
+        }
+        if let Some(temperature) = sampling.temperature {
+            turn.sampling.temperature = Some(temperature);
+        }
+        if let Some(top_p) = sampling.top_p {
+            turn.sampling.top_p = Some(top_p);
+        }
+        if let Some(top_k) = sampling.top_k {
+            turn.sampling.top_k = Some(top_k);
+        }
     }
 
     let capabilities = CapabilitiesConfig::with_web_search(WebSearchCapabilityConfig::new(

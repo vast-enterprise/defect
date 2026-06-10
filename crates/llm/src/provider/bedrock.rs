@@ -43,6 +43,7 @@ const AWS_PROFILE_ENV: &str = "AWS_PROFILE";
 const BODY_MODEL_FIELD: &str = "model";
 const BODY_STREAM_FIELD: &str = "stream";
 const BODY_ANTHROPIC_VERSION_FIELD: &str = "anthropic_version";
+const BODY_ANTHROPIC_BETA_FIELD: &str = "anthropic_beta";
 const ERR_ACCESS_DENIED: &str = "AccessDeniedException";
 const ERR_VALIDATION: &str = "ValidationException";
 const ERR_MODEL_NOT_READY: &str = "ModelNotReadyException";
@@ -55,15 +56,44 @@ const ERR_RESOURCE_NOT_FOUND: &str = "ResourceNotFoundException";
 const ERR_SERVICE_QUOTA_EXCEEDED: &str = "ServiceQuotaExceededException";
 const ERR_MODEL_ERROR: &str = "ModelErrorException";
 
+/// A configured Bedrock model plus the limits the SDK cannot discover at runtime.
+///
+/// Bedrock's runtime SDK returns no model metadata, so `context_window` (and
+/// `max_output_tokens`) must come from config; otherwise the compaction watermarks have no
+/// window to key off. Both are optional — `None` leaves it to the compaction fallback.
+#[derive(Debug, Default, Clone)]
+pub struct BedrockModel {
+    pub id: String,
+    pub context_window: Option<u64>,
+    pub max_output_tokens: Option<u64>,
+}
+
+impl BedrockModel {
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            context_window: None,
+            max_output_tokens: None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct BedrockConfig {
     pub vendor: Option<String>,
     pub display_name: Option<String>,
     pub base_url: Option<String>,
     pub default_model: Option<String>,
-    pub models: Vec<String>,
+    pub models: Vec<BedrockModel>,
     pub aws_profile: Option<String>,
     pub aws_region: Option<String>,
+    /// `anthropic_beta` flags injected into every request body. `None` / empty sends
+    /// nothing (the safe default). Some newer models (e.g. Opus 4.8) reject the default data
+    /// retention mode and require `["no-data-retention-v1"]` here; set it explicitly per
+    /// provider, since the flag is shared by every model under this provider and Bedrock
+    /// 400s a model that does not support a given flag.
+    pub anthropic_beta: Option<Vec<String>>,
 }
 
 impl BedrockConfig {
@@ -86,6 +116,9 @@ pub struct BedrockProvider {
     info: ProviderInfo,
     capabilities: Capabilities,
     models: Vec<ModelInfo>,
+    /// `anthropic_beta` flags injected into every request body. Resolved once at
+    /// construction; empty means inject nothing.
+    anthropic_beta: Vec<String>,
 }
 
 impl std::fmt::Debug for BedrockProvider {
@@ -123,8 +156,15 @@ impl BedrockProvider {
         let sdk_config = loader.load().await;
         let client = BedrockClient::new(&sdk_config);
 
+        // Default: send nothing. `anthropic_beta` is provider-wide (shared by every model
+        // under this provider), and Bedrock rejects a flag a model does not support with a
+        // 400 — so a blanket default would risk breaking older models to fix a newer one.
+        // Opting in is explicit via config.
+        let anthropic_beta = config.anthropic_beta.unwrap_or_default();
+
         Ok(Self {
             client,
+            anthropic_beta,
             info: ProviderInfo {
                 vendor,
                 protocol: ProtocolId::AnthropicMessages,
@@ -143,19 +183,23 @@ impl BedrockProvider {
     }
 }
 
-fn model_infos_from_config(models: Vec<String>, default_model: Option<String>) -> Vec<ModelInfo> {
-    let mut ids = models;
+fn model_infos_from_config(
+    models: Vec<BedrockModel>,
+    default_model: Option<String>,
+) -> Vec<ModelInfo> {
+    let mut models = models;
     if let Some(default_model) = default_model
-        && !ids.iter().any(|id| id == &default_model)
+        && !models.iter().any(|m| m.id == default_model)
     {
-        ids.insert(0, default_model);
+        models.insert(0, BedrockModel::new(default_model));
     }
-    ids.into_iter()
-        .map(|id| ModelInfo {
-            id,
+    models
+        .into_iter()
+        .map(|m| ModelInfo {
+            id: m.id,
             display_name: None,
-            context_window: None,
-            max_output_tokens: None,
+            context_window: m.context_window,
+            max_output_tokens: m.max_output_tokens,
             deprecated: false,
             capabilities_overrides: ModelCapabilityOverrides::default(),
         })
@@ -189,11 +233,12 @@ impl LlmProvider for BedrockProvider {
     ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
         async move {
             let body = anthropic_messages::encode_request(&req);
-            let payload = serde_json::to_vec(&bedrock_request_body(body)).map_err(|e| {
-                ProviderError::new(ProviderErrorKind::BadRequest {
-                    hint: Some(e.to_string()),
-                })
-            })?;
+            let payload = serde_json::to_vec(&bedrock_request_body(body, &self.anthropic_beta))
+                .map_err(|e| {
+                    ProviderError::new(ProviderErrorKind::BadRequest {
+                        hint: Some(e.to_string()),
+                    })
+                })?;
 
             let resp = tokio::select! {
                 biased;
@@ -223,7 +268,7 @@ impl LlmProvider for BedrockProvider {
     }
 }
 
-fn bedrock_request_body(body: wire::CreateMessageParams) -> Value {
+fn bedrock_request_body(body: wire::CreateMessageParams, anthropic_beta: &[String]) -> Value {
     let mut value = serde_json::to_value(body).expect("Anthropic wire body should serialize");
     if let Some(obj) = value.as_object_mut() {
         obj.remove(BODY_MODEL_FIELD);
@@ -232,6 +277,17 @@ fn bedrock_request_body(body: wire::CreateMessageParams) -> Value {
             BODY_ANTHROPIC_VERSION_FIELD.to_owned(),
             Value::String(ANTHROPIC_VERSION.to_owned()),
         );
+        if !anthropic_beta.is_empty() {
+            obj.insert(
+                BODY_ANTHROPIC_BETA_FIELD.to_owned(),
+                Value::Array(
+                    anthropic_beta
+                        .iter()
+                        .map(|flag| Value::String(flag.clone()))
+                        .collect(),
+                ),
+            );
+        }
     }
     value
 }

@@ -133,6 +133,27 @@ impl History for VecHistory {
         drop_count
     }
 
+    fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("VecHistory mutex poisoned")
+            .messages
+            .len()
+    }
+
+    fn truncate(&self, len: usize) {
+        let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
+        if len >= inner.messages.len() {
+            return;
+        }
+        inner.messages.truncate(len);
+        // The dropped messages may have fed into `est_since_baseline`; the cheapest correct
+        // fix is to reset the baseline, same as `replace` — the next LLM call reports the
+        // true count.
+        inner.last_real_input = None;
+        inner.est_since_baseline = 0;
+    }
+
     fn record_input_tokens(&self, tokens: u64) {
         let mut inner = self.inner.lock().expect("VecHistory mutex poisoned");
         inner.last_real_input = Some(tokens);

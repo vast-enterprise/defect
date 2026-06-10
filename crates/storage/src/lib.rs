@@ -132,7 +132,13 @@ impl SessionObserver for StorageObserver {
                     }
                     state.apply_record(projected);
                     seq = seq.saturating_add(1);
-                    if let SessionRecord::TurnEnded { .. } = record.record {
+                    // Both terminal boundaries snapshot: `TurnEnded` persists committed
+                    // history; `TurnAborted` persists the post-rollback state so a failed
+                    // turn's orphan does not survive in the journal tail.
+                    if matches!(
+                        record.record,
+                        SessionRecord::TurnEnded { .. } | SessionRecord::TurnAborted
+                    ) {
                         let snapshot = StoredSnapshot::new(seq, state.to_snapshot_state());
                         if let Err(err) = store.write_snapshot(&snapshot) {
                             tracing::warn!(
@@ -421,17 +427,30 @@ impl SessionStore {
     /// Returns an error if the underlying replay fails, or if the record sequence cannot
     /// be folded into a semantically consistent history.
     pub fn replay_state(&self) -> Result<ReplayState, StorageError> {
-        let Some(snapshot) = self.load_snapshot()? else {
-            let mut state = ReplayState::default();
-            for record in self.replay_records()? {
-                state.apply_record(record.record);
+        let mut state = match self.load_snapshot()? {
+            None => {
+                let mut state = ReplayState::default();
+                for record in self.replay_records()? {
+                    state.apply_record(record.record);
+                }
+                state
             }
-            return Ok(state);
+            Some(snapshot) => {
+                let mut state: ReplayState = snapshot.state.into();
+                for record in self.replay_records_from(snapshot.next_seq)? {
+                    state.apply_record(record.record);
+                }
+                state
+            }
         };
 
-        let mut state: ReplayState = snapshot.state.into();
-        for record in self.replay_records_from(snapshot.next_seq)? {
-            state.apply_record(record.record);
+        // Crash safety net: a process killed mid-turn leaves journaled records (the user
+        // prompt, `TurnStarted`, partial output) with no terminating `TurnEnded` /
+        // `TurnAborted`. Drop that uncommitted tail so an interrupted turn is not replayed
+        // as committed history — mirroring the in-memory rollback a graceful failure does.
+        if !state.last_turn_ended {
+            state.history.truncate(state.committed_len);
+            state.last_turn_ended = true;
         }
         Ok(state)
     }
@@ -509,6 +528,9 @@ pub enum SessionRecord {
         reason: AcpStopReason,
         usage: Usage,
     },
+    /// A permanently-failed turn. On replay, history is rolled back to the boundary at the
+    /// end of the last successfully-ended turn, discarding the failed turn's messages.
+    TurnAborted,
     Message {
         message: Message,
     },
@@ -525,6 +547,12 @@ pub struct ReplayState {
     pub history: Vec<Message>,
     pub turn_count: u64,
     pub last_turn_ended: bool,
+    /// History length at the last committed boundary (start of session, or the end of the
+    /// last successfully-ended turn). `TurnAborted` rolls `history` back to this length,
+    /// discarding the failed turn's messages. Not part of the persisted snapshot — a
+    /// snapshot is only written after `TurnEnded`, so its history is always fully
+    /// committed and this resets to its length on load.
+    committed_len: usize,
 }
 
 impl ReplayState {
@@ -535,6 +563,14 @@ impl ReplayState {
                 self.last_turn_ended = false;
             }
             SessionRecord::TurnEnded { .. } => {
+                self.last_turn_ended = true;
+                // The turn committed successfully — everything appended so far is durable.
+                self.committed_len = self.history.len();
+            }
+            SessionRecord::TurnAborted => {
+                // Roll back to the last committed boundary, dropping the failed turn's
+                // user prompt and any partial assistant / tool messages.
+                self.history.truncate(self.committed_len);
                 self.last_turn_ended = true;
             }
             SessionRecord::Message { message } => {
@@ -548,6 +584,9 @@ impl ReplayState {
                 self.history = history;
                 self.turn_count = turn_count;
                 self.last_turn_ended = last_turn_ended;
+                // Snapshots are only taken at a `TurnEnded` boundary, so the entire history
+                // is committed.
+                self.committed_len = self.history.len();
             }
         }
     }
@@ -562,6 +601,7 @@ impl ReplayState {
 impl From<SnapshotState> for ReplayState {
     fn from(state: SnapshotState) -> Self {
         Self {
+            committed_len: state.history.len(),
             history: state.history,
             turn_count: state.turn_count,
             last_turn_ended: state.last_turn_ended,
@@ -674,6 +714,14 @@ impl RecordProjector {
                 append_if_some(&mut records, self.flush_assistant());
                 append_if_some(&mut records, self.flush_tool_results());
                 records.push(SessionRecord::TurnEnded { reason, usage });
+            }
+            AgentEvent::TurnAborted => {
+                // A permanently-failed turn. Drop any half-built assistant / tool-result
+                // state without emitting it, then record the abort so replay rolls history
+                // back to the last committed boundary (matching the in-memory truncate).
+                self.current_assistant = None;
+                self.pending_tool_results.clear();
+                records.push(SessionRecord::TurnAborted);
             }
             AgentEvent::ToolCallProgress { .. }
             | AgentEvent::PolicyDecision { .. }

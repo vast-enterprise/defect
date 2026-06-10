@@ -52,6 +52,14 @@ pub enum AgentEvent {
         usage: Usage,
     },
 
+    /// A prompt turn failed permanently (e.g. a provider error after retries) and was
+    /// rolled back. Everything the turn appended to history — starting with the user
+    /// prompt — has been discarded in memory; consumers that persist or mirror history
+    /// (storage) must drop the same tail so a failed turn leaves no orphan to be replayed
+    /// on reload or re-sent on the next request. Audit-only on the wire (the ACP bridge
+    /// reports failure via the JSON-RPC error, not this event).
+    TurnAborted,
+
     // ---------- Assistant output (pushed to wire) ----------
     /// Incremental assistant text. Maps to ACP `SessionUpdate::AgentMessageChunk`.
     AssistantText { content: ContentBlock },
