@@ -787,3 +787,38 @@ async fn case20_edit_crlf_file_with_lf_new_string_keeps_crlf() {
     let bytes = h.read_file("crlf.txt");
     assert_eq!(bytes, b"alpha\r\nx\r\ny\r\ngamma\r\n");
 }
+
+#[tokio::test]
+async fn case29_edit_not_found_hints_whitespace_mismatch() {
+    // File has the block indented; old_string has the same lines but wrong indentation.
+    // Strict matching still fails (no silent edit), but the error must point at the
+    // whitespace mismatch so the model can self-correct instead of guessing.
+    let h = Harness::new();
+    h.write_file(
+        "code.rs",
+        "fn main() {\n    let x = 1;\n    let y = 2;\n}\n",
+    );
+    let tool = EditFileTool::new();
+    let events = drive(tool.execute(
+        json!({
+            "path": "code.rs",
+            "old_string": "let x = 1;\nlet y = 2;",
+            "new_string": "let x = 10;\nlet y = 20;",
+        }),
+        h.ctx(),
+    ))
+    .await;
+    assert_eq!(events.len(), 1);
+    assert!(
+        matches!(events[0], ToolEvent::Failed(ToolError::InvalidArgs(_))),
+        "got {:?}",
+        events[0]
+    );
+    let err_str = format!("{:?}", events[0]);
+    assert!(err_str.contains("indentation differs"), "err: {err_str}");
+    // file untouched
+    assert_eq!(
+        h.read_file("code.rs"),
+        b"fn main() {\n    let x = 1;\n    let y = 2;\n}\n"
+    );
+}

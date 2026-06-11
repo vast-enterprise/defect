@@ -180,9 +180,20 @@ async fn run_edit(
     ) {
         Ok(v) => v,
         Err(EditOutcome::NotFound) => {
-            return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(arg_err(
-                "old_string not found",
-            ))));
+            // Strict exact matching failed. Before giving up, check whether a block exists
+            // that is identical except for per-line leading/trailing whitespace. If so, the
+            // model almost certainly got the indentation wrong — say so explicitly instead
+            // of a bare "not found", so it can re-read and fix the whitespace rather than
+            // guess. We never edit on a whitespace-only match (that would be a silent,
+            // possibly-wrong replacement); we only improve the diagnostic.
+            let msg = if whitespace_insensitive_block_count(&old_content, &parsed.old_string) > 0 {
+                "old_string not found. A block matching it except for leading/trailing \
+                 whitespace exists — the indentation differs. Re-read the file and copy the \
+                 exact whitespace, or use replace_all if it is intentionally repeated."
+            } else {
+                "old_string not found"
+            };
+            return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(arg_err(msg))));
         }
         Err(EditOutcome::Ambiguous(n)) => {
             return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(arg_err(&format!(
@@ -264,6 +275,24 @@ fn apply_edit(
             n => Err(EditOutcome::Ambiguous(n as u32)),
         }
     }
+}
+
+/// Counts windows in `text` that match `needle` line-for-line, ignoring each line's
+/// leading and trailing whitespace. Used only to produce a better error message when the
+/// strict exact match fails — never to perform an edit.
+fn whitespace_insensitive_block_count(text: &str, needle: &str) -> usize {
+    let needle_lines: Vec<&str> = needle.lines().map(str::trim).collect();
+    if needle_lines.is_empty() {
+        return 0;
+    }
+    let text_lines: Vec<&str> = text.lines().map(str::trim).collect();
+    if text_lines.len() < needle_lines.len() {
+        return 0;
+    }
+    text_lines
+        .windows(needle_lines.len())
+        .filter(|w| *w == needle_lines.as_slice())
+        .count()
 }
 
 fn map_fs_err(e: FsError) -> ToolError {
