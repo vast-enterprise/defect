@@ -48,35 +48,6 @@
 
 ---
 
-## 备注：Hook async/observe 事件的真实缺口
-
-6 个 observe 事件（`SessionEnd` / `TurnStart` / `PreLlmCall` / `PostLlmCall` /
-`PostCompact` / `PermissionAsk`）仅 enum 占位、未落地。
-（原 8 件里的 `TurnEnd` / `PreCompact` 已按 [sync-hook 提案](docs/proposals/sync-hook-control-model.md)
-迁回同步拦截，不再属于 observe。）
-**最大的 gap 是「AgentEvent → HookEvent 投影器」缺失**，不是缺数据：
-
-- `DefaultHookEngine::observe()`（`crates/agent/src/hooks.rs`）是空函数、**无调用方**；
-  没有 task 订阅 `AgentEvent` 流把它投影成 `HookEvent` 再调 `observe()`。fan-out
-  基础设施（`EventEmitter` / `Session::subscribe` / `SessionObserver`）全现成，
-  storage / tracing 已在同一根管子上消费。
-- **数据源 5/6 已就绪**，可直接投影：`TurnStart`←`TurnStarted`、`PreLlmCall`←`LlmCallStarted`、
-  `PostLlmCall`←`LlmCallFinished`、`PostCompact`←`ContextCompressed`、
-  `PermissionAsk`←`PolicyDecision{Ask}`。
-- **1 个要先补源**：`SessionEnd`（`AgentEvent` 无 session 终结事件 →
-  session 生命周期造终结信号）。
-- **config**：`HooksSection` / `HookEventTag` 还没有 async 事件桶。
-
-落地顺序（详见 `docs/internal/hooks.md` §11.3）：① 投影 task + `observe()` 派发（先接 5 件）
-② config 加 async 桶 ③ 补 `SessionEnd` 数据源。
-
-**附带必修**：`HooksSection` 没有 `deny_unknown_fields`——用户现在写
-`[[hooks.turn_start]]` 之类**超前/拼错的事件键会被 serde 静默丢弃**，hook 永不触发
-却不报错。这违反「要约束就 hard fail 别静默忽略」原则，应补 `deny_unknown_fields`
-（与 config 其余层、skill manifest 的做法对齐）。
-
----
-
 ## 维护规则
 
 - 每个功能点动手前先把对应 `docs/...md` 写出来（即便只是几行设计意图）
