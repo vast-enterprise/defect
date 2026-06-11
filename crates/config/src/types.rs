@@ -184,6 +184,7 @@ pub struct CliOverrides {
     pub provider: Option<ProviderKind>,
     pub model: Option<String>,
     pub sandbox: Option<SandboxMode>,
+    pub log_format: Option<LogFormat>,
     pub config_overrides: Vec<(String, TomlValue)>,
 }
 
@@ -836,9 +837,32 @@ pub struct HttpProxySettings {
     pub no_proxy: Vec<String>,
 }
 
+/// Output format for the tracing-subscriber log sink (stderr).
+///
+/// Independent of `--format`, which controls the agent's stdout event stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogFormat {
+    /// Human-readable text, ANSI colors when stderr is a terminal.
+    #[default]
+    Text,
+    /// One JSON object per log line (JSONL/NDJSON).
+    Jsonl,
+}
+
+impl LogFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Jsonl => "jsonl",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TracingConfig {
     pub filter: Option<String>,
+    pub format: LogFormat,
     pub otlp: Option<OtlpTracingConfig>,
     pub langfuse: Option<LangfuseConfig>,
 }
@@ -1157,6 +1181,7 @@ pub(crate) struct SandboxSection {
 #[serde(deny_unknown_fields)]
 pub(crate) struct TracingSection {
     pub(crate) filter: Option<String>,
+    pub(crate) format: Option<LogFormat>,
     pub(crate) otlp: Option<OtlpTracingSection>,
     pub(crate) langfuse: Option<LangfuseSection>,
 }

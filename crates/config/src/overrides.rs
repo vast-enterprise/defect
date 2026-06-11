@@ -64,6 +64,14 @@ pub(crate) fn build_cli_layer(cli: &CliOverrides) -> Result<Option<ConfigLayerEn
         );
         has_values = true;
     }
+    if let Some(log_format) = &cli.log_format {
+        apply_toml_override(
+            &mut root,
+            "tracing.format",
+            TomlValue::String(log_format.as_str().to_string()),
+        );
+        has_values = true;
+    }
 
     if !has_values {
         return Ok(None);

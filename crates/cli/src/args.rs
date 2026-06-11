@@ -6,7 +6,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
 use defect_config::{
-    CliOverrides, ProviderKind as ConfigProviderKind, SandboxMode, parse_cli_override,
+    CliOverrides, LogFormat, ProviderKind as ConfigProviderKind, SandboxMode, parse_cli_override,
 };
 
 /// Values for `--sandbox`. Mirrors [`SandboxMode`] locally so that clap can render the
@@ -33,6 +33,23 @@ impl From<SandboxModeArg> for SandboxMode {
     }
 }
 
+/// Values for `--log-format`. Mirrors [`LogFormat`] locally so that clap can render the
+/// possible values directly; the config crate does not depend on clap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormatArg {
+    Text,
+    Jsonl,
+}
+
+impl From<LogFormatArg> for LogFormat {
+    fn from(arg: LogFormatArg) -> Self {
+        match arg {
+            LogFormatArg::Text => LogFormat::Text,
+            LogFormatArg::Jsonl => LogFormat::Jsonl,
+        }
+    }
+}
+
 /// Output format for stdout in `--message` single-turn mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum OutputFormat {
@@ -53,7 +70,8 @@ pub enum OutputFormat {
     about = "Headless agent over ACP/stdio",
     long_about = "defect — headless agent over ACP/stdio.\n\n\
                   Auth env: ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY.\n\
-                  Logging: RUST_LOG controls tracing-subscriber EnvFilter (default: info)."
+                  Logging: RUST_LOG controls tracing-subscriber EnvFilter (default: info); \
+                  --log-format selects text or jsonl output."
 )]
 pub struct CliArgs {
     /// LLM provider to use. CLI flag takes precedence over the `DEFECT_PROVIDER`
@@ -83,6 +101,13 @@ pub struct CliArgs {
     /// The CLI flag takes precedence over the `DEFECT_PROFILE` environment variable.
     #[arg(long, env = "DEFECT_PROFILE")]
     pub profile: Option<String>,
+
+    /// Format for the tracing/log output (stderr). `text` (default) is human-readable;
+    /// `jsonl` emits one JSON object per log line. Takes precedence over config
+    /// `[tracing].format`. This controls diagnostic logs, not the `--format` stdout event
+    /// stream.
+    #[arg(long, value_enum)]
+    pub log_format: Option<LogFormatArg>,
 
     /// Additional dotted-path config overrides; may be repeated.
     #[arg(long = "config", value_name = "KEY=VALUE")]
@@ -196,6 +221,7 @@ impl CliArgs {
             provider: self.provider.as_deref().map(ConfigProviderKind::from),
             model: self.model.clone(),
             sandbox,
+            log_format: self.log_format.map(LogFormat::from),
             config_overrides,
         })
     }

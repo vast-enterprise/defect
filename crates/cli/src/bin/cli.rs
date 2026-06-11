@@ -15,7 +15,7 @@ use clap::Parser;
 use defect_agent::session::AgentCore;
 use defect_cli::args::{CliArgs, Command, OutputFormat};
 use defect_cli::assembly::{CliAgentBuilder, ReplMode};
-use defect_config::{LoadConfigOptions, load_dotenv_compat};
+use defect_config::{LoadConfigOptions, LogFormat, load_dotenv_compat};
 use defect_obs::init_tracing;
 
 #[tokio::main]
@@ -45,7 +45,10 @@ async fn main() -> anyhow::Result<ExitCode> {
     };
     let config = defect_config::load_config(load_opts.clone())
         .map_err(|e| anyhow::anyhow!("config load failed: {e}"))?;
-    init_tracing(config.effective.tracing.filter.as_deref())?;
+    init_tracing(
+        config.effective.tracing.filter.as_deref(),
+        matches!(config.effective.tracing.format, LogFormat::Jsonl),
+    )?;
 
     for warning in &config.warnings {
         tracing::warn!("{warning:?}");

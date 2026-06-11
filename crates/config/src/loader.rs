@@ -470,6 +470,7 @@ fn build_effective_config(
         },
         tracing: TracingConfig {
             filter: config.tracing.filter,
+            format: config.tracing.format.unwrap_or_default(),
             otlp: config.tracing.otlp.map(|otlp| OtlpTracingConfig {
                 endpoint: otlp.endpoint,
             }),

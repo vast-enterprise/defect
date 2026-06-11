@@ -16,7 +16,7 @@ Defect 使用 TOML 配置文件，按下面的优先级**从低到高**逐层合
 | 2 | 用户层 | `$XDG_CONFIG_HOME/defect/config.toml`，否则 `~/.config/defect/config.toml` | 跨项目的个人配置 |
 | 3 | 项目共享层 | `<repo-root>/.defect/config.toml` | 随仓库提交、团队共享 |
 | 4 | 项目本地层 | `<repo-root>/.defect/config.local.toml` | 机器本地覆盖，建议加入 `.gitignore` |
-| 5（最高） | CLI override | `--config key.path=value`（可重复）、`--provider` / `--model`、环境变量 `DEFECT_PROVIDER` / `DEFECT_MODEL` | 命令行最终决定 |
+| 5（最高） | CLI override | `--config key.path=value`（可重复）、`--provider` / `--model` / `--sandbox` / `--log-format`、环境变量 `DEFECT_PROVIDER` / `DEFECT_MODEL` | 命令行最终决定 |
 
 - **repo root 检测**：从 `cwd` 向上逐级查找含 `.git` 的目录；找不到则项目层与项目本地层都不加载。
 - **`--local` 模式**：锚定到 `<repo-root>/.defect/`，**完全忽略用户层**（配置、`agents/`、`skills/` 全部跳过），所有状态只读写项目根 `.defect/`。适合在沙箱/容器里得到可复现的、不受宿主机用户配置影响的行为。
@@ -353,6 +353,7 @@ CLI `--sandbox` 覆盖此项；`--yolo` 等价 `--sandbox open`。注意 `--repl
 ```toml
 [tracing]
 filter = "info,defect_agent=debug"   # tracing-subscriber EnvFilter
+format = "text"                      # 日志输出格式：text | jsonl
 
 [tracing.otlp]
 endpoint = "http://localhost:4317"
@@ -366,9 +367,10 @@ secret_key = "sk-..."
 
 ### `[tracing]`
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `filter` | string | EnvFilter 表达式（也可用 `RUST_LOG` 环境变量） |
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `filter` | string | `info,toac=warn` | EnvFilter 表达式（也可用 `RUST_LOG` 环境变量，优先级最高） |
+| `format` | `text` \| `jsonl` | `text` | 日志（stderr）输出格式；`jsonl` 每行一个 JSON 对象。也可用命令行 `--log-format` 覆盖。注意这是诊断日志，与控制 stdout 事件流的 `--format` 无关 |
 
 ### `[tracing.otlp]`
 
