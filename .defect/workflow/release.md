@@ -98,16 +98,7 @@ git push origin main           # 或开 PR 合入；二者都会触发 ci.yml
 
 ---
 
-## 5. crates.io 发布（手动，先 dry-run）
-
-**先 dry-run，确认每个 crate 都能 package：**
-
-```bash
-gh workflow run publish-crates.yml -f dry_run=true
-gh run watch                   # 或去 Actions 页面看 publish-crates 跑完、全绿
-```
-
-dry-run 绿了之后，**真发布**：
+## 5. crates.io 发布（手动触发）
 
 ```bash
 gh workflow run publish-crates.yml -f dry_run=false
@@ -120,6 +111,24 @@ gh run watch
 - **限流自适应**：首发一个**新 crate 名**间隔 ~11 分钟（crates.io 对新 crate 限流严），已存在 crate 升版本间隔 ~70 秒。**首次发布整套会很慢（10 个新 crate × ~11 分钟），这是正常的**，别中途取消。
 
 > 首次发布额外确认：各 crate 名在 crates.io 未被占用、`CARGO_REGISTRY_TOKEN` 已配置。
+
+### ⚠️ 关于 `dry_run=true`：对本 workspace **整套会失败，属预期**
+
+直觉上该先跑 `dry_run=true` 验证。但 **dry-run 不真正上传**（每个包都 "aborting upload due to dry run"），
+而 `cargo publish` 校验依赖时查的是**真实 crates.io 索引**。于是从第一个有内部依赖的
+crate（`defect-config` 依赖 `defect-agent`）起，dry-run 必然报：
+
+```
+failed to select a version for the requirement `defect-agent = "^0.1.0-alpha.4"`
+candidate versions found which didn't match: <crates.io 上的旧版本>
+```
+
+——因为前面的 `defect-agent@<新版本>` 在 dry-run 里没真传上去，索引里查不到。
+
+**这不是 bug，是 workspace 链式依赖用 dry-run 的固有死结。** 结论：
+- dry-run **只能验证叶子 crate**（`defect-agent` / `defect-sandbox`，无内部依赖）能 package；
+- 链式依赖的 crate 只能靠**真发布**逐个上传、索引传播后才解析得到（workflow 里 70 秒 sleep 就是给索引传播留的）；
+- 因此**不要把整套 dry-run 全绿当作真发布的前置门**。真发布反而不受此限：被依赖者先真传，后续 crate 轮到时索引已更新。
 
 ---
 
