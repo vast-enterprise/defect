@@ -108,7 +108,9 @@ gh run watch
 关于这条管线的内置行为（来自 `publish-crates.yml`，无需手动干预）：
 - **发布顺序**按内部依赖拓扑：`agent → sandbox → config → http → storage → tools → llm → mcp → obs → acp → cli`（被依赖者先发）。
 - **幂等**：真发布时已在 crates.io 上的 `crate@version` 会被跳过，失败后重跑不会在已发的包上撞 "already exists"。
-- **限流自适应**：首发一个**新 crate 名**间隔 ~11 分钟（crates.io 对新 crate 限流严），已存在 crate 升版本间隔 ~70 秒。**首次发布整套会很慢（10 个新 crate × ~11 分钟），这是正常的**，别中途取消。
+- **包间等待**分两种情况：
+  - **升版本（crate 名已存在）**：瓶颈只是索引传播，不是限流（crates.io 升版本 burst 30 / 每分钟补 1，11 个包远在 burst 内）。每发完一个包**轮询其索引出现该版本即继续**（常态 ~10s，上限 90s 兜底），整套约 2 分钟。
+  - **首发新 crate 名**：crates.io 对新名限流是 burst 5 + 每 ~10 分钟补 1，会直接拒绝过快的新 crate 发布——无法靠轮询绕过，发布前等 ~11 分钟窗口。**只有第一次整套发布会撞到（11 个新 crate），属一次性成本**，别中途取消。
 
 > 首次发布额外确认：各 crate 名在 crates.io 未被占用、`CARGO_REGISTRY_TOKEN` 已配置。
 

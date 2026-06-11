@@ -60,13 +60,27 @@ jobs:
 
           # sparse index 路径规则：name≥4 字符 → {前两}/{次两}/{name}。
           index_url() { local n="$1"; echo "https://index.crates.io/${n:0:2}/${n:2:2}/${n}"; }
-          # 该 crate@VERSION 是否已在 crates.io 上。
+          # 该 crate@VERSION 是否已在 crates.io 索引上。
           already_published() {
             curl -fsSL "$(index_url "$1")" 2>/dev/null | grep -q "\"vers\":\"${VERSION}\""
           }
           # 该 crate 名是否已存在（任意版本）。用来区分“首发新 crate”与“已有 crate 升版本”。
           crate_name_exists() {
             curl -fsSL "$(index_url "$1")" >/dev/null 2>&1
+          }
+          # 轮询等到 $1@VERSION 在索引出现（后续依赖它的 crate 才解析得到），或到上限放弃。
+          # 升版本场景索引传播通常几~十几秒；上限只是兜底，不是常态等待。
+          wait_until_indexed() {
+            local c="$1" waited=0
+            while [ "$waited" -lt "$WAIT_INDEX_MAX" ]; do
+              if already_published "$c"; then
+                echo "  $c@$VERSION visible in index after ${waited}s"
+                return 0
+              fi
+              sleep "$WAIT_INDEX_POLL"
+              waited=$((waited + WAIT_INDEX_POLL))
+            done
+            echo "::warning::$c@$VERSION not visible after ${WAIT_INDEX_MAX}s; proceeding anyway"
           }
 
           FLAGS="--locked"
@@ -75,15 +89,15 @@ jobs:
             echo "::notice::DRY RUN —— 仅 package 校验，不会真正发布"
           fi
 
-          # crates.io 限流（来自其公开配置）随“是不是新 crate 名”而剧烈不同：
-          #   - 新 crate（首次发布某个名字）：burst 5，之后每 ~10 分钟补 1 个 → 间隔取 11 分钟；
-          #   - 已存在 crate 发新版本：burst 30，每分钟补 1 个 → 间隔 70 秒足矣（兼顾索引传播）。
-          # 因此按“下一个要发的包是不是新 crate”动态决定间隔：首发那一批只能认命慢，
-          # 而日常的版本升级整批 ~1 分钟跑完，不必空等。
+          # 升版本（crate 名已存在）：瓶颈只是索引传播，不是限流（burst 30/每分钟补 1，
+          # 11 个包远在 burst 内）。所以不再盲等固定 70s，改为轮询“刚发的包已出现在索引”
+          # 即继续——常态每包 ~10s，整套 ~2 分钟。
+          WAIT_INDEX_POLL=5     # 轮询间隔
+          WAIT_INDEX_MAX=90     # 索引可见性上限兜底
+          # 首发新 crate 名：crates.io 对新名限流是 burst 5 + 每 ~10 分钟补 1，会直接拒绝过快的
+          # 新 crate 发布。这无法靠轮询绕过，只能认命等够窗口。仅首次整套发布会撞到一次。
           SLEEP_NEW_CRATE=660
-          SLEEP_NEW_VERSION=70
 
-          published_this_run=0
           for c in "${CRATES[@]}"; do
             # 幂等：已发布的版本跳过，让失败后的 rerun 不会在已发的包上撞 “crate already exists”。
             # dry-run 不跳过——dry-run 的意义就是校验每个包都能 package。
@@ -92,19 +106,18 @@ jobs:
               continue
             fi
 
-            # 发布前按本包是不是“新 crate”选择限流间隔（放在发布前，最后一个包发完不空等）。
-            if [ "$DRY_RUN" != "true" ] && [ "$published_this_run" -gt 0 ]; then
-              if crate_name_exists "$c"; then
-                sleep_for="$SLEEP_NEW_VERSION"
-              else
-                sleep_for="$SLEEP_NEW_CRATE"
-              fi
-              echo "sleeping ${sleep_for}s before publishing $c (crates.io rate limit)..."
-              sleep "$sleep_for"
+            # 首发新 crate 名才需要等限流窗口（放在发布前；dry-run 不等）。
+            if [ "$DRY_RUN" != "true" ] && ! crate_name_exists "$c"; then
+              echo "sleeping ${SLEEP_NEW_CRATE}s before first-ever publish of new crate $c (crates.io new-crate rate limit)..."
+              sleep "$SLEEP_NEW_CRATE"
             fi
 
             echo "::group::publish $c"
             cargo publish -p "$c" $FLAGS
             echo "::endgroup::"
-            published_this_run=$((published_this_run + 1))
+
+            # 发布成功后轮询索引就绪，让下一个依赖它的 crate 解析得到（dry-run 没真发，跳过）。
+            if [ "$DRY_RUN" != "true" ]; then
+              wait_until_indexed "$c"
+            fi
           done
