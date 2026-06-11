@@ -1,5 +1,11 @@
 # Defect 缺陷机器人
 
+[![CI](https://github.com/vast-enterprise/defect/actions/workflows/ci.yml/badge.svg)](https://github.com/vast-enterprise/defect/actions/workflows/ci.yml)
+[![Release](https://github.com/vast-enterprise/defect/actions/workflows/release.yml/badge.svg)](https://github.com/vast-enterprise/defect/actions/workflows/release.yml)
+[![crates.io](https://img.shields.io/crates/v/defect-cli.svg)](https://crates.io/crates/defect-cli)
+[![docs.rs](https://img.shields.io/docsrs/defect-cli)](https://docs.rs/defect-cli)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可)
+
 Defect 是一个高可配置性，高兼容性，节省资源的无头通用agent
 
 Defect 本仓库不提供任何ui实现，你可以通过ACP协议，在您喜欢的任何前端中来调用它
@@ -111,3 +117,7 @@ file = "AGENTS.md"
 - 不需要 MCP？skip `session_tool_factory`
 - 不需要持久化？skip `observe_session` / `session_loader`
 - 想缩二进制体积？我们后续会给 `defect-cli` 加可选 feature，按 provider / tool 维度编译期裁剪——届时跟着 feature flag 关即可
+
+## 许可
+
+本项目采用 [MIT](https://opensource.org/licenses/MIT) 或 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) 双协议授权，你可任选其一。
