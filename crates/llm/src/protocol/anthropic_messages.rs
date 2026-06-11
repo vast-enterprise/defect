@@ -50,7 +50,7 @@ const MAX_CACHE_BREAKPOINTS: usize = 4;
 ///
 /// Anthropic prompt cache is a **prefix** cache: a `cache_control` marker caches the entire
 /// prefix from the start (canonical order `tools → system → messages`) up to and including
-/// that block, and at most [`MAX_CACHE_BREAKPOINTS`] markers are allowed. To maximize the
+/// that block, and at most `MAX_CACHE_BREAKPOINTS` markers are allowed. To maximize the
 /// cached prefix we place markers **end-biased**, not front-to-back:
 ///
 /// - **1 static-prefix marker**: on the `system` block if present (which caches
@@ -76,8 +76,7 @@ pub fn encode_request(req: &CompletionRequest) -> wire::CreateMessageParams {
         }])
     });
 
-    let mut messages: Vec<wire::MessageParam> =
-        req.messages.iter().map(encode_message).collect();
+    let mut messages: Vec<wire::MessageParam> = req.messages.iter().map(encode_message).collect();
     mark_message_breakpoints(&mut messages, message_breakpoints);
 
     let tools = if req.tools.is_empty() {

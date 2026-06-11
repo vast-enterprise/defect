@@ -146,7 +146,7 @@ struct ProfileConfigToml {
     #[serde(default)]
     request_limit_mode: Option<RequestLimitMode>,
     /// The `[hooks]` table: event name → array of hook entries for that event. Its shape
-    /// is identical to the top-level `[hooks]` (reuses [`HookEntryRaw`]). A profile is a
+    /// is identical to the top-level `[hooks]` (reuses `HookEntryRaw`). A profile is a
     /// single closed truth source and does not support cross-layer `disable` — a
     /// `disable` key causes a hard fail as if the event name were unknown.
     #[serde(default)]

@@ -806,7 +806,11 @@ fn text_msg(role: Role, text: &str) -> Message {
 fn cache_breakpoints_are_end_biased() {
     let messages: Vec<Message> = (0..6)
         .map(|i| {
-            let role = if i % 2 == 0 { Role::User } else { Role::Assistant };
+            let role = if i % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            };
             text_msg(role, &format!("m{i}"))
         })
         .collect();
@@ -822,7 +826,10 @@ fn cache_breakpoints_are_end_biased() {
     let w = encode_request(&req);
 
     // 1 static (system) + 3 rolling = 4 total, never exceeding MAX_CACHE_BREAKPOINTS.
-    assert!(system_has_breakpoint(&w), "system must carry the static breakpoint");
+    assert!(
+        system_has_breakpoint(&w),
+        "system must carry the static breakpoint"
+    );
     // The three most recent messages (indices 3,4,5) get the rolling breakpoints.
     assert!(message_has_breakpoint(&w, 5));
     assert!(message_has_breakpoint(&w, 4));
