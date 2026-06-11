@@ -1502,3 +1502,120 @@ async fn request_cap_hit_consults_turn_end_hook_and_resets_budget() {
         "final stop after exhausting hook continues should be MaxTurnRequests, got {stop:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Goal mode force-keeps `goal_done` past a restrictive `--profile` allowlist:
+// it is the only way for the agent to signal completion, so the allowlist must
+// not be able to strip it.
+// ---------------------------------------------------------------------------
+
+/// Provider that records the tool names offered in each `CompletionRequest`, then ends the
+/// turn without calling anything.
+struct ToolRecordingProvider {
+    seen_tools: Arc<Mutex<Vec<String>>>,
+}
+
+impl LlmProvider for ToolRecordingProvider {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo {
+            vendor: "rec".to_string(),
+            protocol: ProtocolId::AnthropicMessages,
+            display_name: "Tool Recording".to_string(),
+        }
+    }
+    fn capabilities(&self) -> Capabilities {
+        unsupported_caps()
+    }
+    fn list_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>, ProviderError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn model_info(&self, _: &str) -> Option<ModelInfo> {
+        None
+    }
+    fn complete(
+        &self,
+        req: CompletionRequest,
+        _: CancellationToken,
+    ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
+        *self.seen_tools.lock().unwrap() = req.tools.iter().map(|t| t.name.clone()).collect();
+        Box::pin(async {
+            let chunks: Vec<Result<ProviderChunk, ProviderError>> = vec![
+                Ok(ProviderChunk::MessageStart {
+                    id: "m-0".to_string(),
+                    model: "rec-001".to_string(),
+                }),
+                Ok(ProviderChunk::TextDelta {
+                    text: "ok".to_string(),
+                }),
+                Ok(ProviderChunk::Stop {
+                    reason: LlmStopReason::EndTurn,
+                }),
+            ];
+            Ok(Box::pin(stream::iter(chunks)) as ProviderStream)
+        })
+    }
+}
+
+#[tokio::test]
+async fn goal_mode_force_keeps_goal_done_past_restrictive_allowlist() {
+    use defect_agent::session::GoalState;
+    use defect_agent::tool::{GOAL_DONE_TOOL_NAME, GoalDoneTool};
+
+    let seen_tools = Arc::new(Mutex::new(Vec::new()));
+    let provider = Arc::new(ToolRecordingProvider {
+        seen_tools: seen_tools.clone(),
+    }) as Arc<dyn LlmProvider>;
+
+    // Process pool mirrors `--goal` assembly: a normal tool plus the overlaid goal_done.
+    let tools: Arc<dyn ToolRegistry> = Arc::new(
+        StaticToolRegistry::builder()
+            .insert(Arc::new(NoopTool {
+                schema: ToolSchema {
+                    name: "noop".to_string(),
+                    description: "noop".to_string(),
+                    input_schema: json!({"type":"object"}),
+                },
+            }))
+            .insert(Arc::new(GoalDoneTool::new()))
+            .build(),
+    );
+
+    // Profile allowlist deliberately omits goal_done (only allows `noop`).
+    let core = DefaultAgentCore::builder()
+        .provider(provider)
+        .process_tools(tools)
+        .tool_allow(vec!["noop".to_string()])
+        .goal(Arc::new(GoalState::new("do the thing".to_string())))
+        .config(TurnConfig {
+            model: "rec-001".to_string(),
+            ..TurnConfig::default()
+        })
+        .build();
+
+    let cwd = std::env::current_dir().expect("cwd");
+    let session = core
+        .create_session(
+            SessionId::new(new_session_id()),
+            cwd,
+            vec![],
+            Arc::new(NoopFsBackend) as Arc<dyn FsBackend>,
+            Arc::new(NoopShellBackend) as Arc<dyn ShellBackend>,
+            Frontend::Headless,
+        )
+        .await
+        .expect("create session");
+
+    let prompt = vec![ContentBlock::Text(TextContent::new("go"))];
+    session.run_turn(prompt).await.expect("turn");
+
+    let offered = seen_tools.lock().unwrap().clone();
+    assert!(
+        offered.iter().any(|n| n == GOAL_DONE_TOOL_NAME),
+        "goal mode must offer goal_done to the LLM even when the profile allowlist omits it; \
+         got {offered:?}"
+    );
+    assert!(
+        offered.iter().any(|n| n == "noop"),
+        "the allowlisted tool should still be offered; got {offered:?}"
+    );
+}

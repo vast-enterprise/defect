@@ -587,6 +587,10 @@ impl DefaultAgentCore {
     /// (see [`crate::session::match_tool_allowlist`]); a top-level profile is a leaf agent,
     /// so a matched `spawn_agent` is dropped. A pattern matching nothing is a hard error
     /// (fail-loud).
+    ///
+    /// In `--goal` mode the `goal_done` tool is force-kept regardless of the allowlist: it
+    /// is the only way the agent can signal the goal is reached and let the loop exit, so a
+    /// profile that omits it must not silently strip it.
     fn apply_tool_allow(
         &self,
         pool: Arc<dyn ToolRegistry>,
@@ -594,11 +598,22 @@ impl DefaultAgentCore {
         let Some(allow) = &self.tool_allow else {
             return Ok(pool);
         };
-        crate::session::filter_registry_by_allowlist(&pool, allow).map_err(|pattern| {
-            AgentError::Other(BoxError::new(io::Error::other(format!(
-                "profile allows tool pattern `{pattern}` matching nothing in the built-in or MCP tool pool"
-            ))))
-        })
+        let filtered =
+            crate::session::filter_registry_by_allowlist(&pool, allow).map_err(|pattern| {
+                AgentError::Other(BoxError::new(io::Error::other(format!(
+                    "profile allows tool pattern `{pattern}` matching nothing in the built-in or MCP tool pool"
+                ))))
+            })?;
+        if self.goal.is_some()
+            && filtered.get(crate::tool::GOAL_DONE_TOOL_NAME).is_none()
+            && let Some(goal_done) = pool.get(crate::tool::GOAL_DONE_TOOL_NAME)
+        {
+            let mut builder = StaticToolRegistry::builder();
+            builder = builder.insert(goal_done);
+            let overlay = Arc::new(builder.build()) as Arc<dyn ToolRegistry>;
+            return Ok(Arc::new(CompositeRegistry::new(overlay, filtered)));
+        }
+        Ok(filtered)
     }
 
     /// Look up the entry in the registry for the current [`TurnConfig::model`] and
