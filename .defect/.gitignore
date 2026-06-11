@@ -1,2 +1,4 @@
 config.local.toml
 *.md
+# 例外：发版流程等 workflow 文档随仓库提交，供人/AI 共同遵循。
+!workflow/*.md
