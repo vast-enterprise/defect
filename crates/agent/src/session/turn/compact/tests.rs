@@ -57,11 +57,32 @@ fn turn_start_requires_non_tool_result_user_content() {
 }
 
 #[test]
-fn single_turn_has_no_earlier_history_to_summarize() {
-    // A single user turn (the first message is the only turn start) → no earlier history,
-    // returns None.
+fn single_turn_falls_back_to_assistant_boundary() {
+    // A single user turn (the only turn start is at index 0) → the user-turn ruler yields
+    // nothing, so we fall back to the assistant boundary so the tail can still be split off
+    // and the head summarized. `[user, assistant]` → boundary at the assistant (index 1).
     let messages = vec![user("only"), assistant("reply")];
-    assert_eq!(select_boundary(&messages, 8_000), None);
+    assert_eq!(select_boundary(&messages, 8_000), Some(1));
+}
+
+#[test]
+fn single_turn_long_autonomous_loop_compacts_via_assistant_boundary() {
+    // Reproduces the real-world goal/autonomous case: one user input drives many tool
+    // round-trips with no further user message. The old user-turn-only ruler returned None
+    // here (compaction silently skipped, context grew unbounded). The assistant-boundary
+    // fallback must produce a non-zero boundary so the head can be summarized.
+    let mut messages = vec![user("do the whole task")]; // 0: the only turn start
+    for i in 0..20 {
+        messages.push(assistant_tool_use(&format!("call_{i}")));
+        messages.push(tool_result(&format!("call_{i}"), "output"));
+    }
+    let boundary = select_boundary(&messages, 8_000).expect("must compact, not skip");
+    assert!(boundary > 0, "head must be non-empty");
+    // The cut lands on an assistant message — never on a tool_result, which would orphan it.
+    assert_eq!(messages[boundary].role, Role::Assistant);
+    // And that assistant is a real round-trip start, not a dangling tool_result.
+    let (_head, tail) = messages.split_at(boundary);
+    assert_eq!(tail.first().expect("tail non-empty").role, Role::Assistant);
 }
 
 #[test]

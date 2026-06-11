@@ -123,15 +123,17 @@ pub(super) struct CompactionPlan {
 }
 
 /// Pure computation: selects a boundary in `messages` based on `threshold` and extracts
-/// the head. Returns `None` when no safe boundary exists (e.g., a single overly long turn
-/// or only one turn), letting the caller skip. Does not touch `History` or call the LLM.
+/// the head. Returns `None` only when there is genuinely nothing to summarize — i.e. no
+/// safe cut point `> 0` exists even with the assistant-boundary fallback (e.g. a history of
+/// a single message, or one whose only non-initial messages cannot form a non-empty head).
+/// Lets the caller skip. Does not touch `History` or call the LLM.
 pub(super) fn plan(messages: &[Message], threshold: u64) -> Option<CompactionPlan> {
     let tail_budget = (threshold / 4).clamp(MIN_TAIL_TOKENS, MAX_TAIL_TOKENS);
     let Some(boundary) = select_boundary(messages, tail_budget) else {
         tracing::warn!(
             messages = messages.len(),
             tail_budget,
-            "compaction skipped: no safe turn boundary to summarize before"
+            "compaction skipped: no safe boundary to summarize before (history too short to split)"
         );
         return None;
     };
@@ -194,17 +196,28 @@ pub(crate) async fn run_sync(
 /// Select the retention boundary: returns the index of the **first message to keep** (the
 /// start of the tail).
 ///
+/// Primary ruler — **user turn starts**:
 /// - A "turn start" is a message with `role == User` that contains at least one content
 ///   block that is not `ToolResult` (i.e., a real user input, not a tool-result
 ///   backfill).
 /// - Walk from the newest turn backward, accumulating tail size using a character-based
 ///   heuristic, keeping entire turns until `tail_budget` is exceeded.
-/// - The boundary must be `> 0` (so the head is non-empty and can be summarized). If
-///   there is only one turn (the newest turn starts at index 0) → return `None` (no
-///   earlier history to summarize).
+/// - The boundary must be `> 0` (so the head is non-empty and can be summarized).
 /// - If even the newest turn exceeds the budget (a single overly long turn), still use
 ///   that turn's start as the boundary (do not split inside a user message) and summarize
 ///   everything before it — provided that start is `> 0`.
+///
+/// Fallback ruler — **assistant message boundaries**:
+/// When the user-turn ruler yields nothing usable (only one user turn in the whole history,
+/// i.e. `last_start == 0` — the common case for a goal/autonomous loop where a single user
+/// input drives hundreds of tool round-trips), we would otherwise never compact and the
+/// context grows unbounded. In that case fall back to cutting at an **assistant message
+/// boundary**: keep the most recent assistant round-trips within `tail_budget` and summarize
+/// everything before. An assistant message start is a safe cut point — it never orphans a
+/// `tool_result` (a `tool_use`/`tool_result` pair always sits assistant-then-result, so the
+/// pair stays together on whichever side of the cut the assistant lands), unlike an
+/// arbitrary mid-pair split which `sanitize_tool_pairing` cannot repair (it backfills missing
+/// `tool_result`s but cannot remove a `tool_result` orphaned from its `tool_use`).
 fn select_boundary(messages: &[Message], tail_budget: u64) -> Option<usize> {
     let turn_starts: Vec<usize> = messages
         .iter()
@@ -213,19 +226,50 @@ fn select_boundary(messages: &[Message], tail_budget: u64) -> Option<usize> {
         .map(|(i, _)| i)
         .collect();
 
-    let last_start = *turn_starts.last()?;
-    // Only one turn (or the latest turn starts at the beginning) → no earlier history to
-    // summarize.
-    if last_start == 0 {
-        return None;
+    // Primary: cut at a user turn start (> 0) if there is more than one turn.
+    if let Some(&last_start) = turn_starts.last()
+        && last_start > 0
+    {
+        return Some(select_in_budget(
+            messages,
+            &turn_starts,
+            tail_budget,
+            last_start,
+        ));
     }
 
-    // Accumulate from the newest turn start backward; track the oldest start that still
-    // fits and is >0.
+    // Fallback: single user turn (or none). Cut at an assistant message boundary so a long
+    // single-turn autonomous loop still compacts. Requires a boundary > 0 to leave a
+    // non-empty head.
+    let assistant_starts: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| *i > 0 && m.role == Role::Assistant)
+        .map(|(i, _)| i)
+        .collect();
+    let last_assistant = *assistant_starts.last()?;
+    Some(select_in_budget(
+        messages,
+        &assistant_starts,
+        tail_budget,
+        last_assistant,
+    ))
+}
+
+/// Walk `boundaries` (ascending message indices, all `> 0`) from newest backward,
+/// accumulating tail size; return the oldest boundary whose tail still fits `tail_budget`.
+/// If even the newest single segment exceeds the budget, fall back to `min_boundary` (the
+/// newest boundary) so we never split below it. Callers guarantee `min_boundary > 0`.
+fn select_in_budget(
+    messages: &[Message],
+    boundaries: &[usize],
+    tail_budget: u64,
+    min_boundary: usize,
+) -> usize {
     let mut best: Option<usize> = None;
     let mut acc: u64 = 0;
     let mut next_boundary = messages.len();
-    for &start in turn_starts.iter().rev() {
+    for &start in boundaries.iter().rev() {
         acc = acc.saturating_add(estimate_range(messages, start, next_boundary));
         next_boundary = start;
         if start == 0 {
@@ -237,10 +281,7 @@ fn select_boundary(messages: &[Message], tail_budget: u64) -> Option<usize> {
             break;
         }
     }
-
-    // If `best` is set, use it; otherwise even the latest turn exceeds the budget, so
-    // fall back to the start of the latest turn (`last_start` is guaranteed > 0).
-    Some(best.unwrap_or(last_start))
+    best.unwrap_or(min_boundary)
 }
 
 /// Whether this is a "turn start": a real user input message.
