@@ -24,7 +24,7 @@ use defect_agent::session::{
     AgentCore, AgentError, Frontend, ModelSelection, Session, TurnError, new_session_id,
 };
 use defect_agent::shell::ShellBackend;
-use defect_tools::{LocalFsBackend, LocalShellBackend};
+use defect_tools::{DEFAULT_MAX_OUTPUT_BYTES, LocalFsBackend, LocalShellBackend};
 use futures::StreamExt;
 use serde_json::json;
 
@@ -488,6 +488,9 @@ struct ServeState {
     /// Shell backend selection. Defaults to `Local` — same conservative fallback as
     /// [`Self::fs_mode`].
     shell_mode: RwLock<ShellMode>,
+    /// Captured-output cap (bytes) for the local shell backend, from
+    /// `[tools.bash].output_max_bytes`. Honored when `shell_mode == Local`.
+    shell_output_max_bytes: usize,
     /// `--resume` target. The ACP client drives the session lifecycle; the CLI cannot
     /// directly initiate a load, so the target id is stored here: the **first**
     /// `session/new` transparently switches to `load_session` and replays that session,
@@ -496,11 +499,16 @@ struct ServeState {
 }
 
 impl ServeState {
-    fn with_resume(agent: Arc<dyn AgentCore>, resume_target: Option<SessionId>) -> Self {
+    fn with_resume(
+        agent: Arc<dyn AgentCore>,
+        resume_target: Option<SessionId>,
+        shell_output_max_bytes: usize,
+    ) -> Self {
         Self {
             agent,
             fs_mode: RwLock::new(FsMode::Local),
             shell_mode: RwLock::new(ShellMode::Local),
+            shell_output_max_bytes,
             resume_target: RwLock::new(resume_target),
         }
     }
@@ -563,7 +571,9 @@ impl ServeState {
                 session_id.clone(),
                 cwd.to_path_buf(),
             )),
-            ShellMode::Local => Arc::new(LocalShellBackend::new()),
+            ShellMode::Local => Arc::new(LocalShellBackend::with_max_output_bytes(
+                self.shell_output_max_bytes,
+            )),
         }
     }
 
@@ -883,8 +893,9 @@ pub async fn serve(agent: Arc<dyn AgentCore>) -> Result<(), AcpError> {
 pub async fn serve_with_resume(
     agent: Arc<dyn AgentCore>,
     resume: Option<SessionId>,
+    shell_output_max_bytes: usize,
 ) -> Result<(), AcpError> {
-    serve_on_with_resume(agent, Stdio::new(), resume).await
+    serve_on_with_resume_capped(agent, Stdio::new(), resume, shell_output_max_bytes).await
 }
 
 /// Runs the same ACP handler on a custom transport.
@@ -898,7 +909,9 @@ where
     serve_on_with_resume(agent, transport, None).await
 }
 
-/// [`serve_on`] with a one-shot resume target. See [`serve_with_resume`].
+/// [`serve_on`] with a one-shot resume target. See [`serve_with_resume`]. Uses the default
+/// shell-output cap ([`DEFAULT_MAX_OUTPUT_BYTES`]); the CLI path uses
+/// [`serve_with_resume`] to honor `[tools.bash].output_max_bytes`.
 pub async fn serve_on_with_resume<T>(
     agent: Arc<dyn AgentCore>,
     transport: T,
@@ -907,7 +920,23 @@ pub async fn serve_on_with_resume<T>(
 where
     T: ConnectTo<Agent> + 'static,
 {
-    let state = Arc::new(ServeState::with_resume(agent, resume));
+    serve_on_with_resume_capped(agent, transport, resume, DEFAULT_MAX_OUTPUT_BYTES).await
+}
+
+async fn serve_on_with_resume_capped<T>(
+    agent: Arc<dyn AgentCore>,
+    transport: T,
+    resume: Option<SessionId>,
+    shell_output_max_bytes: usize,
+) -> Result<(), AcpError>
+where
+    T: ConnectTo<Agent> + 'static,
+{
+    let state = Arc::new(ServeState::with_resume(
+        agent,
+        resume,
+        shell_output_max_bytes,
+    ));
 
     Agent
         .builder()

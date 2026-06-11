@@ -150,6 +150,11 @@ pub struct BuiltCliAgent {
     pub resume_session_id: Option<SessionId>,
     pub sandbox_mode: SandboxMode,
     pub turn_config: TurnConfig,
+    /// Captured-output cap (bytes) for the local shell backend, from
+    /// `[tools.bash].output_max_bytes`. Threaded to every frontend that builds a
+    /// `LocalShellBackend` (REPL / oneshot / ACP local mode) so the limit is honored
+    /// regardless of entry point.
+    pub shell_output_max_bytes: usize,
     /// Shared state handle for `--goal` mode (`None` otherwise). The oneshot runner reads
     /// [`GoalState::is_reached`](defect_agent::session::GoalState::is_reached) after each
     /// turn — if retries are exhausted without reaching the goal, it exits with a
@@ -475,6 +480,7 @@ impl CliAgentBuilder {
             resume_session_id,
             sandbox_mode,
             turn_config,
+            shell_output_max_bytes: self.config.effective.tools.bash.output_max_bytes,
             goal: self.goal,
         })
     }

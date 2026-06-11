@@ -16,4 +16,4 @@ pub use bash::BashTool;
 pub use fetch::FetchTool;
 pub use fs::{EditFileTool, LocalFsBackend, ReadFileTool, WriteFileTool};
 pub use search::SearchTool;
-pub use shell::LocalShellBackend;
+pub use shell::{DEFAULT_MAX_OUTPUT_BYTES, LocalShellBackend};

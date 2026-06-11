@@ -255,7 +255,7 @@ subagent_max_depth = 4
 | `max_llm_retries` | u32 | — | LLM 重试上限 |
 | `max_concurrent_tools` | usize | — | 工具并发执行数 |
 | `max_hook_continues` | u32 | 3 | `before_turn_end` hook 强制续转的最大次数 |
-| `subagent_max_depth` | u32 | 4 | 子 agent 垂直递归深度；`0` = 禁止派发任何子 agent（顶层工具集不含 `spawn_agent`） |
+| `subagent_max_depth` | u32 | 1 | 子 agent 垂直递归深度；默认 1 = 主 agent 能派子 agent 但子 agent 不能再派（常见的非递归策略），调大以支持"主 agent → 协调子 agent → 工作子 agent"这类嵌套编排；`0` = 禁止派发任何子 agent（顶层工具集不含 `spawn_agent`） |
 
 **三档压缩水位约束**（违反则启动报错）：每个 ratio 必须在 `(0, 1]`，且 `microcompact_ratio ≤ compact_soft_ratio < compact_ratio`。
 
@@ -283,6 +283,7 @@ subagent_max_depth = 4
 |---|---|---|---|
 | `default_timeout_ms` | u64 | 30000 | 默认命令超时 |
 | `max_timeout_ms` | u64 | 600000 | 超时上限 |
+| `output_max_bytes` | usize | 1 MiB | 单条命令捕获的 stdout/stderr 合并上限，超出部分丢弃并计入 truncated（本地 shell backend；REPL / oneshot / ACP 本地模式都生效） |
 
 ### `[tools.fs]`
 
@@ -325,6 +326,7 @@ subagent_max_depth = 4
 |---|---|---|---|
 | `default_recent_blocks` | usize | 10 | `inspect` 未带 `recent_blocks` 时返回的最近块数 |
 | `block_text_limit` | usize | 0 | 单块正文字符上限；`0` = 只保留摘要/元数据 |
+| `finished_tasks_cap` | usize | 64 | 任务表里保留的已完成任务条数上限，超出按完成顺序淘汰最旧的；限制长会话累积的内存占用（运行中的任务不计入，始终可查/可中断） |
 
 ---
 

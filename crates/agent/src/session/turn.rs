@@ -985,9 +985,11 @@ pub(crate) const DEFAULT_MAX_HOOK_CONTINUES: u32 = 3;
 /// Default upper bound for subagent vertical recursion depth. Counted from the top-level
 /// turn: N levels means the top turn can spawn subagents, their children can spawn
 /// further, and so on, until the Nth level (where `subagent_max_depth` reaches 0) can no
-/// longer call `spawn_agent`. The default of 4 leaves room for orchestrations like "main
-/// agent → coordinator subagent → worker subagent" while preventing runaway vertical
-/// growth. Horizontal runaway is separately guarded by `request_limit`.
+/// longer call `spawn_agent`. The default of 1 means the main agent can spawn subagents
+/// but those subagents cannot spawn further (the common non-recursive policy); raise it
+/// via `[turn].subagent_max_depth` for orchestrations like "main agent → coordinator
+/// subagent → worker subagent". Horizontal runaway is separately guarded by
+/// `request_limit`.
 pub(crate) const DEFAULT_SUBAGENT_MAX_DEPTH: u32 = 1;
 
 struct TurnState {

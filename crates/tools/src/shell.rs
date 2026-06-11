@@ -29,18 +29,29 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Notify;
 
-const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+/// Default per-terminal captured-output cap (1 MiB). Output beyond this is dropped and
+/// counted as `truncated`.
+pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// Local shell backend: each command spawns a `sh -c` child process, with state managed
 /// in the `terminals` table until `release`.
 pub struct LocalShellBackend {
     terminals: Mutex<HashMap<TerminalId, Arc<TerminalState>>>,
+    /// Maximum bytes of merged stdout/stderr captured per terminal; excess is truncated.
+    max_output_bytes: usize,
 }
 
 impl LocalShellBackend {
     pub fn new() -> Self {
+        Self::with_max_output_bytes(DEFAULT_MAX_OUTPUT_BYTES)
+    }
+
+    /// Constructs a backend with an explicit captured-output cap. `0` is clamped to `1` so
+    /// at least one byte can always be captured.
+    pub fn with_max_output_bytes(max_output_bytes: usize) -> Self {
         Self {
             terminals: Mutex::new(HashMap::new()),
+            max_output_bytes: max_output_bytes.max(1),
         }
     }
 
@@ -103,7 +114,7 @@ impl ShellBackend for LocalShellBackend {
 
             let id = next_terminal_id();
             let state = Arc::new(TerminalState {
-                output: Mutex::new(OutputBuffer::new()),
+                output: Mutex::new(OutputBuffer::new(self.max_output_bytes)),
                 exit: Mutex::new(None),
                 exit_notify: Notify::new(),
                 kill_notify: Notify::new(),
@@ -356,18 +367,20 @@ fn build_command(command: &str) -> Command {
 struct OutputBuffer {
     bytes: Vec<u8>,
     truncated: u64,
+    max_bytes: usize,
 }
 
 impl OutputBuffer {
-    fn new() -> Self {
+    fn new(max_bytes: usize) -> Self {
         Self {
             bytes: Vec::new(),
             truncated: 0,
+            max_bytes,
         }
     }
 
     fn push(&mut self, chunk: &[u8]) {
-        let remaining = MAX_OUTPUT_BYTES.saturating_sub(self.bytes.len());
+        let remaining = self.max_bytes.saturating_sub(self.bytes.len());
         if remaining == 0 {
             self.truncated += chunk.len() as u64;
             return;

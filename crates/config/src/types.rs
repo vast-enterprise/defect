@@ -15,6 +15,7 @@ pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-chat";
 pub(crate) const DEFAULT_ECHO_MODEL: &str = "echo";
 pub(crate) const DEFAULT_BASH_TIMEOUT_MS: u64 = 30_000;
 pub(crate) const DEFAULT_BASH_MAX_TIMEOUT_MS: u64 = 600_000;
+pub(crate) const DEFAULT_BASH_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
 pub(crate) const DEFAULT_FS_READ_LIMIT: u32 = 2_000;
 pub(crate) const DEFAULT_FS_READ_MAX_LIMIT: u32 = 5_000;
 
@@ -542,6 +543,9 @@ pub enum FetchFormat {
 pub struct BashToolConfig {
     pub default_timeout_ms: u64,
     pub max_timeout_ms: u64,
+    /// Maximum bytes of merged stdout/stderr captured per command; output beyond this is
+    /// dropped and reported as truncated. Applies to the local shell backend.
+    pub output_max_bytes: usize,
 }
 
 impl Default for BashToolConfig {
@@ -549,6 +553,7 @@ impl Default for BashToolConfig {
         Self {
             default_timeout_ms: DEFAULT_BASH_TIMEOUT_MS,
             max_timeout_ms: DEFAULT_BASH_MAX_TIMEOUT_MS,
+            output_max_bytes: DEFAULT_BASH_OUTPUT_MAX_BYTES,
         }
     }
 }
@@ -1098,6 +1103,9 @@ pub(crate) struct BackgroundToolSection {
     /// Character limit for free-form body text in a single block (assistant/thought/tool
     /// result). Default 0 = keep only summary/metadata.
     pub(crate) block_text_limit: Option<usize>,
+    /// How many finished background-task entries to retain in the task table before the
+    /// oldest are evicted. Default 64. Bounds memory for long sessions with many tasks.
+    pub(crate) finished_tasks_cap: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1129,6 +1137,7 @@ pub(crate) struct FetchToolSection {
 pub(crate) struct BashToolSection {
     pub(crate) default_timeout_ms: Option<u64>,
     pub(crate) max_timeout_ms: Option<u64>,
+    pub(crate) output_max_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

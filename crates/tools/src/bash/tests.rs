@@ -72,6 +72,7 @@ async fn uses_configured_timeout_limits() {
     let tool = BashTool::from_config(&BashToolConfig {
         default_timeout_ms: 10,
         max_timeout_ms: 10,
+        ..BashToolConfig::default()
     });
     let ctx = ctx_with(dir.path(), CancellationToken::new());
     let events = drive(tool.execute(json!({"command": "sleep 1"}), ctx)).await;

@@ -13,7 +13,8 @@ use crate::overrides::{build_cli_layer, merge_toml_values};
 use crate::types::{
     BasePromptConfigFile, BashToolConfig, CapabilitiesConfig, CliConfig, ConfigError,
     ConfigLayerEntry, ConfigLayerStack, ConfigSource, ConfigToml, ConfigWarning,
-    DEFAULT_ANTHROPIC_MODEL, DEFAULT_BASH_MAX_TIMEOUT_MS, DEFAULT_BASH_TIMEOUT_MS,
+    DEFAULT_ANTHROPIC_MODEL, DEFAULT_BASH_MAX_TIMEOUT_MS, DEFAULT_BASH_OUTPUT_MAX_BYTES,
+    DEFAULT_BASH_TIMEOUT_MS,
     DEFAULT_DEEPSEEK_MODEL, DEFAULT_ECHO_MODEL, DEFAULT_FS_READ_LIMIT, DEFAULT_FS_READ_MAX_LIMIT,
     DEFAULT_OPENAI_MODEL, EffectiveConfig, FetchToolConfig, FsToolConfig, HooksConfig,
     HttpClientConfig, HttpProxyConfig, HttpProxySettings, LangfuseConfig, LoadConfigOptions,
@@ -401,6 +402,9 @@ fn build_effective_config(
             block_text_limit: cfg
                 .block_text_limit
                 .unwrap_or(background_default.block_text_limit),
+            finished_tasks_cap: cfg
+                .finished_tasks_cap
+                .unwrap_or(background_default.finished_tasks_cap),
         })
         .unwrap_or(background_default);
 
@@ -445,6 +449,9 @@ fn build_effective_config(
                 .map(|cfg| BashToolConfig {
                     default_timeout_ms: cfg.default_timeout_ms.unwrap_or(DEFAULT_BASH_TIMEOUT_MS),
                     max_timeout_ms: cfg.max_timeout_ms.unwrap_or(DEFAULT_BASH_MAX_TIMEOUT_MS),
+                    output_max_bytes: cfg
+                        .output_max_bytes
+                        .unwrap_or(DEFAULT_BASH_OUTPUT_MAX_BYTES),
                 })
                 .unwrap_or_default(),
             fs: config

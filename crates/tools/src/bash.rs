@@ -23,8 +23,6 @@ use futures::stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const DEFAULT_TIMEOUT_MS: u64 = 30_000;
-const MAX_TIMEOUT_MS: u64 = 600_000;
 const TITLE_TRUNC: usize = 80;
 
 /// Built-in bash tool. No internal state — a singleton `Arc::new(BashTool::new())`
@@ -37,10 +35,7 @@ pub struct BashTool {
 
 impl BashTool {
     pub fn new() -> Self {
-        Self::from_config(&BashToolConfig {
-            default_timeout_ms: DEFAULT_TIMEOUT_MS,
-            max_timeout_ms: MAX_TIMEOUT_MS,
-        })
+        Self::from_config(&BashToolConfig::default())
     }
 
     pub fn from_config(config: &BashToolConfig) -> Self {

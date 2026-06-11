@@ -56,7 +56,7 @@ use futures::{FutureExt, StreamExt};
 use tokio::io::{AsyncWriteExt, Stdout};
 
 use crate::args::OutputFormat;
-use crate::session_open::open_session;
+use crate::session_open::{LocalSessionOpts, open_local_session};
 
 /// Runs a single-turn prompt and returns the process exit code.
 ///
@@ -72,6 +72,7 @@ use crate::session_open::open_session;
 /// turn ends (turns exhausted without ever calling `goal_done`), exits with the
 /// Exhausted code —— prevents CI from mistaking "ran out of turns without
 /// reaching the goal" for success.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     agent: Arc<dyn AgentCore>,
     cwd: PathBuf,
@@ -80,12 +81,21 @@ pub async fn run(
     resume: Option<SessionId>,
     track_denied: bool,
     goal: Option<Arc<defect_agent::session::GoalState>>,
+    shell_output_max_bytes: usize,
 ) -> anyhow::Result<ExitCode> {
     let prompt = resolve_prompt(message).await?;
 
     let mut out = tokio::io::stdout();
 
-    let session = open_session(&agent, &cwd, resume).await?;
+    let session = open_local_session(
+        &agent,
+        &cwd,
+        LocalSessionOpts {
+            resume,
+            shell_output_max_bytes,
+        },
+    )
+    .await?;
 
     // Subscribe once outside the loop, draining across this turn (including the
     // driver's autonomous turn continuations) —— isomorphic to the interactive

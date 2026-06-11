@@ -62,10 +62,8 @@ use crate::session::History;
 /// `recent_blocks` is not specified.
 const DEFAULT_RECENT_BLOCKS: usize = 10;
 
-/// How many **finished** task entries to keep in the `tasks` table. Running entries don't
-/// count toward the cap—they must remain to be cancelable/peekable. When the cap is
-/// exceeded, the oldest finished entry is evicted.
-const FINISHED_TASKS_CAP: usize = 64;
+/// Default for [`BackgroundProgressConfig::finished_tasks_cap`].
+const DEFAULT_FINISHED_TASKS_CAP: usize = 64;
 
 /// Configuration for the background task **progress view**.
 ///
@@ -94,6 +92,11 @@ pub struct BackgroundProgressConfig {
     /// tool name) — this is the default, and minimizes pollution of the main agent's
     /// context.
     pub block_text_limit: usize,
+    /// How many **finished** task entries to keep in the `tasks` table. Running entries
+    /// don't count toward the cap — they must remain to be cancelable/peekable. When the
+    /// cap is exceeded, the oldest finished entry is evicted. Bounds the memory footprint
+    /// of long-lived sessions that spawn many background tasks.
+    pub finished_tasks_cap: usize,
 }
 
 impl Default for BackgroundProgressConfig {
@@ -103,6 +106,7 @@ impl Default for BackgroundProgressConfig {
             // By default, only summary/metadata is provided, not the full body — the goal
             // is an overview, not context transfer.
             block_text_limit: 0,
+            finished_tasks_cap: DEFAULT_FINISHED_TASKS_CAP,
         }
     }
 }
@@ -357,12 +361,15 @@ struct BackgroundInner {
     /// entries.
     next_finished_seq: u64,
     /// All tasks (running + recently finished). When finished entries exceed
-    /// [`FINISHED_TASKS_CAP`], the oldest are evicted.
+    /// [`finished_tasks_cap`](Self::finished_tasks_cap), the oldest are evicted.
     tasks: BTreeMap<String, TaskEntry>,
     /// Completed results pending drain (FIFO). Emptied by `drain_completed`. Orthogonal
     /// to the `tasks` table: this drives passive draining, while `tasks` supports
     /// control-plane queries and interrupts.
     completed: Vec<BackgroundOutcome>,
+    /// Cap on retained finished entries (from
+    /// [`BackgroundProgressConfig::finished_tasks_cap`]).
+    finished_tasks_cap: usize,
 }
 
 impl BackgroundInner {
@@ -387,11 +394,11 @@ impl BackgroundInner {
             .iter()
             .filter_map(|(id, e)| e.finished_seq.map(|seq| (seq, id.clone())))
             .collect();
-        if finished.len() <= FINISHED_TASKS_CAP {
+        if finished.len() <= self.finished_tasks_cap {
             return;
         }
         finished.sort_by_key(|(seq, _)| *seq);
-        let drop_count = finished.len() - FINISHED_TASKS_CAP;
+        let drop_count = finished.len() - self.finished_tasks_cap;
         for (_, id) in finished.into_iter().take(drop_count) {
             self.tasks.remove(&id);
         }
@@ -434,6 +441,7 @@ impl BackgroundTasks {
                 next_finished_seq: 0,
                 tasks: BTreeMap::new(),
                 completed: Vec::new(),
+                finished_tasks_cap: progress_config.finished_tasks_cap,
             })),
         }
     }

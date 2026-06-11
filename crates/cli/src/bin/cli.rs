@@ -118,12 +118,23 @@ async fn main() -> anyhow::Result<ExitCode> {
             built.resume_session_id,
             track_denied,
             built.goal,
+            built.shell_output_max_bytes,
         )
         .await;
     } else if cli.repl {
-        run_repl(built.agent, built.resume_session_id).await?;
+        run_repl(
+            built.agent,
+            built.resume_session_id,
+            built.shell_output_max_bytes,
+        )
+        .await?;
     } else {
-        defect_acp::serve_with_resume(built.agent, built.resume_session_id).await?;
+        defect_acp::serve_with_resume(
+            built.agent,
+            built.resume_session_id,
+            built.shell_output_max_bytes,
+        )
+        .await?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -141,8 +152,19 @@ async fn run_oneshot(
     resume: Option<SessionId>,
     track_denied: bool,
     goal: Option<Arc<defect_agent::session::GoalState>>,
+    shell_output_max_bytes: usize,
 ) -> anyhow::Result<ExitCode> {
-    defect_cli::oneshot::run(agent, cwd, message, format, resume, track_denied, goal).await
+    defect_cli::oneshot::run(
+        agent,
+        cwd,
+        message,
+        format,
+        resume,
+        track_denied,
+        goal,
+        shell_output_max_bytes,
+    )
+    .await
 }
 
 #[cfg(not(feature = "oneshot"))]
@@ -155,6 +177,7 @@ async fn run_oneshot(
     _resume: Option<SessionId>,
     _track_denied: bool,
     _goal: Option<Arc<defect_agent::session::GoalState>>,
+    _shell_output_max_bytes: usize,
 ) -> anyhow::Result<ExitCode> {
     anyhow::bail!(
         "this binary was built without the `oneshot` feature; \
@@ -166,13 +189,21 @@ async fn run_oneshot(
 /// disabled, the flag is still parsed but fails at runtime with a hard error instructing
 /// the user to rebuild with the feature enabled — it does not silently degrade to ACP.
 #[cfg(feature = "repl")]
-async fn run_repl(agent: Arc<dyn AgentCore>, resume: Option<SessionId>) -> anyhow::Result<()> {
+async fn run_repl(
+    agent: Arc<dyn AgentCore>,
+    resume: Option<SessionId>,
+    shell_output_max_bytes: usize,
+) -> anyhow::Result<()> {
     let cwd = env::current_dir()?;
-    defect_cli::repl::run(agent, cwd, resume).await
+    defect_cli::repl::run(agent, cwd, resume, shell_output_max_bytes).await
 }
 
 #[cfg(not(feature = "repl"))]
-async fn run_repl(_agent: Arc<dyn AgentCore>, _resume: Option<SessionId>) -> anyhow::Result<()> {
+async fn run_repl(
+    _agent: Arc<dyn AgentCore>,
+    _resume: Option<SessionId>,
+    _shell_output_max_bytes: usize,
+) -> anyhow::Result<()> {
     anyhow::bail!(
         "this binary was built without the `repl` feature; \
          rebuild with `--features repl` (on by default) to use --repl"

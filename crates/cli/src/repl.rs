@@ -51,7 +51,7 @@ use owo_colors::OwoColorize;
 use tokio::io::{AsyncWriteExt, Stdout};
 use tokio::sync::mpsc;
 
-use crate::session_open::open_session;
+use crate::session_open::{LocalSessionOpts, open_local_session};
 
 /// The user input prompt. Shared by the live input line and history replay so that a
 /// replayed user message looks identical to one freshly typed (the two used to diverge:
@@ -68,10 +68,19 @@ pub async fn run(
     agent: Arc<dyn AgentCore>,
     cwd: PathBuf,
     resume: Option<SessionId>,
+    shell_output_max_bytes: usize,
 ) -> anyhow::Result<()> {
     let mut out = tokio::io::stdout();
 
-    let session = open_session(&agent, &cwd, resume).await?;
+    let session = open_local_session(
+        &agent,
+        &cwd,
+        LocalSessionOpts {
+            resume,
+            shell_output_max_bytes,
+        },
+    )
+    .await?;
 
     let banner = format!(
         "defect repl — {} @ {}\n\
