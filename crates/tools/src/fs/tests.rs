@@ -843,7 +843,11 @@ async fn case32_edit_crlf_file_with_lf_old_string_matches() {
     ))
     .await;
     assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], ToolEvent::Completed(_)), "got {:?}", events[0]);
+    assert!(
+        matches!(events[0], ToolEvent::Completed(_)),
+        "got {:?}",
+        events[0]
+    );
     let raw = extract_raw(&events[0]);
     assert_eq!(raw["matched_strategy"], json!("exact"));
     assert_eq!(h.read_file("crlf.rs"), b"fn f() {\r\n    c();\r\n}\r\n");

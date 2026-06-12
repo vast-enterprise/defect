@@ -282,9 +282,7 @@ fn middle_similarity(
 }
 
 fn whitespace_normalized_replacer(content: &str, find: &str) -> Vec<String> {
-    let normalize = |t: &str| {
-        t.split_whitespace().collect::<Vec<_>>().join(" ")
-    };
+    let normalize = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
     let normalized_find = normalize(find);
     let lines: Vec<&str> = content.split('\n').collect();
     let mut out = Vec::new();
