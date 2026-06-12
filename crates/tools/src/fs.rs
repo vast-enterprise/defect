@@ -3,6 +3,7 @@
 mod edit;
 mod local_backend;
 mod read;
+mod replacer;
 mod write;
 
 #[cfg(test)]

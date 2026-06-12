@@ -789,10 +789,12 @@ async fn case20_edit_crlf_file_with_lf_new_string_keeps_crlf() {
 }
 
 #[tokio::test]
-async fn case29_edit_not_found_hints_whitespace_mismatch() {
-    // File has the block indented; old_string has the same lines but wrong indentation.
-    // Strict matching still fails (no silent edit), but the error must point at the
-    // whitespace mismatch so the model can self-correct instead of guessing.
+async fn case29_edit_recovers_from_wrong_indentation_via_fallback() {
+    // File has the block indented; old_string has the same lines but no indentation.
+    // Exact matching fails, but the fault-tolerant chain locates the real (indented)
+    // span and edits it. Note the documented caveat: the matched span includes the
+    // line's leading indentation, so splicing the (unindented) new_string drops that
+    // indentation. This is surfaced via `matched_strategy != "exact"`.
     let h = Harness::new();
     h.write_file(
         "code.rs",
@@ -803,22 +805,64 @@ async fn case29_edit_not_found_hints_whitespace_mismatch() {
         json!({
             "path": "code.rs",
             "old_string": "let x = 1;\nlet y = 2;",
-            "new_string": "let x = 10;\nlet y = 20;",
+            "new_string": "let z = 3;",
         }),
         h.ctx(),
     ))
     .await;
     assert_eq!(events.len(), 1);
     assert!(
-        matches!(events[0], ToolEvent::Failed(ToolError::InvalidArgs(_))),
+        matches!(events[0], ToolEvent::Completed(_)),
         "got {:?}",
         events[0]
     );
-    let err_str = format!("{:?}", events[0]);
-    assert!(err_str.contains("indentation differs"), "err: {err_str}");
-    // file untouched
-    assert_eq!(
-        h.read_file("code.rs"),
-        b"fn main() {\n    let x = 1;\n    let y = 2;\n}\n"
-    );
+    let raw = extract_raw(&events[0]);
+    assert_eq!(raw["matches_replaced"], json!(1));
+    // The non-exact strategy is surfaced so the fuzzy match is observable.
+    assert_eq!(raw["matched_strategy"], json!("line_trimmed"));
+    // Indentation of the matched span is not preserved (documented fallback caveat).
+    assert_eq!(h.read_file("code.rs"), b"fn main() {\nlet z = 3;\n}\n");
+}
+
+#[tokio::test]
+async fn case32_edit_crlf_file_with_lf_old_string_matches() {
+    // Headline CRLF fix: file is CRLF, model sends a multi-line old_string with LF (as it
+    // almost always does). Before the line-ending normalization, the exact byte match
+    // failed on every internal line break. Now old/new are converted to the file's ending
+    // before matching, so a clean exact match succeeds and CRLF round-trips.
+    let h = Harness::new();
+    h.write_file("crlf.rs", b"fn f() {\r\n    a();\r\n    b();\r\n}\r\n");
+    let tool = EditFileTool::new();
+    let events = drive(tool.execute(
+        json!({
+            "path": "crlf.rs",
+            "old_string": "    a();\n    b();",
+            "new_string": "    c();",
+        }),
+        h.ctx(),
+    ))
+    .await;
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], ToolEvent::Completed(_)), "got {:?}", events[0]);
+    let raw = extract_raw(&events[0]);
+    assert_eq!(raw["matched_strategy"], json!("exact"));
+    assert_eq!(h.read_file("crlf.rs"), b"fn f() {\r\n    c();\r\n}\r\n");
+}
+
+#[tokio::test]
+async fn case31_edit_exact_match_reports_exact_strategy() {
+    // Regression guard: a clean exact match must still take the strict path and report
+    // "exact", never a fuzzy fallback.
+    let h = Harness::new();
+    h.write_file("e.txt", "alpha BETA gamma\n");
+    let tool = EditFileTool::new();
+    let events = drive(tool.execute(
+        json!({"path": "e.txt", "old_string": "BETA", "new_string": "delta"}),
+        h.ctx(),
+    ))
+    .await;
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], ToolEvent::Completed(_)));
+    let raw = extract_raw(&events[0]);
+    assert_eq!(raw["matched_strategy"], json!("exact"));
 }

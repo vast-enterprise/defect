@@ -22,6 +22,8 @@ use futures::stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::replacer::{EditOutcome, replace};
+
 pub struct EditFileTool {
     schema: ToolSchema,
 }
@@ -32,9 +34,11 @@ impl EditFileTool {
             schema: ToolSchema {
                 name: "edit_file".to_string(),
                 description: "Replace a string in a UTF-8 text file. \
-                              Performs an exact string replacement; \
-                              fails if `old_string` is not found, or if it appears multiple times \
-                              unless `replace_all` is true. \
+                              Prefers an exact match; if that fails it falls back to \
+                              progressively looser matching (ignoring leading/trailing \
+                              whitespace, indentation, and line-ending differences). \
+                              Fails if `old_string` cannot be located, or if the match is \
+                              not unique unless `replace_all` is true. \
                               Path must be inside the workspace root."
                     .to_string(),
                 input_schema: json!({
@@ -87,6 +91,10 @@ struct EditFileOutput {
     matches_replaced: u32,
     bytes_before: u64,
     bytes_after: u64,
+    /// Which match level succeeded: `"exact"` for the strict path, or the name of the
+    /// fallback matcher (e.g. `"line_trimmed"`). Surfaced so fuzzy matches are observable
+    /// rather than silent.
+    matched_strategy: &'static str,
 }
 
 impl Tool for EditFileTool {
@@ -172,35 +180,33 @@ async fn run_edit(
     // conflict detection is best-effort and should not block the main flow.
     let baseline_fp = fs.fingerprint(path.clone()).await.ok();
 
-    let (new_content, matches_replaced) = match apply_edit(
-        &old_content,
-        &parsed.old_string,
-        &parsed.new_string,
-        parsed.replace_all,
-    ) {
-        Ok(v) => v,
-        Err(EditOutcome::NotFound) => {
-            // Strict exact matching failed. Before giving up, check whether a block exists
-            // that is identical except for per-line leading/trailing whitespace. If so, the
-            // model almost certainly got the indentation wrong — say so explicitly instead
-            // of a bare "not found", so it can re-read and fix the whitespace rather than
-            // guess. We never edit on a whitespace-only match (that would be a silent,
-            // possibly-wrong replacement); we only improve the diagnostic.
-            let msg = if whitespace_insensitive_block_count(&old_content, &parsed.old_string) > 0 {
-                "old_string not found. A block matching it except for leading/trailing \
-                 whitespace exists — the indentation differs. Re-read the file and copy the \
-                 exact whitespace, or use replace_all if it is intentionally repeated."
-            } else {
-                "old_string not found"
-            };
-            return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(arg_err(msg))));
-        }
-        Err(EditOutcome::Ambiguous(n)) => {
-            return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(arg_err(&format!(
-                "old_string matched {n} times; add unique context or set replace_all"
-            )))));
-        }
-    };
+    // Match in the file's own line-ending space. The model almost always sends LF in
+    // `old_string`; if the file is CRLF, an exact match would fail on every line. Convert
+    // `old`/`new` to the file's dominant ending before matching so the replacer chain
+    // operates on comparable bytes. (The backend re-normalizes on write regardless, but
+    // that does not help the *match* step.)
+    let crlf = is_crlf(&old_content);
+    let old_norm = to_ending(&parsed.old_string, crlf);
+    let new_norm = to_ending(&parsed.new_string, crlf);
+
+    let (new_content, matches_replaced, matched_strategy) =
+        match replace(&old_content, &old_norm, &new_norm, parsed.replace_all) {
+            Ok(v) => v,
+            Err(EditOutcome::NotFound) => {
+                return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(arg_err(
+                    "old_string not found. It must match the file content; copy the exact \
+                     text including whitespace and indentation, or re-read the file.",
+                ))));
+            }
+            Err(EditOutcome::Ambiguous(n)) => {
+                return ToolEvent::Failed(ToolError::InvalidArgs(BoxError::new(arg_err(
+                    &format!(
+                        "old_string matched {n} times; add unique surrounding context or set \
+                         replace_all"
+                    ),
+                ))));
+            }
+        };
 
     let bytes_before = old_content.len() as u64;
     let bytes_after = new_content.len() as u64;
@@ -234,65 +240,46 @@ async fn run_edit(
         matches_replaced,
         bytes_before,
         bytes_after,
+        matched_strategy,
     })
     .unwrap_or(serde_json::Value::Null);
+
+    // When a non-exact matcher hit, the spliced replacement does not preserve the
+    // region's original whitespace/indentation — make that observable to the model.
+    let note = if matched_strategy == "exact" {
+        format!("Replaced {matches_replaced} occurrence(s)")
+    } else {
+        format!(
+            "Replaced {matches_replaced} occurrence(s) (matched via `{matched_strategy}` \
+             fallback — exact text did not match; verify indentation/whitespace is correct)"
+        )
+    };
 
     let diff = Diff::new(path, new_content).old_text(Some(old_content));
     let mut fields = ToolCallUpdateFields::default();
     fields.content = Some(vec![
         ToolCallContent::Diff(diff),
-        ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(format!(
-            "Replaced {matches_replaced} occurrence(s)"
-        ))))),
+        ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(note)))),
     ]);
     fields.raw_output = Some(raw_output);
     ToolEvent::Completed(fields)
 }
 
-enum EditOutcome {
-    NotFound,
-    /// Number of matches (≥ 2)
-    Ambiguous(u32),
+/// Returns whether `text`'s dominant line ending is CRLF (more `\r\n` than lone `\n`).
+fn is_crlf(text: &str) -> bool {
+    let crlf = text.matches("\r\n").count();
+    let lone_lf = text.matches('\n').count().saturating_sub(crlf);
+    crlf > lone_lf
 }
 
-fn apply_edit(
-    text: &str,
-    old: &str,
-    new: &str,
-    replace_all: bool,
-) -> Result<(String, u32), EditOutcome> {
-    if replace_all {
-        let count = text.matches(old).count() as u32;
-        if count == 0 {
-            return Err(EditOutcome::NotFound);
-        }
-        Ok((text.replace(old, new), count))
-    } else {
-        let count = text.matches(old).count();
-        match count {
-            0 => Err(EditOutcome::NotFound),
-            1 => Ok((text.replacen(old, new, 1), 1)),
-            n => Err(EditOutcome::Ambiguous(n as u32)),
-        }
+/// Converts `s` (assumed LF or mixed) to the target line ending. When `crlf` is true,
+/// every `\n` becomes `\r\n` (after first collapsing any existing `\r\n` to avoid
+/// doubling); when false, returns `s` unchanged (matching is done in LF space).
+fn to_ending(s: &str, crlf: bool) -> String {
+    if !crlf {
+        return s.to_string();
     }
-}
-
-/// Counts windows in `text` that match `needle` line-for-line, ignoring each line's
-/// leading and trailing whitespace. Used only to produce a better error message when the
-/// strict exact match fails — never to perform an edit.
-fn whitespace_insensitive_block_count(text: &str, needle: &str) -> usize {
-    let needle_lines: Vec<&str> = needle.lines().map(str::trim).collect();
-    if needle_lines.is_empty() {
-        return 0;
-    }
-    let text_lines: Vec<&str> = text.lines().map(str::trim).collect();
-    if text_lines.len() < needle_lines.len() {
-        return 0;
-    }
-    text_lines
-        .windows(needle_lines.len())
-        .filter(|w| *w == needle_lines.as_slice())
-        .count()
+    s.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
 fn map_fs_err(e: FsError) -> ToolError {
