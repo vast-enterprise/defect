@@ -8,3 +8,8 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# 参考代码：曾是 git submodule(openai/codex、opencode、claw-code 等第三方仓)，
+# 已移除 submodule 化——否则 `cargo install --git` 等依赖方会递归 checkout 这些大仓。
+# 本地保留供查阅，但不再被本仓跟踪；需要时各自 clone。
+/docs/coding-reference/
