@@ -733,6 +733,11 @@ pub struct ProviderConfigFile {
     pub project: Option<String>,
     pub aws: Option<ProviderAwsConfigFile>,
     pub headers: BTreeMap<String, String>,
+    /// Overrides the authentication header name for the Anthropic Messages protocol
+    /// (`x-api-key` by default). Gateways fronting the protocol — e.g. Mimo — expect
+    /// `api-key` instead. Ignored by the OpenAI-compatible protocol (which uses bearer
+    /// auth via `Authorization`).
+    pub auth_header: Option<String>,
     pub capabilities: ProviderCapabilityOverrides,
     /// `reasoning_effort` wire parameter. `None` = do not send, use provider default.
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -1099,6 +1104,7 @@ pub(crate) struct ProviderSection {
     pub(crate) project: Option<String>,
     pub(crate) aws: Option<ProviderAwsConfigFile>,
     pub(crate) headers: Option<BTreeMap<String, String>>,
+    pub(crate) auth_header: Option<String>,
     pub(crate) capabilities: Option<ProviderCapabilitiesSection>,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
 }

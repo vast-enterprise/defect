@@ -4,6 +4,7 @@
 //!
 //! Anthropic provider implementation — field mapping and request building.
 
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::sync::Arc;
@@ -16,8 +17,11 @@ use defect_agent::llm::{
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use http::HeaderValue;
-use toac::{ApiClient, CallError, MakeRequest, Operation, Request as ToacRequest};
+use http::{HeaderName, HeaderValue};
+use toac::security::AuthFuture;
+use toac::{
+    ApiClient, AuthSelector, CallError, MakeRequest, Operation, Request as ToacRequest,
+};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
@@ -26,7 +30,6 @@ use crate::protocol::anthropic_messages;
 use crate::wire::anthropic::{
     components as wire,
     operations::v1::{messages, models},
-    security,
 };
 use defect_http::{HttpStack, HttpStackConfig, HttpStackError, build_http_stack};
 
@@ -34,6 +37,12 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Default authentication header for the official Anthropic API. OpenAI-style gateways
+/// fronting the Messages protocol (e.g. Mimo) instead expect `api-key`; override via
+/// [`AnthropicConfig::auth_header`].
+const DEFAULT_AUTH_HEADER: &str = "x-api-key";
+const DEFAULT_VENDOR: &str = "anthropic";
+const DEFAULT_DISPLAY_NAME: &str = "Anthropic Claude";
 
 type Client = ApiClient<HttpStack>;
 
@@ -45,11 +54,22 @@ type Client = ApiClient<HttpStack>;
 /// for the same endpoint is common when using a secret manager (mirrors the OpenAI side;
 /// see `OpenAiConfig::api_key_env`). `http` configures the transport layer (timeout /
 /// retry / proxy / user-agent); defaults are in [`HttpStackConfig::default`].
+///
+/// `vendor` / `display_name` let the same Messages-protocol implementation back a custom
+/// `[providers.<name>]` endpoint (mirrors `OpenAiConfig`); the registry keys on `vendor`,
+/// so a custom endpoint must report its own name rather than the literal `anthropic`.
+/// `auth_header` overrides the credential header name (`x-api-key` by default) — gateways
+/// fronting the Messages protocol such as Mimo expect `api-key` instead. `headers` injects
+/// arbitrary extra headers, matching `OpenAiConfig::headers`.
 #[derive(Debug, Default, Clone)]
 pub struct AnthropicConfig {
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
     pub base_url: Option<String>,
+    pub vendor: Option<String>,
+    pub display_name: Option<String>,
+    pub auth_header: Option<String>,
+    pub headers: HashMap<HeaderName, HeaderValue>,
     pub http: HttpStackConfig,
 }
 
@@ -59,6 +79,10 @@ impl AnthropicConfig {
             api_key: env::var(API_KEY_ENV).ok(),
             api_key_env: None,
             base_url: env::var(BASE_URL_ENV).ok(),
+            vendor: None,
+            display_name: None,
+            auth_header: None,
+            headers: HashMap::new(),
             http: HttpStackConfig::default(),
         }
     }
@@ -87,6 +111,7 @@ pub struct AnthropicProvider {
     client: Client,
     info: ProviderInfo,
     capabilities: Capabilities,
+    extra_headers: HashMap<HeaderName, HeaderValue>,
     models: Arc<RwLock<Option<Vec<ModelInfo>>>>,
 }
 
@@ -103,8 +128,14 @@ impl AnthropicProvider {
     pub fn new(config: AnthropicConfig) -> Result<Self, ProviderError> {
         let token = config.resolve_api_key()?;
         let base_url = config.resolve_base_url();
+        let header_name = config.auth_header.as_deref().unwrap_or(DEFAULT_AUTH_HEADER);
 
-        let auth = security::AuthConfig::builder().api_key_auth(token).build();
+        // The codegen'd `AuthConfig` hardcodes `x-api-key` (the header name comes from the
+        // OAS spec, not config). Replace it with a selector that honours `auth_header`, so
+        // Messages-protocol gateways expecting `api-key` (Mimo) work without patching
+        // codegen. The toac default `NoAuth` is not an option — it hard-fails any operation
+        // declaring a security requirement, which `/v1/messages` does.
+        let auth = ConfigurableApiKeyAuth::new(header_name, token)?;
         let http = build_http_stack(config.http)
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport(BoxError::new(e))))?;
         let client = ApiClient::new(http, base_url).with_auth(auth);
@@ -112,9 +143,11 @@ impl AnthropicProvider {
         Ok(Self {
             client,
             info: ProviderInfo {
-                vendor: "anthropic".into(),
+                vendor: config.vendor.unwrap_or_else(|| DEFAULT_VENDOR.into()),
                 protocol: ProtocolId::AnthropicMessages,
-                display_name: "Anthropic Claude".into(),
+                display_name: config
+                    .display_name
+                    .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.into()),
             },
             capabilities: Capabilities {
                 tool_calls: FeatureSupport::Supported,
@@ -124,6 +157,7 @@ impl AnthropicProvider {
                 prompt_cache: FeatureSupport::Supported,
                 thinking_echo: ThinkingEcho::Required,
             },
+            extra_headers: config.headers,
             models: Arc::default(),
         })
     }
@@ -144,7 +178,7 @@ impl LlmProvider for AnthropicProvider {
                 return Ok(cached);
             }
 
-            let request = with_anthropic_headers(models::get::Request {
+            let request = self.with_anthropic_headers(models::get::Request {
                 before_id: None,
                 after_id: None,
                 limit: None,
@@ -206,7 +240,8 @@ impl LlmProvider for AnthropicProvider {
     ) -> BoxFuture<'_, Result<ProviderStream, ProviderError>> {
         async move {
             let body = anthropic_messages::encode_request(&req);
-            let op = with_anthropic_headers(messages::post::Request { body })
+            let op = self
+                .with_anthropic_headers(messages::post::Request { body })
                 .with_accept(HeaderValue::from_static("text/event-stream"));
 
             let mut client = self.client.clone();
@@ -261,20 +296,76 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
-// Header injection adapter
+// ---------- auth selector -----------------------------------------------
 
-/// Attach the required `anthropic-version` header to `op`.
+/// API-key [`AuthSelector`] with a configurable header name.
 ///
-/// `toac` has no generic `with_header` — following the pattern of [`toac::WithAccept`],
-/// build a minimal wrapper. It only injects a fixed header and does not conflict with
-/// [`toac::WithAccept`] (both modify different fields of [`http::Request`]).
-fn with_anthropic_headers<Op>(op: Op) -> WithAnthropicHeaders<Op> {
-    WithAnthropicHeaders { op }
+/// The codegen'd `wire::anthropic::security::AuthConfig` hardcodes `x-api-key`; this
+/// replacement sends the same raw key value under whatever header name the provider
+/// configures (`x-api-key` for the official API, `api-key` for Mimo-style gateways). The
+/// value is validated once at construction so `complete`/`list_models` never surface a
+/// header-encoding error mid-flight.
+#[derive(Debug, Clone)]
+struct ConfigurableApiKeyAuth {
+    name: HeaderName,
+    value: HeaderValue,
 }
+
+impl ConfigurableApiKeyAuth {
+    fn new(name: &str, value: String) -> Result<Self, ProviderError> {
+        let name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
+            ProviderError::new(ProviderErrorKind::AuthMalformed {
+                hint: Some(format!("invalid auth header name `{name}`: {e}")),
+            })
+        })?;
+        let mut value = HeaderValue::from_str(&value).map_err(|e| {
+            ProviderError::new(ProviderErrorKind::AuthMalformed {
+                hint: Some(format!("api key is not a valid header value: {e}")),
+            })
+        })?;
+        value.set_sensitive(true);
+        Ok(Self { name, value })
+    }
+}
+
+impl AuthSelector for ConfigurableApiKeyAuth {
+    fn apply_for(
+        &self,
+        mut req: ToacRequest,
+        requirements: &'static [&'static [&'static str]],
+    ) -> AuthFuture<'_> {
+        Box::pin(async move {
+            // Empty requirements = public endpoint; leave the request untouched, matching
+            // toac's own `NoAuth` semantics.
+            if !requirements.is_empty() {
+                req.headers_mut().insert(self.name.clone(), self.value.clone());
+            }
+            Ok(req)
+        })
+    }
+}
+
+// ---------- header injection adapter ------------------------------------
 
 #[derive(Debug, Clone)]
 struct WithAnthropicHeaders<Op> {
     op: Op,
+    extra: HashMap<HeaderName, HeaderValue>,
+}
+
+impl AnthropicProvider {
+    /// Attach the required `anthropic-version` header (and any provider-configured extra
+    /// headers) to `op`.
+    ///
+    /// `toac` has no generic `with_header` — following the pattern of [`toac::WithAccept`],
+    /// build a minimal wrapper. It only injects headers and does not conflict with
+    /// [`toac::WithAccept`] (both modify different fields of [`http::Request`]).
+    fn with_anthropic_headers<Op>(&self, op: Op) -> WithAnthropicHeaders<Op> {
+        WithAnthropicHeaders {
+            op,
+            extra: self.extra_headers.clone(),
+        }
+    }
 }
 
 impl<Op> MakeRequest for WithAnthropicHeaders<Op>
@@ -293,6 +384,7 @@ where
                 http::HeaderName::from_static("anthropic-version"),
                 HeaderValue::from_static(ANTHROPIC_VERSION),
             );
+            req.headers_mut().extend(self.extra);
             Ok(req)
         }
     }

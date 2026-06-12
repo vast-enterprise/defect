@@ -46,9 +46,22 @@ const MSG_STOP: &str = r#"{"type":"message_stop"}"#;
 fn provider_for(server_uri: &str) -> Arc<dyn LlmProvider> {
     let cfg = AnthropicConfig {
         api_key: Some(TEST_API_KEY.to_string()),
-        api_key_env: None,
         base_url: Some(server_uri.to_string()),
-        http: defect_http::HttpStackConfig::default(),
+        ..Default::default()
+    };
+    Arc::new(AnthropicProvider::new(cfg).expect("provider")) as Arc<dyn LlmProvider>
+}
+
+/// Build a provider with a custom auth header name (Mimo-style gateway).
+fn provider_with_auth_header(
+    server_uri: &str,
+    auth_header: &str,
+) -> Arc<dyn LlmProvider> {
+    let cfg = AnthropicConfig {
+        api_key: Some(TEST_API_KEY.to_string()),
+        base_url: Some(server_uri.to_string()),
+        auth_header: Some(auth_header.to_string()),
+        ..Default::default()
     };
     Arc::new(AnthropicProvider::new(cfg).expect("provider")) as Arc<dyn LlmProvider>
 }
@@ -253,6 +266,46 @@ async fn missing_api_key_header_is_rejected_by_server() {
     // wiremock returns 404 when no mock matches; the provider should map this to
     // `ServerError`.
     assert!(res.is_err(), "expected error when auth header didn't match");
+}
+
+#[tokio::test]
+async fn custom_auth_header_is_sent_for_mimo_style_gateway() {
+    let server = start_mock_server().await;
+
+    let events = [
+        ("message_start", MODEL_START),
+        ("content_block_start", TEXT_START_0),
+        ("content_block_delta", TEXT_DELTA_0),
+        ("content_block_stop", TEXT_STOP_0),
+        ("message_delta", MSG_DELTA_END),
+        ("message_stop", MSG_STOP),
+    ];
+    // Only matches when the credential rides on `api-key` (not the default `x-api-key`).
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("api-key", TEST_API_KEY))
+        .respond_with(sse_body(&events))
+        .mount(&server)
+        .await;
+
+    let provider = provider_with_auth_header(&server.uri(), "api-key");
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let req = defect_agent::llm::CompletionRequest {
+        model: MODEL_ID.to_string(),
+        system: None,
+        messages: vec![defect_agent::llm::Message {
+            role: defect_agent::llm::Role::User,
+            content: vec![defect_agent::llm::MessageContent::Text { text: "hi".into() }].into(),
+        }],
+        tools: vec![],
+        tool_choice: defect_agent::llm::ToolChoice::Auto,
+        sampling: defect_agent::llm::SamplingParams::default(),
+        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+    };
+    let res = provider.complete(req, cancel).await;
+    if let Err(e) = res {
+        panic!("request with custom `api-key` header should reach the mock: {e:?}");
+    }
 }
 
 // ---------- cancel mid-stream -------------------------------------------

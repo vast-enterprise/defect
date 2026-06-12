@@ -12,8 +12,9 @@
 //!
 //! [`ProviderKind`]: defect_config::ProviderKind
 
-// BTreeMap/HashMap and http header types are only used by provider_headers (openai).
-#[cfg(feature = "provider-openai")]
+// BTreeMap/HashMap and http header types are only used by provider_headers, which both
+// the openai and anthropic providers feed their custom-header maps through.
+#[cfg(any(feature = "provider-openai", feature = "provider-anthropic"))]
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ use defect_llm::provider::bedrock::{BedrockConfig, BedrockProvider};
 use defect_llm::provider::deepseek::{DeepSeekConfig, DeepSeekProvider};
 #[cfg(feature = "provider-openai")]
 use defect_llm::provider::openai::{OpenAiConfig, OpenAiProvider};
-#[cfg(feature = "provider-openai")]
+#[cfg(any(feature = "provider-openai", feature = "provider-anthropic"))]
 use http::{HeaderName, HeaderValue};
 
 use crate::http_stack::build_http_stack_config;
@@ -53,6 +54,8 @@ pub(crate) const LITELLM_API_KEY_ENV: &str = "LITELLM_API_KEY";
 pub(crate) const LITELLM_DEFAULT_BASE_URL: &str = "http://localhost:4000/v1";
 #[cfg(feature = "provider-openai")]
 const CUSTOM_OPENAI_DISPLAY_NAME: &str = "Custom OpenAI-compatible";
+#[cfg(feature = "provider-anthropic")]
+const CUSTOM_ANTHROPIC_DISPLAY_NAME: &str = "Custom Anthropic-compatible";
 #[cfg(feature = "provider-bedrock")]
 const CUSTOM_BEDROCK_DISPLAY_NAME: &str = "Amazon Bedrock";
 #[cfg(feature = "provider-openai")]
@@ -142,15 +145,12 @@ pub async fn build_single_llm_provider(
     match provider_kind {
         ConfigProviderKind::Defect => Ok(Arc::new(EchoProvider::new()) as Arc<dyn LlmProvider>),
         #[cfg(feature = "provider-anthropic")]
-        ConfigProviderKind::Anthropic => Ok(Arc::new(
-            AnthropicProvider::new(AnthropicConfig {
-                api_key: None,
-                api_key_env: config.effective.providers.anthropic.api_key_env.clone(),
-                base_url: config.effective.providers.anthropic.base_url.clone(),
-                http: http_config,
-            })
-            .map_err(|e| anyhow::anyhow!("anthropic provider init failed: {e}"))?,
-        ) as Arc<dyn LlmProvider>),
+        ConfigProviderKind::Anthropic => build_anthropic_provider(
+            "anthropic",
+            None,
+            config.effective.providers.anthropic.clone(),
+            http_config,
+        ),
         #[cfg(feature = "provider-openai")]
         ConfigProviderKind::Openai => build_openai_provider(
             "openai",
@@ -237,10 +237,26 @@ pub async fn build_single_llm_provider(
                             Err(provider_not_compiled("bedrock"))
                         }
                     } else {
-                        Err(anyhow::anyhow!(
-                            "custom provider `{name}` uses protocol `anthropic-messages`, \
-                             but only AWS Bedrock transport is implemented for custom providers"
-                        ))
+                        // Custom HTTP endpoint speaking the Anthropic Messages protocol
+                        // (e.g. Mimo). Reuses `AnthropicProvider`; `auth_header` lets the
+                        // gateway's credential header differ from the official `x-api-key`.
+                        #[cfg(feature = "provider-anthropic")]
+                        {
+                            let display_name = provider
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| CUSTOM_ANTHROPIC_DISPLAY_NAME.to_string());
+                            build_anthropic_provider(
+                                name,
+                                Some(display_name),
+                                provider.clone(),
+                                http_config,
+                            )
+                        }
+                        #[cfg(not(feature = "provider-anthropic"))]
+                        {
+                            Err(provider_not_compiled("anthropic"))
+                        }
                     }
                 }
             }
@@ -453,6 +469,33 @@ async fn build_bedrock_provider(
     Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
 }
 
+/// Build an `AnthropicProvider` for either the built-in `anthropic` kind or a custom
+/// `anthropic-messages` HTTP endpoint (Mimo-style gateways). `vendor` is the registry key;
+/// `display_name`, when `None`, falls back to the provider's own default.
+#[cfg(feature = "provider-anthropic")]
+fn build_anthropic_provider(
+    vendor: &str,
+    display_name: Option<String>,
+    provider: ProviderConfigFile,
+    http_config: defect_http::HttpStackConfig,
+) -> anyhow::Result<Arc<dyn LlmProvider>> {
+    let provider = AnthropicProvider::new(AnthropicConfig {
+        api_key: provider
+            .api_key_env
+            .as_deref()
+            .and_then(|env| std::env::var(env).ok()),
+        api_key_env: provider.api_key_env,
+        base_url: provider.base_url,
+        vendor: Some(vendor.to_string()),
+        display_name,
+        auth_header: provider.auth_header,
+        headers: provider_headers(provider.headers)?,
+        http: http_config,
+    })
+    .map_err(|e| anyhow::anyhow!("{vendor} provider init failed: {e}"))?;
+    Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
+}
+
 #[cfg(feature = "provider-openai")]
 fn build_openai_provider(
     vendor: &str,
@@ -503,7 +546,7 @@ impl ProviderDefaults {
     }
 }
 
-#[cfg(feature = "provider-openai")]
+#[cfg(any(feature = "provider-openai", feature = "provider-anthropic"))]
 fn provider_headers(
     headers: BTreeMap<String, String>,
 ) -> anyhow::Result<HashMap<HeaderName, HeaderValue>> {

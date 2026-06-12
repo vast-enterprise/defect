@@ -667,6 +667,7 @@ fn provider_config_file(cfg: ProviderSection) -> ProviderConfigFile {
         project: cfg.project,
         aws: cfg.aws,
         headers: cfg.headers.unwrap_or_default(),
+        auth_header: cfg.auth_header,
         capabilities: provider_capability_overrides(cfg.capabilities.as_ref()),
         reasoning_effort: cfg.reasoning_effort,
     }

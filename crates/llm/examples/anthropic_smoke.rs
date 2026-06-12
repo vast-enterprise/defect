@@ -52,9 +52,8 @@ async fn main() {
 
     let provider: Arc<dyn LlmProvider> = match AnthropicProvider::new(AnthropicConfig {
         api_key: Some(api_key),
-        api_key_env: None,
         base_url,
-        http: defect_http::HttpStackConfig::default(),
+        ..Default::default()
     }) {
         Ok(p) => Arc::new(p),
         Err(e) => {
