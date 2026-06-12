@@ -1,0 +1,17 @@
+[package]
+name = "defect-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Foundational shared types for defect: error, LLM protocol types, HTTP client trait, and tool schema. Zero dependency on the agent runtime, so provider/transport crates (defect-llm, defect-http) can depend on it without pulling in the session/turn machinery."
+
+[dependencies]
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

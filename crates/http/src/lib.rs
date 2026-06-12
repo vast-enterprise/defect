@@ -22,7 +22,7 @@ use thiserror::Error;
 use tower::ServiceBuilder;
 use tower::util::BoxCloneSyncService;
 
-use defect_agent::error::BoxError;
+use defect_core::error::BoxError;
 
 mod fetch;
 mod proxy;
@@ -138,7 +138,7 @@ pub enum HttpStackError {
     ProxyConnect { hint: String },
 }
 
-/// Timeout phase. Mirrors [`defect_agent::llm::TimeoutPhase`], but this crate does not
+/// Timeout phase. Mirrors [`defect_core::llm::TimeoutPhase`], but this crate does not
 /// reference the agent's type internally to avoid coupling the layer implementation to
 /// the LLM error model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

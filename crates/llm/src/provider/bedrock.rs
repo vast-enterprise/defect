@@ -16,8 +16,8 @@ use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
 use aws_smithy_runtime_api::client::result::SdkError;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use aws_smithy_types::event_stream::RawMessage;
-use defect_agent::error::BoxError;
-use defect_agent::llm::{
+use defect_core::error::BoxError;
+use defect_core::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
     ModelInfo, ProtocolId, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
     RateLimitScope, ThinkingEcho, TimeoutPhase,

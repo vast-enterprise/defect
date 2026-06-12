@@ -18,12 +18,12 @@
 //! pub-crate restriction on `SseBody::new`; at runtime [`decode_stream`] uses
 //! the same decoding core, so coverage is equivalent.
 
-use defect_agent::llm::{
+use defect_core::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderErrorKind,
     ReasoningEffort, Role, SamplingParams, StopReason, ThinkingConfig, ToolChoice, ToolResultBody,
     ToolResultContent,
 };
-use defect_agent::tool::ToolSchema;
+use defect_core::tool::ToolSchema;
 use futures::StreamExt;
 use serde_json::json;
 use sse_stream::Sse;
@@ -103,7 +103,7 @@ fn encode_minimal_request() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     };
     let wire_req = encode_request(&req);
     assert_eq!(wire_req.max_tokens, i64::from(DEFAULT_MAX_TOKENS));
@@ -168,7 +168,7 @@ fn encode_request_carries_sampling() {
             },
             reasoning_effort: None,
         },
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
     assert_eq!(w.max_tokens, 8000);
@@ -216,7 +216,7 @@ fn req_with(
             thinking,
             reasoning_effort: effort,
         },
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     }
 }
 
@@ -329,7 +329,7 @@ fn encode_request_tool_uses_and_results() {
             name: "fs_read".into(),
         },
         sampling: SamplingParams::default(),
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -409,7 +409,7 @@ fn encode_multimodal_tool_result_emits_text_and_image_blocks() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -460,7 +460,7 @@ fn encode_with_thinking(text: &str, signature: Option<&str>) -> Vec<wire::Conten
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
     let wire::MessageParamContent::MessageParamContentVariant1(blocks) =
@@ -821,7 +821,7 @@ fn cache_breakpoints_are_end_biased() {
         tools: vec![],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 
@@ -862,7 +862,7 @@ fn cache_breakpoint_falls_back_to_last_tool_without_system() {
         ],
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
-        hosted_capabilities: ::defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: ::defect_core::llm::HostedCapabilities::default(),
     };
     let w = encode_request(&req);
 

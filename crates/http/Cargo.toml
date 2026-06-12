@@ -7,7 +7,7 @@ repository.workspace = true
 description = "HTTP client service layer for defect, bridging generated wire types to provider transports."
 
 [dependencies]
-defect-agent.workspace = true
+defect-core.workspace = true
 
 # tower / hyper transport
 tower.workspace = true

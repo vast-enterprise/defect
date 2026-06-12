@@ -4,7 +4,7 @@
 //! `usage` field is augmented with DeepSeek-specific fields: `prompt_cache_hit_tokens` /
 //! `prompt_cache_miss_tokens`.
 
-use defect_agent::llm::{ProviderChunk, ProviderError, Usage};
+use defect_core::llm::{ProviderChunk, ProviderError, Usage};
 use futures::Stream;
 use toac::body::codec::sse::SseEventStream;
 use tokio_util::sync::CancellationToken;

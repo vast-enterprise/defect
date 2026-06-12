@@ -1,4 +1,4 @@
-//! Vendor layer: implements [`defect_agent::llm::LlmProvider`].
+//! Vendor layer: implements [`defect_core::llm::LlmProvider`].
 //!
 //! The vendor layer handles transport, auth, URL templates, capability declarations,
 //! error hints,

@@ -84,7 +84,6 @@ impl ProviderError {
 /// [`ProviderErrorKind::Other`],
 /// prefer to **extract it as a new variant** rather than letting `Other` become the
 /// default.
-#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ProviderErrorKind {
     // ---------- Authentication ----------

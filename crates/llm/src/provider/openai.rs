@@ -11,8 +11,8 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use defect_agent::error::BoxError;
-use defect_agent::llm::{
+use defect_core::error::BoxError;
+use defect_core::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
     ModelInfo, ProtocolId, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
     RateLimitScope, ThinkingEcho, TimeoutPhase,
@@ -26,7 +26,7 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
 
-use defect_agent::llm::ReasoningEffort;
+use defect_core::llm::ReasoningEffort;
 
 use crate::protocol::openai_chat::{self, ChatDialect};
 use crate::wire::openai::{

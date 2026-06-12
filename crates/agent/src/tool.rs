@@ -44,16 +44,10 @@ pub use spawn_agent::{SpawnAgentTool, SubagentProfile};
 
 /// Tool's "public face": describes the parameter shape without any execution capability.
 ///
-/// [`crate::llm::CompletionRequest::tools`] accepts `Vec<ToolSchema>`.
-/// Providers don't hold `dyn Tool`; they serialize schemas into wire JSON.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolSchema {
-    pub name: String,
-    pub description: String,
-    /// JSON Schema for the parameters. Uses a subset of Draft 2020-12 (the exact subset
-    /// and escaping rules are documented in `tool-trait.md`).
-    pub input_schema: serde_json::Value,
-}
+/// Defined in `defect-core` (so `defect-llm` can serialize schemas without depending on
+/// the agent runtime) and re-exported here under the original `defect_agent::tool::ToolSchema`
+/// path. [`crate::llm::CompletionRequest::tools`] accepts `Vec<ToolSchema>`.
+pub use defect_core::tool::ToolSchema;
 
 /// Self-description of a tool call, directly mapping to ACP's [`ToolCallUpdateFields`].
 ///

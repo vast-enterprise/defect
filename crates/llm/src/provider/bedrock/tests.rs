@@ -1,6 +1,6 @@
 use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::types::PayloadPart;
-use defect_agent::llm::{
+use defect_core::llm::{
     CompletionRequest, Message, MessageContent, ProviderChunk, Role, SamplingParams, ToolChoice,
 };
 use futures::StreamExt;
@@ -33,7 +33,7 @@ fn minimal_request() -> CompletionRequest {
         tools: Vec::new(),
         tool_choice: ToolChoice::Auto,
         sampling: SamplingParams::default(),
-        hosted_capabilities: defect_agent::llm::HostedCapabilities::default(),
+        hosted_capabilities: defect_core::llm::HostedCapabilities::default(),
     }
 }
 

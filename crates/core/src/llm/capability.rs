@@ -45,7 +45,6 @@ pub struct ModelCapabilityOverrides {
 /// request (Anthropic extended thinking, DeepSeek-v4-pro). `Forbidden` — replay is
 /// rejected by the server (DeepSeek-R1, official OpenAI o1/o3). `Optional` — the server
 /// accepts either behavior.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingEcho {
@@ -61,7 +60,6 @@ pub enum ThinkingEcho {
 /// [`FeatureSupport::PassthroughAsTool`] — pseudo-support via adaptation. Even though
 /// nothing currently produces this value, defining a tri-state from the start is simpler
 /// than upgrading from `bool` to an enum later.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeatureSupport {
@@ -90,7 +88,6 @@ pub enum FeatureSupport {
 /// capability layer and are managed separately by `[tools.search]`.
 ///
 /// Native metadata returned by the model after a completions call.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostedCapabilities {
     /// Whether the provider adapter supports hosted web search.
@@ -102,9 +99,8 @@ pub struct HostedCapabilities {
 }
 
 impl HostedCapabilities {
-    /// Constructs from a single field. Cross-crate tests or adapter implementations need
-    /// this entry point because the struct is `#[non_exhaustive]` and cannot be built
-    /// with a struct literal directly.
+    /// Constructs from a single field. A convenience entry point for cross-crate tests and
+    /// adapter implementations.
     #[must_use]
     pub const fn with_web_search(web_search: bool) -> Self {
         Self { web_search }

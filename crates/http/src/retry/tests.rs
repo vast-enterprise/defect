@@ -1,5 +1,5 @@
 use super::*;
-use defect_agent::error::BoxError;
+use defect_core::error::BoxError;
 use std::io;
 
 #[test]

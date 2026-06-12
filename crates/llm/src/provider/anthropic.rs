@@ -9,8 +9,8 @@ use std::env;
 use std::fmt;
 use std::sync::Arc;
 
-use defect_agent::error::BoxError;
-use defect_agent::llm::{
+use defect_core::error::BoxError;
+use defect_core::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelCapabilityOverrides,
     ModelInfo, ProtocolId, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream,
     RateLimitScope, ThinkingEcho, TimeoutPhase,
@@ -19,9 +19,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use http::{HeaderName, HeaderValue};
 use toac::security::AuthFuture;
-use toac::{
-    ApiClient, AuthSelector, CallError, MakeRequest, Operation, Request as ToacRequest,
-};
+use toac::{ApiClient, AuthSelector, CallError, MakeRequest, Operation, Request as ToacRequest};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
@@ -338,7 +336,8 @@ impl AuthSelector for ConfigurableApiKeyAuth {
             // Empty requirements = public endpoint; leave the request untouched, matching
             // toac's own `NoAuth` semantics.
             if !requirements.is_empty() {
-                req.headers_mut().insert(self.name.clone(), self.value.clone());
+                req.headers_mut()
+                    .insert(self.name.clone(), self.value.clone());
             }
             Ok(req)
         })

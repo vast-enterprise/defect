@@ -8,9 +8,9 @@
 //! - [`Projection::Ignore`]: audit-only, not sent over the wire
 
 use agent_client_protocol::schema::{
-    Content, ContentChunk, EmbeddedResource, EmbeddedResourceResource, ImageContent,
-    PermissionOption, SessionId, SessionNotification, SessionUpdate, TextContent, ToolCall,
-    ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    Content, ContentChunk, ImageContent, PermissionOption, SessionId, SessionNotification,
+    SessionUpdate, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields,
 };
 use defect_agent::event::AgentEvent;
 use defect_agent::llm::{
@@ -19,7 +19,6 @@ use defect_agent::llm::{
 use defect_agent::policy::PolicyDecision;
 
 const REPLAY_TOOL_RESULT_TITLE: &str = "Tool result";
-const REPLAY_RESOURCE_URI: &str = "defect://session-replay/text";
 
 /// A single projection's output.
 #[allow(clippy::large_enum_variant)]
@@ -141,7 +140,6 @@ fn replay_user_message(
             MessageContent::Thinking { .. }
             | MessageContent::ToolUse { .. }
             | MessageContent::ProviderActivity { .. } => {}
-            _ => {}
         }
     }
 }
@@ -171,7 +169,6 @@ fn replay_assistant_message(
             MessageContent::Image { .. }
             | MessageContent::ToolResult { .. }
             | MessageContent::ProviderActivity { .. } => {}
-            _ => {}
         }
     }
 }
@@ -214,10 +211,8 @@ fn tool_result_blocks(output: &ToolResultBody) -> Vec<ToolCallContent> {
             .map(|b| match b {
                 ToolResultContent::Text { text } => text_block(text.clone()),
                 ToolResultContent::Image { mime, data } => image_block(mime, data),
-                _ => text_block(String::new()),
             })
             .collect(),
-        _ => vec![text_block(String::new())],
     };
     blocks
         .into_iter()
@@ -238,14 +233,6 @@ fn image_block(mime: &str, data: &ImageData) -> agent_client_protocol::schema::C
             agent_client_protocol::schema::ResourceLink::new(url.clone(), url.clone())
                 .mime_type(mime.to_string()),
         ),
-        _ => agent_client_protocol::schema::ContentBlock::Resource(EmbeddedResource::new(
-            EmbeddedResourceResource::TextResourceContents(
-                agent_client_protocol::schema::TextResourceContents::new(
-                    "unsupported replay image data",
-                    REPLAY_RESOURCE_URI,
-                ),
-            ),
-        )),
     }
 }
 

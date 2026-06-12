@@ -988,7 +988,5 @@ fn content_to_value(content: &MessageContent) -> serde_json::Value {
             "provider_id": provider_id,
             "kind": format!("{kind:?}"),
         }),
-        // `MessageContent` is `#[non_exhaustive]`; future variants degrade to a marker.
-        _ => serde_json::json!({ "type": "unknown" }),
     }
 }

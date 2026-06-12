@@ -1,8 +1,8 @@
-//! Protocol layer: bidirectional conversion between wire JSON and [`defect_agent::llm`]
+//! Protocol layer: bidirectional conversion between wire JSON and [`defect_core::llm`]
 //! internal representations.
 //!
 //! This layer handles only encoding/decoding; it does not include transport, auth, or URL
-//! templates. Each submodule corresponds to a [`defect_agent::llm::ProtocolId`].
+//! templates. Each submodule corresponds to a [`defect_core::llm::ProtocolId`].
 
 // anthropic_messages is shared by anthropic and bedrock (bedrock uses the Anthropic
 // Messages shape).

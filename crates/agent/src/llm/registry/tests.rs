@@ -2,10 +2,9 @@ use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::llm::capability::{Capabilities, FeatureSupport, ThinkingEcho};
-use crate::llm::model::ProtocolId;
-use crate::llm::provider::ProviderStream;
-use crate::llm::request::CompletionRequest;
+use defect_core::llm::{
+    Capabilities, CompletionRequest, FeatureSupport, ProtocolId, ProviderStream, ThinkingEcho,
+};
 
 fn stub_caps() -> Capabilities {
     Capabilities {

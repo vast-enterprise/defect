@@ -1,28 +1,24 @@
 //! LLM provider abstraction.
 //!
-//! Sub-modules are split by responsibility (chunk / request / model / capability /
-//! error / provider). External access goes through this module's re-exports;
-//! sub-modules are not visible outside the crate.
+//! The protocol-level types (chunk / request / model / capability / error / provider) now
+//! live in `defect-core::llm` so `defect-llm` can implement providers without depending on
+//! the agent runtime. They are re-exported here so existing `defect_agent::llm::*` paths
+//! keep working.
+//!
+//! The `registry` module stays in this crate: it depends on the session capabilities
+//! config (a runtime concern) and is not needed by the provider implementations.
 
-pub(crate) mod capability;
-pub(crate) mod chunk;
-pub(crate) mod error;
-pub(crate) mod model;
-pub(crate) mod provider;
 pub(crate) mod registry;
-pub(crate) mod request;
 
-pub use capability::{
-    Capabilities, FeatureSupport, HostedCapabilities, ModelCapabilityOverrides, ThinkingEcho,
+// Protocol types from defect-core, re-exported under the original `defect_agent::llm::*`
+// paths so call sites are unaffected.
+pub use defect_core::llm::{
+    Capabilities, CompletionRequest, FeatureSupport, HostedCapabilities, ImageData, LlmProvider,
+    Message, MessageContent, ModelCapabilityOverrides, ModelInfo, ProtocolId, ProviderActivityKind,
+    ProviderChunk, ProviderError, ProviderErrorKind, ProviderInfo, ProviderStream, RateLimitScope,
+    ReasoningEffort, RetryAction, RetryHint, Role, SamplingParams, StopReason, ThinkingConfig,
+    ThinkingEcho, TimeoutPhase, ToolChoice, ToolResultBody, ToolResultContent, Usage,
 };
-pub use chunk::{ProviderChunk, StopReason, Usage};
-pub use error::{
-    ProviderError, ProviderErrorKind, RateLimitScope, RetryAction, RetryHint, TimeoutPhase,
-};
-pub use model::{ModelInfo, ProtocolId, ProviderInfo};
-pub use provider::{LlmProvider, ProviderStream};
+
+// Registry stays local (depends on `crate::session::SessionCapabilitiesConfig`).
 pub use registry::{ModelCandidate, ProviderEntry, ProviderRegistry, ProviderRegistryError};
-pub use request::{
-    CompletionRequest, ImageData, Message, MessageContent, ProviderActivityKind, ReasoningEffort,
-    Role, SamplingParams, ThinkingConfig, ToolChoice, ToolResultBody, ToolResultContent,
-};

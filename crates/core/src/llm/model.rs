@@ -17,7 +17,6 @@ pub struct ProviderInfo {
 
 /// Protocol identifier. Each variant corresponds one-to-one with a codec in
 /// `defect-llm::protocol`.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolId {

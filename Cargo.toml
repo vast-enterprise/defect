@@ -35,8 +35,9 @@ repository = "https://github.com/vast-enterprise/defect"
 # 内部 crate 互相引用。
 # version + path 双写：本地构建走 path，发布到 crates.io 时 path 被剥离、只留 version
 # （crates.io 拒绝无版本依赖）。版本须与上面 workspace.package.version 对齐。
-# ⚠️ 发版 bump 时这里每条都要手动同步改（连同上面共 12 处），不会自动跟随。
+# ⚠️ 发版 bump 时这里每条都要手动同步改（连同上面 workspace.package.version），不会自动跟随。
 # 详见 .defect/workflow/release.md。
+defect-core = { path = "crates/core", version = "0.1.0-alpha.5" }
 defect-agent = { path = "crates/agent", version = "0.1.0-alpha.5" }
 defect-http = { path = "crates/http", version = "0.1.0-alpha.5" }
 # default-features = false：provider 由 defect-cli 的 provider-* feature 显式转发，

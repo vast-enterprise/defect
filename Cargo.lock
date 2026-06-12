@@ -1234,6 +1234,7 @@ dependencies = [
  "agent-client-protocol-schema",
  "arc-swap",
  "dashmap",
+ "defect-core",
  "futures",
  "globset",
  "os_info",
@@ -1302,12 +1303,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "defect-core"
+version = "0.1.0-alpha.5"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio-util",
+]
+
+[[package]]
 name = "defect-http"
 version = "0.1.0-alpha.5"
 dependencies = [
  "bytes",
  "client-util",
- "defect-agent",
+ "defect-core",
  "futures",
  "http 1.4.0",
  "http-body 1.0.1",
@@ -1336,6 +1348,7 @@ dependencies = [
  "aws-smithy-types",
  "bytes",
  "defect-agent",
+ "defect-core",
  "defect-http",
  "futures",
  "http 1.4.0",

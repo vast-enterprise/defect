@@ -53,10 +53,7 @@ fn provider_for(server_uri: &str) -> Arc<dyn LlmProvider> {
 }
 
 /// Build a provider with a custom auth header name (a gateway fronting the protocol).
-fn provider_with_auth_header(
-    server_uri: &str,
-    auth_header: &str,
-) -> Arc<dyn LlmProvider> {
+fn provider_with_auth_header(server_uri: &str, auth_header: &str) -> Arc<dyn LlmProvider> {
     let cfg = AnthropicConfig {
         api_key: Some(TEST_API_KEY.to_string()),
         base_url: Some(server_uri.to_string()),

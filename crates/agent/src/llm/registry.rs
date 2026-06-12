@@ -20,8 +20,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::model::{ModelInfo, ProviderInfo};
-use super::provider::LlmProvider;
+use defect_core::llm::{LlmProvider, ModelInfo, ProviderInfo};
+
 use crate::session::SessionCapabilitiesConfig;
 
 /// A provider, the model IDs it exposes, and its session capability configuration.

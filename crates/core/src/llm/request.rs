@@ -56,7 +56,6 @@ pub enum Role {
 /// reported back in the current turn" are placed in the `messages` array, matching the
 /// shape of the Anthropic Messages API. OpenAI uses separate `assistant message with
 /// tool_calls` + `tool message`; the codec translates between the two during encoding.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
@@ -110,9 +109,9 @@ pub enum MessageContent {
 
 /// The kind of hosted activity. Only appears inside [`MessageContent::ProviderActivity`].
 ///
-/// `#[non_exhaustive]` is used so that adding `CodeExecution` / `ImageGeneration` etc.
-/// later is not a breaking change.
-#[non_exhaustive]
+/// Adding `CodeExecution` / `ImageGeneration` etc. later is a deliberate breaking change:
+/// downstream provider crates that depend on `defect-core` should re-compile and handle
+/// the new variant rather than silently fall through a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderActivityKind {
@@ -122,7 +121,6 @@ pub enum ProviderActivityKind {
 
 /// Tool result payload. The codec converts it for the wire during serialization: some
 /// wires only support strings, so they stringify [`ToolResultBody::Json`].
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolResultBody {
@@ -149,7 +147,6 @@ pub enum ToolResultBody {
 /// A single block inside [`ToolResultBody::Content`]. Text follows the same semantics as
 /// [`ToolResultBody::Text`]; images reuse the `(mime, data)` shape from
 /// [`MessageContent::Image`].
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolResultContent {
@@ -159,7 +156,6 @@ pub enum ToolResultContent {
 
 /// Placeholder shape for multimodal image payloads. The exact shape is not yet
 /// finalized.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ImageData {
@@ -170,7 +166,6 @@ pub enum ImageData {
 }
 
 /// Tool selection strategy.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ToolChoice {
@@ -228,7 +223,6 @@ pub enum ReasoningEffort {
 /// Thinking chain configuration. Providers that do not support the concept of a thinking
 /// chain should ignore the budget field of `Enabled`, or report
 /// [`super::FeatureSupport::Unsupported`] in the capability matrix.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ThinkingConfig {

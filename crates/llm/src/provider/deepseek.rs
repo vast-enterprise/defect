@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 
-use defect_agent::llm::{
+use defect_core::llm::{
     Capabilities, CompletionRequest, FeatureSupport, LlmProvider, ModelInfo, ProtocolId,
     ProviderError, ProviderInfo, ProviderStream, ThinkingEcho,
 };
@@ -26,7 +26,7 @@ use tower::Service;
 use super::openai::{OpenAiConfig, OpenAiProvider};
 use crate::protocol::deepseek_chat;
 use crate::protocol::openai_chat::ChatDialect;
-use defect_agent::llm::ReasoningEffort;
+use defect_core::llm::ReasoningEffort;
 use defect_http::HttpStackConfig;
 
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";

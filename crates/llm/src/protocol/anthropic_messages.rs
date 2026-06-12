@@ -1,9 +1,9 @@
 //! Anthropic Messages protocol encoding and decoding.
 //!
-//! Encodes [`defect_agent::llm::CompletionRequest`] into the wire format
+//! Encodes [`defect_core::llm::CompletionRequest`] into the wire format
 //! [`crate::wire::anthropic::components::CreateMessageParams`],
 //! and decodes an SSE [`Sse`] stream ([`MessageStreamEvent`]) into a
-//! [`defect_agent::llm::ProviderChunk`] stream.
+//! [`defect_core::llm::ProviderChunk`] stream.
 //!
 //! Anthropic Messages API protocol mapping.
 //!
@@ -14,13 +14,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use defect_agent::error::BoxError;
-use defect_agent::llm::{
+use defect_core::error::BoxError;
+use defect_core::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderError,
     ProviderErrorKind, ReasoningEffort, Role, StopReason, ThinkingConfig, ToolChoice,
     ToolResultBody, ToolResultContent, Usage,
 };
-use defect_agent::tool::ToolSchema;
+use defect_core::tool::ToolSchema;
 use futures::{Stream, StreamExt};
 use sse_stream::Sse;
 use toac::body::codec::sse::SseEventStream;
@@ -218,10 +218,8 @@ fn encode_tool_result(
                         cache_control: None,
                     })
                 }
-                _ => text_result_block(String::new()),
             })
             .collect(),
-        _ => vec![text_result_block(String::new())],
     };
     wire::ContentBlockParam::ToolResultBlockParam(wire::ToolResultBlockParam {
         tool_use_id: tool_use_id.to_owned(),
@@ -255,10 +253,6 @@ fn encode_image_source(mime: &str, data: &ImageData) -> wire::ImageSource {
         ImageData::Url { url } => wire::ImageSource::UrlImageSource(wire::UrlImageSource {
             r#type: wire::UrlImageSourceType::Url,
             url: url.clone(),
-        }),
-        _ => wire::ImageSource::UrlImageSource(wire::UrlImageSource {
-            r#type: wire::UrlImageSourceType::Url,
-            url: String::new(),
         }),
     }
 }
@@ -350,7 +344,6 @@ fn encode_tool_choice(c: &ToolChoice) -> Option<wire::ToolChoice> {
         ToolChoice::None => Some(wire::ToolChoice::ToolChoiceNone(wire::ToolChoiceNone {
             r#type: wire::ToolChoiceNoneType::None,
         })),
-        _ => None,
     }
 }
 
@@ -492,7 +485,7 @@ struct DecoderState {
 /// [`Stream`]; callers pull from it via `.next()`, and dropping the stream is equivalent
 /// to cancellation.
 ///
-/// The `cancel` token originates from [`defect_agent::llm::LlmProvider::complete`]. When
+/// The `cancel` token originates from [`defect_core::llm::LlmProvider::complete`]. When
 /// triggered, the stream silently terminates without yielding `Err(Canceled)`.
 pub fn decode_stream(
     sse: SseEventStream,
@@ -823,7 +816,7 @@ fn stream_error_to_provider(p: &wire::StreamErrorPayload) -> ProviderError {
         },
         "rate_limit_error" => ProviderErrorKind::RateLimit {
             retry_after: None,
-            scope: defect_agent::llm::RateLimitScope::Unspecified,
+            scope: defect_core::llm::RateLimitScope::Unspecified,
         },
         "invalid_request_error" => ProviderErrorKind::BadRequest {
             hint: Some(p.message.clone()),

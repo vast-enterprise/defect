@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 ///   uses are accumulated per id, independent of wire order
 /// - [`ProviderChunk::Usage`] may arrive multiple times; callers should accumulate each
 ///   field
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderChunk {
@@ -57,7 +56,6 @@ pub enum ProviderChunk {
 }
 
 /// Semantic category of generation termination.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {

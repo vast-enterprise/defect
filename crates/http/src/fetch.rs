@@ -24,8 +24,8 @@ use hyper::body::Incoming;
 use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::TokioExecutor;
 
-use defect_agent::error::BoxError;
-use defect_agent::http::{HttpClient, HttpClientError, HttpRequest, HttpResponse};
+use defect_core::error::BoxError;
+use defect_core::http::{HttpClient, HttpClientError, HttpRequest, HttpResponse};
 
 use super::proxy::{ProxyAwareConnector, build_proxy_connector};
 use super::user_agent::default_user_agent;

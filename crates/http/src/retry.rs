@@ -129,7 +129,7 @@ async fn collect_body(body: toac::body::Body) -> Result<Bytes, HttpStackError> {
     body.collect()
         .await
         .map(|c| c.to_bytes())
-        .map_err(|e| HttpStackError::Transport(defect_agent::error::BoxError::from(e)))
+        .map_err(|e| HttpStackError::Transport(defect_core::error::BoxError::from(e)))
 }
 
 /// Rebuild a new [`http::Request`] from the same `bytes` and original `parts` — clones

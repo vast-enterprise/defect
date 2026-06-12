@@ -1,9 +1,9 @@
 //! OpenAI Chat Completions protocol encoding and decoding.
 //!
-//! Encodes [`defect_agent::llm::CompletionRequest`] into the wire format
+//! Encodes [`defect_core::llm::CompletionRequest`] into the wire format
 //! [`crate::wire::openai::components::CreateChatCompletionRequest`],
 //! and decodes an SSE [`Sse`] stream of [`CreateChatCompletionStreamResponse`] into a
-//! [`defect_agent::llm::ProviderChunk`] stream.
+//! [`defect_core::llm::ProviderChunk`] stream.
 //!
 //! OpenAI Chat Completions API protocol mapping.
 //!
@@ -15,13 +15,13 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use defect_agent::error::BoxError;
-use defect_agent::llm::{
+use defect_core::error::BoxError;
+use defect_core::llm::{
     CompletionRequest, ImageData, Message, MessageContent, ProviderChunk, ProviderError,
     ProviderErrorKind, ReasoningEffort, Role, StopReason, ThinkingConfig, ThinkingEcho, ToolChoice,
     ToolResultBody, ToolResultContent, Usage,
 };
-use defect_agent::tool::ToolSchema;
+use defect_core::tool::ToolSchema;
 use futures::Stream;
 use sse_stream::Sse;
 use toac::body::codec::sse::SseEventStream;
@@ -66,7 +66,7 @@ pub fn encode_request(req: &CompletionRequest) -> wire::CreateChatCompletionRequ
 
 /// Same shape as [`encode_request`], but explicitly accepts a thinking-echo policy.
 ///
-/// `echo_mode` is read by the provider layer from [`defect_agent::llm::Capabilities`]
+/// `echo_mode` is read by the provider layer from [`defect_core::llm::Capabilities`]
 /// and passed in: when `Required`, the [`MessageContent::Thinking`] text on the
 /// assistant message is written to the non-standard `reasoning_content` field on the
 /// wire; when `Forbidden` (including unconfigured), it is never written.
@@ -217,7 +217,6 @@ fn prompt_cache_echo_mode(mode: ThinkingEcho) -> &'static str {
         ThinkingEcho::Forbidden => "forbidden",
         ThinkingEcho::Required => "required",
         ThinkingEcho::Optional => "optional",
-        _ => "unknown",
     }
 }
 
@@ -227,7 +226,6 @@ fn prompt_cache_tool_choice(choice: &ToolChoice) -> &str {
         ToolChoice::Required => "required",
         ToolChoice::Named { name } => name.as_str(),
         ToolChoice::None => "none",
-        _ => "unknown",
     }
 }
 
@@ -351,7 +349,6 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
                                     image_count += 1;
                                     user_parts.push(image_part(mime, data));
                                 }
-                                _ => {}
                             }
                         }
                         if image_count > 0 {
@@ -364,7 +361,6 @@ fn encode_user_message_into(m: &Message, out: &mut Vec<wire::ChatCompletionReque
                         }
                         text
                     }
-                    _ => String::new(),
                 };
                 tool_results.push((tool_use_id.clone(), text));
             }
@@ -521,8 +517,6 @@ fn image_url_string(mime: &str, data: &ImageData) -> String {
     match data {
         ImageData::Url { url } => url.clone(),
         ImageData::Base64 { encoded } => format!("data:{mime};base64,{encoded}"),
-        // Fallback for non_exhaustive — empty URL, an obvious placeholder.
-        _ => String::new(),
     }
 }
 
@@ -535,7 +529,6 @@ fn encode_thinking(t: ThinkingConfig) -> Option<wire::ReasoningEffort> {
         ThinkingConfig::Enabled { .. } => Some(wire::ReasoningEffort::ReasoningEffortVariant0(
             wire::ReasoningEffortVariant0::Medium,
         )),
-        _ => None,
     }
 }
 
@@ -578,7 +571,6 @@ fn encode_tool_choice(c: &ToolChoice) -> Option<wire::ChatCompletionToolChoiceOp
                 },
             ),
         ),
-        _ => None,
     }
 }
 

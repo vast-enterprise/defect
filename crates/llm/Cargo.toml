@@ -16,7 +16,7 @@ description = "LLM provider implementations (Anthropic, Bedrock, OpenAI, DeepSee
 doctest = false
 
 [dependencies]
-defect-agent.workspace = true
+defect-core.workspace = true
 defect-http.workspace = true
 futures.workspace = true
 serde.workspace = true
@@ -64,6 +64,10 @@ provider-openai = []
 provider-deepseek = ["provider-openai"]
 
 [dev-dependencies]
+# Examples and integration tests build a full agent/session to exercise providers
+# end-to-end, so they need the agent runtime. Dev-deps are not propagated to downstream
+# consumers, so `defect-llm` itself stays independent of `defect-agent`.
+defect-agent.workspace = true
 agent-client-protocol-schema.workspace = true
 tracing-subscriber.workspace = true
 wiremock.workspace = true
