@@ -734,9 +734,9 @@ pub struct ProviderConfigFile {
     pub aws: Option<ProviderAwsConfigFile>,
     pub headers: BTreeMap<String, String>,
     /// Overrides the authentication header name for the Anthropic Messages protocol
-    /// (`x-api-key` by default). Gateways fronting the protocol — e.g. Mimo — expect
-    /// `api-key` instead. Ignored by the OpenAI-compatible protocol (which uses bearer
-    /// auth via `Authorization`).
+    /// (`x-api-key` by default). Some gateways fronting the protocol expect `api-key`
+    /// instead. Ignored by the OpenAI-compatible protocol (which uses bearer auth via
+    /// `Authorization`).
     pub auth_header: Option<String>,
     pub capabilities: ProviderCapabilityOverrides,
     /// `reasoning_effort` wire parameter. `None` = do not send, use provider default.

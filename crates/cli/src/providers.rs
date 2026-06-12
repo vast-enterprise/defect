@@ -237,9 +237,9 @@ pub async fn build_single_llm_provider(
                             Err(provider_not_compiled("bedrock"))
                         }
                     } else {
-                        // Custom HTTP endpoint speaking the Anthropic Messages protocol
-                        // (e.g. Mimo). Reuses `AnthropicProvider`; `auth_header` lets the
-                        // gateway's credential header differ from the official `x-api-key`.
+                        // Custom HTTP endpoint speaking the Anthropic Messages protocol.
+                        // Reuses `AnthropicProvider`; `auth_header` lets the gateway's
+                        // credential header differ from the official `x-api-key`.
                         #[cfg(feature = "provider-anthropic")]
                         {
                             let display_name = provider
@@ -470,8 +470,8 @@ async fn build_bedrock_provider(
 }
 
 /// Build an `AnthropicProvider` for either the built-in `anthropic` kind or a custom
-/// `anthropic-messages` HTTP endpoint (Mimo-style gateways). `vendor` is the registry key;
-/// `display_name`, when `None`, falls back to the provider's own default.
+/// `anthropic-messages` HTTP endpoint (a gateway fronting the protocol). `vendor` is the
+/// registry key; `display_name`, when `None`, falls back to the provider's own default.
 #[cfg(feature = "provider-anthropic")]
 fn build_anthropic_provider(
     vendor: &str,

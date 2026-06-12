@@ -52,7 +52,7 @@ fn provider_for(server_uri: &str) -> Arc<dyn LlmProvider> {
     Arc::new(AnthropicProvider::new(cfg).expect("provider")) as Arc<dyn LlmProvider>
 }
 
-/// Build a provider with a custom auth header name (Mimo-style gateway).
+/// Build a provider with a custom auth header name (a gateway fronting the protocol).
 fn provider_with_auth_header(
     server_uri: &str,
     auth_header: &str,
@@ -269,7 +269,7 @@ async fn missing_api_key_header_is_rejected_by_server() {
 }
 
 #[tokio::test]
-async fn custom_auth_header_is_sent_for_mimo_style_gateway() {
+async fn custom_auth_header_is_sent_to_gateway() {
     let server = start_mock_server().await;
 
     let events = [

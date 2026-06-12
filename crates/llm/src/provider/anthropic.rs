@@ -37,8 +37,8 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Default authentication header for the official Anthropic API. OpenAI-style gateways
-/// fronting the Messages protocol (e.g. Mimo) instead expect `api-key`; override via
+/// Default authentication header for the official Anthropic API. Some gateways fronting
+/// the Messages protocol instead expect `api-key`; override via
 /// [`AnthropicConfig::auth_header`].
 const DEFAULT_AUTH_HEADER: &str = "x-api-key";
 const DEFAULT_VENDOR: &str = "anthropic";
@@ -58,8 +58,8 @@ type Client = ApiClient<HttpStack>;
 /// `vendor` / `display_name` let the same Messages-protocol implementation back a custom
 /// `[providers.<name>]` endpoint (mirrors `OpenAiConfig`); the registry keys on `vendor`,
 /// so a custom endpoint must report its own name rather than the literal `anthropic`.
-/// `auth_header` overrides the credential header name (`x-api-key` by default) — gateways
-/// fronting the Messages protocol such as Mimo expect `api-key` instead. `headers` injects
+/// `auth_header` overrides the credential header name (`x-api-key` by default) — some
+/// gateways fronting the Messages protocol expect `api-key` instead. `headers` injects
 /// arbitrary extra headers, matching `OpenAiConfig::headers`.
 #[derive(Debug, Default, Clone)]
 pub struct AnthropicConfig {
@@ -132,8 +132,8 @@ impl AnthropicProvider {
 
         // The codegen'd `AuthConfig` hardcodes `x-api-key` (the header name comes from the
         // OAS spec, not config). Replace it with a selector that honours `auth_header`, so
-        // Messages-protocol gateways expecting `api-key` (Mimo) work without patching
-        // codegen. The toac default `NoAuth` is not an option — it hard-fails any operation
+        // Messages-protocol gateways expecting `api-key` work without patching codegen.
+        // The toac default `NoAuth` is not an option — it hard-fails any operation
         // declaring a security requirement, which `/v1/messages` does.
         let auth = ConfigurableApiKeyAuth::new(header_name, token)?;
         let http = build_http_stack(config.http)
@@ -302,7 +302,7 @@ impl LlmProvider for AnthropicProvider {
 ///
 /// The codegen'd `wire::anthropic::security::AuthConfig` hardcodes `x-api-key`; this
 /// replacement sends the same raw key value under whatever header name the provider
-/// configures (`x-api-key` for the official API, `api-key` for Mimo-style gateways). The
+/// configures (`x-api-key` for the official API, `api-key` for some gateways). The
 /// value is validated once at construction so `complete`/`list_models` never surface a
 /// header-encoding error mid-flight.
 #[derive(Debug, Clone)]

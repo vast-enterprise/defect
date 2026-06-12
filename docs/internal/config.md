@@ -123,11 +123,11 @@ default_model = "gpt-4o"
 | `project` | string | OpenAI project id |
 | `aws` | table | Bedrock/AWS 配置，见下 |
 | `headers` | table<string,string> | 自定义 HTTP 头 |
-| `auth_header` | string | 仅 `anthropic-messages` 协议：认证头名（默认 `x-api-key`）。Mimo 等网关用 `api-key`。OpenAI 兼容协议固定走 `Authorization: Bearer`，此字段被忽略 |
+| `auth_header` | string | 仅 `anthropic-messages` 协议：认证头名（默认 `x-api-key`）。部分网关用 `api-key`。OpenAI 兼容协议固定走 `Authorization: Bearer`，此字段被忽略 |
 | `capabilities` | table | per-provider 能力覆盖，见第 6 节 |
 | `reasoning_effort` | enum | 推理强度（OpenAI 兼容协议），见下 |
 
-> **自定义 `anthropic-messages` HTTP 端点**：`protocol = "anthropic-messages"` 且**不带** `aws` section 时，走官方 Anthropic HTTP 实现（而非 Bedrock）。配 `base_url` + `api_key_env` + 按需 `auth_header` 即可接入 Mimo 这类用 Messages 协议、但认证头不同的网关。带 `aws` section（或名为 `bedrock`）才路由到 Bedrock。
+> **自定义 `anthropic-messages` HTTP 端点**：`protocol = "anthropic-messages"` 且**不带** `aws` section 时，走官方 Anthropic HTTP 实现（而非 Bedrock）。配 `base_url` + `api_key_env` + 按需 `auth_header` 即可接入用 Messages 协议、但认证头不同的网关。带 `aws` section（或名为 `bedrock`）才路由到 Bedrock。
 
 ### `models` 的两种写法
 
